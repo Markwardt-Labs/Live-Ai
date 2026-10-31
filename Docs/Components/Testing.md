@@ -1,0 +1,13 @@
+# Testing fakes
+
+`FakePromptSession`, `FakePromptProvider` and `FakePrompt` are in the library's own package, under `Markwardt.LiveAi.Testing`, so code that uses the library can be tested with them and there is no second package to keep in step.
+
+## The session
+
+The fake session builds the real `PromptRequester` over an executor of its own. The executor does what the real session's does around a prompt: validates the schema and the tools and mounts a request adds (with the same rules as the configuration), has the same state, `Output`, `Send` and modes as the real session (a mixed request is answered with the last message of the next turn's script, a fork request runs on a copy that is thrown away, and a direct request needs the session to be waiting), takes the turn so that scripted turns run one at a time, checks the budget, records the prompt as a `FakePrompt` with the settings it ran with, takes the next scripted answer, passes the events on (adding up usage), and handles interruption. An answer is a function from the prompt and a token to a sequence of events, so scripts can fail, hang until cancelled or be computed. Answers are used in order; when the queue is empty the responder is asked, and without one the prompt fails with a message that shows it.
+
+The configuration is the real settings object with its checks, so a value that is not allowed throws where it is assigned and instructions that are blank mean none; the executor works from a copy taken when the prompt starts, as in the real session. A branch copies the configuration, the script and the conversation, and gets a new identifier; a branch at an entry (and a rewind to one) keeps the turns through the one the entry belongs to, by counting the same positions that the history reports, and fails for an entry that is not in the conversation. Notes that were told are delivered with the next prompt and recorded on it (`FakePrompt.Notes`); a compaction is counted (`Compactions`) and changes nothing; the context a read reports is whatever the test set in `Context`. A disposed session that a fake provider loads is brought back the same way, keeping its identifier. The history is made from the prompts and what was answered, one record each, and goes through the same paging as the real one.
+
+## What is not faked
+
+Nothing is stored, no process or port is started and no folder is made, so the conversation lives in the fake object and a persistent process, a shell and the file tools have nothing to do; a test that needs them uses a script as the command line tool, as the integration tests of this repository do.
