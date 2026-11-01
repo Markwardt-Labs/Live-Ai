@@ -104,4 +104,33 @@ public sealed class ProviderTestTests : IDisposable
         Assert.False(silent.IsAvailable);
         Assert.Contains("ended without answering", silent.Error);
     }
+
+    [Fact]
+    public async Task AToolThatKeepsRunningAfterItAnswers_IsAvailableAtOnceAndStopped()
+    {
+        IPromptProvider claude = Claude("cat > /dev/null\necho $$ > \"$PWD/pid.txt\"\necho '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"1\"}]}}'\necho '{\"type\":\"result\",\"is_error\":false,\"session_id\":\"s\"}'\nsleep 120");
+        Stopwatch watch = Stopwatch.StartNew();
+
+        PromptTestResult result = await claude.Test();
+
+        Assert.True(result.IsAvailable);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60));
+        int pid = int.Parse((await File.ReadAllTextAsync(temp.Combine("pid.txt"))).Trim());
+
+        for (int attempt = 0; attempt < 100 && Directory.Exists($"/proc/{pid}"); attempt++)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.False(Directory.Exists($"/proc/{pid}"));
+    }
+
+    [Fact]
+    public async Task AToolThatNeverAnswers_IsWaitedForUntilTheCallerCancels()
+    {
+        IPromptProvider claude = Claude("cat > /dev/null\nsleep 120");
+        using CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(500));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => claude.Test(cancellation: cancellation.Token));
+    }
 }

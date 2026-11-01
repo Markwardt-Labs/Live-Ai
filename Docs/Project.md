@@ -24,6 +24,6 @@ Run `Scripts/Publish.cs` locally to cut a release:
 
 ## Tests
 
-`Tests/src/Unit/` covers the types with mocked dependencies. `Tests/src/Integration/` uses real files and real processes, with small shell scripts standing in for `claude` and `codex` (so the integration tests need a POSIX `sh`); no test calls a real AI or needs either tool installed.
+`Tests/src/Unit/` covers the types with mocked dependencies. `Tests/src/Integration/` uses real files and real processes, with small shell scripts standing in for `claude`, `codex` and `opencode`, and in-process HTTP servers standing in for the OpenCode server and for model servers such as Ollama (so the integration tests need a POSIX `sh`); no test calls a real AI or needs any of the tools installed.
 
 The integration tests that write and run script files share one xUnit collection (`Processes`) so they never run at the same time: a process forked by one test can briefly hold another test's freshly written script open, and executing it then fails as "text file busy", which showed up as rare failures in a parallel run.

@@ -1,12 +1,15 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Claude Code (<c>claude -p</c>), which runs a prompt in a process of its own or in one that stays and takes prompts as it is given them. The engine of <see cref="IPromptProvider.Claude" /> has the default settings.
+/// Claude Code (<c>claude -p</c>), which runs a prompt in a process of its own or in one that stays and takes prompts as it is given them.
 /// </summary>
 /// <param name="command">The command that starts Claude Code.</param>
 /// <param name="configFolder">The folder Claude Code keeps its state in, or <see langword="null" /> for <c>CLAUDE_CONFIG_DIR</c> or <c>.claude</c> in the user's home folder. It is also passed to the tool as <c>CLAUDE_CONFIG_DIR</c>, so the library and the tool look in the same place.</param>
-public sealed class ClaudeEngine(string command = "claude", string? configFolder = null) : IPromptEngine
+/// <param name="models">The model of each capability (the names a <see cref="ClaudeModelCatalog" /> lists), or <see langword="null" /> for <c>haiku</c>, <c>sonnet</c> and <c>opus</c>.</param>
+public sealed class ClaudeEngine(string command = "claude", string? configFolder = null, PromptModels? models = null) : IPromptEngine
 {
+    private readonly PromptModels settings = models ?? new();
+
     private readonly string[] access = ["--permission-mode", "dontAsk", "--tools", string.Empty];
 
     private readonly string projects = Path.Combine(configFolder ?? Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"), "projects");
@@ -564,7 +567,7 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
     /// <param name="capability">The capability.</param>
     /// <returns>The name the tool takes.</returns>
     internal string Model(PromptCapability capability)
-        => capability switch
+        => settings.For(capability) ?? capability switch
         {
             PromptCapability.Fast => "haiku",
             PromptCapability.Balanced => "sonnet",

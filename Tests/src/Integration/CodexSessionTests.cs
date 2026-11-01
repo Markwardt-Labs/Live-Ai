@@ -89,6 +89,22 @@ public sealed class CodexSessionTests : IDisposable
         Assert.Equal(("text", "hi"), (turn.GetProperty("input")[0].GetProperty("type").GetString(), turn.GetProperty("input")[0].GetProperty("text").GetString()));
     }
 
+    [Fact]
+    public async Task TheTurnCarriesTheModelTheProviderWasGivenAtTheEffortTheModelAccepts()
+    {
+        string catalog = """{"models":[{"slug":"gpt-custom","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}]}]}""";
+        IPromptProvider provider = Provider(new CodexEngine(fake.Script(models: catalog), temp.Combine("codex-state"), new PromptModels { Max = "gpt-custom" }));
+        await using IPromptSession session = temp.Track(await provider.Create());
+        session.Configuration.IsPersistent = false;
+        session.Configuration.Capability = PromptCapability.Max;
+        session.Configuration.Reasoning = PromptReasoning.Max;
+
+        await session.Request("hi");
+
+        JsonElement turn = Assert.Single(await fake.Parameters("turn/start"));
+        Assert.Equal(("gpt-custom", "high"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString()));
+    }
+
     private string PromptDirectory(IPromptSession session)
         => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{session.Id}");
 

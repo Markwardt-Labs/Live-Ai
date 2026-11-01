@@ -1,12 +1,19 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Codex, driven through <c>codex app-server</c>, which holds the conversation as a thread that every prompt is a turn of. The engine of <see cref="IPromptProvider.Codex" /> has the default settings.
+/// Codex, driven through <c>codex app-server</c>, which holds the conversation as a thread that every prompt is a turn of.
 /// </summary>
 /// <param name="command">The command that starts Codex.</param>
 /// <param name="configFolder">The folder Codex keeps its state in, or <see langword="null" /> for <c>CODEX_HOME</c> or <c>.codex</c> in the user's home folder. It is also passed to the tool as <c>CODEX_HOME</c>, so the library and the tool look in the same place.</param>
-public sealed class CodexEngine(string command = "codex", string? configFolder = null) : IPromptEngine
+/// <param name="models">The model of each capability (the names a <see cref="CodexModelCatalog" /> lists), or <see langword="null" /> for <c>gpt-5.6-luna</c>, <c>gpt-5.6-terra</c> and <c>gpt-5.6-sol</c>. A reasoning level the chosen model does not accept is lowered to the highest one it does.</param>
+public sealed class CodexEngine(string command = "codex", string? configFolder = null, PromptModels? models = null) : IPromptEngine
 {
+    private readonly PromptModels settings = models ?? new();
+
+    private readonly Lazy<Task<IReadOnlyList<PromptModel>>> catalog = new(() => new CodexModelCatalog(command, configFolder).List());
+
+    private readonly string[] efforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
     private readonly ITurnRunner turns = new TurnRunner();
 
     private readonly TimeSpan branchTimeout = TimeSpan.FromSeconds(60);
@@ -564,7 +571,7 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
     /// <param name="capability">The capability.</param>
     /// <returns>The name the tool takes.</returns>
     internal string Model(PromptCapability capability)
-        => capability switch
+        => settings.For(capability) ?? capability switch
         {
             PromptCapability.Fast => "gpt-5.6-luna",
             PromptCapability.Balanced => "gpt-5.6-terra",
@@ -586,6 +593,34 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
             PromptReasoning.Max => "max",
             _ => throw new ArgumentOutOfRangeException(nameof(reasoning), reasoning, null)
         };
+
+    /// <summary>
+    /// Names the effort a model is run at: the one the level of reasoning is, or the highest one below it that the model accepts when the model is one the caller chose and the catalog says it does not accept that one.
+    /// </summary>
+    /// <param name="capability">The capability whose model runs.</param>
+    /// <param name="reasoning">The reasoning.</param>
+    /// <param name="cancellation">Cancels the lookup.</param>
+    /// <returns>The name the tool takes.</returns>
+    internal async Task<string> Effort(PromptCapability capability, PromptReasoning reasoning, CancellationToken cancellation = default)
+    {
+        string wanted = Effort(reasoning);
+
+        if (settings.For(capability) is not { } model)
+        {
+            return wanted;
+        }
+
+        IReadOnlyList<string>? accepted = (await catalog.Value.WaitAsync(cancellation)).FirstOrDefault(listed => listed.Id == model)?.Efforts;
+
+        if (accepted is not { Count: > 0 } || accepted.Contains(wanted))
+        {
+            return wanted;
+        }
+
+        int rank = Array.IndexOf(efforts, wanted);
+        string[] known = [.. accepted.Where(effort => Array.IndexOf(efforts, effort) >= 0).OrderBy(effort => Array.IndexOf(efforts, effort))];
+        return known.LastOrDefault(effort => Array.IndexOf(efforts, effort) <= rank) ?? known.FirstOrDefault() ?? wanted;
+    }
 
     /// <summary>
     /// Finds the message of a failed turn.

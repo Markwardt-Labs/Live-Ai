@@ -71,7 +71,7 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
                 ["threadId"] = thread,
                 ["input"] = Input(prompt),
                 ["model"] = engine.Model(prompt.Capability),
-                ["effort"] = engine.Effort(prompt.Reasoning)
+                ["effort"] = await engine.Effort(prompt.Capability, prompt.Reasoning, cancellation)
             };
 
             if (prompt.Schema is not null)

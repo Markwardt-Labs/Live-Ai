@@ -66,7 +66,58 @@ internal static class PromptJson
             root["type"] = only;
         }
 
-        return schema;
+        return Written(schema);
+    }
+
+    private static JsonNode Written(JsonNode schema)
+    {
+        if (schema is JsonValue { } value && value.TryGetValue(out bool allowed))
+        {
+            return allowed ? new JsonObject() : new JsonObject { ["not"] = new JsonObject() };
+        }
+
+        if (schema is not JsonObject root)
+        {
+            return schema;
+        }
+
+        foreach (string keyword in (string[])["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"])
+        {
+            if (root[keyword] is JsonObject map)
+            {
+                foreach ((string name, JsonNode? member) in map.ToArray())
+                {
+                    if (member is not null && Written(member) is { } replaced && !ReferenceEquals(replaced, member))
+                    {
+                        map[name] = replaced;
+                    }
+                }
+            }
+        }
+
+        foreach (string keyword in (string[])["items", "not", "contains", "propertyNames", "if", "then", "else"])
+        {
+            if (root[keyword] is JsonNode single && Written(single) is { } replaced && !ReferenceEquals(replaced, single))
+            {
+                root[keyword] = replaced;
+            }
+        }
+
+        foreach (string keyword in (string[])["allOf", "anyOf", "oneOf", "prefixItems"])
+        {
+            if (root[keyword] is JsonArray list)
+            {
+                for (int index = 0; index < list.Count; index++)
+                {
+                    if (list[index] is { } member && Written(member) is { } replaced && !ReferenceEquals(replaced, member))
+                    {
+                        list[index] = replaced;
+                    }
+                }
+            }
+        }
+
+        return root;
     }
 
     private static bool IsObject(JsonNode schema)

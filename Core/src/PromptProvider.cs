@@ -6,16 +6,6 @@ namespace Markwardt.LiveAi;
 public interface IPromptProvider
 {
     /// <summary>
-    /// Gets the provider of Claude Code with the default settings: the <c>claude</c> command found on the <c>PATH</c>, the configuration folder of <c>CLAUDE_CONFIG_DIR</c> or <c>.claude</c> in the user's home folder, and the default data folder. It is one shared instance; make a <see cref="PromptProvider" /> of a <see cref="ClaudeEngine" /> for other settings.
-    /// </summary>
-    static IPromptProvider Claude { get; } = new PromptProvider(new ClaudeEngine());
-
-    /// <summary>
-    /// Gets the provider of Codex with the default settings: the <c>codex</c> command found on the <c>PATH</c>, the home folder of <c>CODEX_HOME</c> or <c>.codex</c> in the user's home folder, and the default data folder. It is one shared instance; make a <see cref="PromptProvider" /> of a <see cref="CodexEngine" /> for other settings.
-    /// </summary>
-    static IPromptProvider Codex { get; } = new PromptProvider(new CodexEngine());
-
-    /// <summary>
     /// Creates a session and stores it under a new identifier. The tool's own session starts with the first prompt. The session starts with balanced capability and medium reasoning; change them with <see cref="IPromptSessionConfiguration.Capability" /> and <see cref="IPromptSessionConfiguration.Reasoning" />, also before the first prompt.
     /// </summary>
     /// <param name="options">The API key and the workspace (<see cref="PromptSessionOptions.WorkspacePath" /> and <see cref="PromptSessionOptions.Sandbox" />), or <see langword="null" /> for the configured subscription and no workspace. The workspace path is stored with the session: the session's <see cref="IPromptSessionConfiguration.Workspace" /> is set to <c>IStore.FromDisk</c> of it, now and every time the session is loaded, and the tool runs in it instead of in an empty folder of its own. A session that is deleted never deletes the folder. It is the only workspace that is stored: assigning <see cref="IPromptSessionConfiguration.Workspace" /> later changes the running session only, and a load starts with this path again (use <see cref="IPromptSession.AttachTo" /> to change it). The API key is never stored.</param>
@@ -54,19 +44,18 @@ public interface IPromptProvider
     Task<bool> Delete(string id, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Finds out whether the tool is actually usable by running it with the smallest prompt that will do, on the cheapest model at low effort, without tools and with nothing stored. That proves what looking for the command cannot: the tool is installed, signed in (or the key works) and reachable. A tool that does not work is a result, not an exception.
+    /// Finds out whether the tool is actually usable by running it with the smallest prompt that will do, on the cheapest model at low effort, without tools and with nothing stored. That proves what looking for the command cannot: the tool is installed, signed in (or the key works) and reachable. A tool that does not work is a result, not an exception. The test ends as soon as the tool has answered (the tool is stopped then, even if it would go on with housekeeping), and it fails only on what the tool reports or when the tool ends without answering. It has no time limit of its own: a tool that is slow, a local model that has to load for example, is waited for, and a caller that wants a bound passes a cancellation.
     /// </summary>
     /// <param name="apiKey">The API key to try, or <see langword="null" /> to try the configured sign in.</param>
-    /// <param name="cancellation">Cancels the test.</param>
+    /// <param name="cancellation">Cancels the test, which then throws.</param>
     /// <returns>Whether the tool is available and, when it is not, why.</returns>
     Task<PromptTestResult> Test(string? apiKey = null, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Reads how much of each window of the subscription's limits the tool has used, without sending a prompt. It takes a second or two and costs nothing.
+    /// Reads how much of each window of the subscription's limits the tool has used, without sending a prompt. It takes a second or two and costs nothing. A tool that has no subscription limits to report, such as OpenCode, returns an empty list.
     /// </summary>
     /// <param name="cancellation">Cancels the read.</param>
-    /// <returns>The limit windows the tool reports: a session and a week for Claude Code (and a week for each model its plan limits), one or two for Codex.</returns>
-    /// <exception cref="NotSupportedException">The tool reports no subscription limits.</exception>
+    /// <returns>The limit windows the tool reports: a session and a week for Claude Code (and a week for each model its plan limits), one or two for Codex, none for a tool without subscription limits.</returns>
     /// <exception cref="PromptSessionException">The tool could not be started, failed, did not answer in time, or did not report limits (it runs on an API key).</exception>
     Task<IReadOnlyList<PromptWindow>> GetWindows(CancellationToken cancellation = default);
 }
@@ -84,12 +73,10 @@ public sealed class PromptProvider : IPromptProvider
 
     private readonly TimeProvider time;
 
-    private readonly TimeSpan testTimeout = TimeSpan.FromMinutes(1);
-
     /// <summary>
     /// Initializes a new instance of the <see cref="PromptProvider" /> class.
     /// </summary>
-    /// <param name="engine">The tool the sessions run on: a <see cref="ClaudeEngine" />, a <see cref="CodexEngine" />, or one of your own (<see cref="IPromptEngine" />).</param>
+    /// <param name="engine">The tool the sessions run on: a <see cref="ClaudeEngine" />, a <see cref="CodexEngine" />, an <see cref="OpenCodeEngine" />, or one of your own (<see cref="IPromptEngine" />).</param>
     /// <param name="dataFolder">The folder that holds the stored sessions, or <see langword="null" /> for <c>Markwardt.LiveAi</c> in the local application data folder. A session can only be loaded by a provider that uses the same folder as the one that created it.</param>
     /// <param name="logger">Where the library reports what its sessions do (state changes, processes and tool servers started, input given to running work, retries, limits reached and failures, at debug level for the routine and at warning level for failures), or <see langword="null" /> to report nothing. Prompts, answers and files are never logged.</param>
     /// <param name="time">The clock the timeouts, retries and schedules of the sessions and their loops run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that you control to test code that waits.</param>
@@ -222,21 +209,16 @@ public sealed class PromptProvider : IPromptProvider
     /// <inheritdoc />
     public async Task<PromptTestResult> Test(string? apiKey = null, CancellationToken cancellation = default)
     {
-        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        limit.CancelAfter(testTimeout);
-        bool finished = false;
-
         try
         {
-            await foreach (PromptEngineEvent output in runner.Run(engine, engine.CreateTestStart(apiKey), "Reply with the digit 1.", limit.Token))
+            await foreach (PromptEngineEvent output in runner.Run(engine, engine.CreateTestStart(apiKey), "Reply with the digit 1.", cancellation))
             {
                 switch (output.Kind)
                 {
                     case PromptEngineEventKind.Failed:
                         return Unavailable(output.Text);
                     case PromptEngineEventKind.Finished:
-                        finished = true;
-                        break;
+                        return new PromptTestResult { IsAvailable = true };
                 }
             }
         }
@@ -244,12 +226,8 @@ public sealed class PromptProvider : IPromptProvider
         {
             return Unavailable(exception.Message);
         }
-        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-        {
-            return Unavailable($"{engine.Identifier} did not answer in time.");
-        }
 
-        return finished ? new PromptTestResult { IsAvailable = true } : Unavailable($"{engine.Identifier} ended without answering.");
+        return Unavailable($"{engine.Identifier} ended without answering.");
     }
 
     /// <inheritdoc />

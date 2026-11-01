@@ -14,9 +14,17 @@ public sealed class FakeCodex(TempFolder temp)
     /// <param name="turn">Shell commands that replace the notifications of a turn after the answer to <c>turn/start</c>; <c>$id</c> is the identifier of the request, <c>$tid</c> the thread, <c>$turn</c> the identifier of the turn and <c>$line</c> the request.</param>
     /// <param name="before">Shell commands that run for each turn before its notifications, with the same variables.</param>
     /// <param name="steer">Shell commands that run when input is steered into a turn, after its answer, with the same variables.</param>
+    /// <param name="models">What <c>debug models</c> prints, or <see langword="null" /> for nothing; each run is counted in <c>catalog-runs.txt</c>.</param>
     /// <returns>The path of the script.</returns>
-    public string Script(string name = "codex", string reply = "codex says hi", string? turn = null, string? before = null, string? steer = null)
-        => temp.Script(name, """
+    public string Script(string name = "codex", string reply = "codex says hi", string? turn = null, string? before = null, string? steer = null, string? models = null)
+    {
+        if (models is not null)
+        {
+            File.WriteAllText(temp.Combine("codex-models.json"), models);
+        }
+
+        return temp.Script(name, """
+            if [ "$1" = "debug" ]; then echo x >> "$PWD/catalog-runs.txt"; cat "$PWD/codex-models.json" 2>/dev/null; exit 0; fi
             mkdir -p "$CODEX_HOME/sessions/2026/01/01"
             echo $$ >> "$PWD/pids.txt"
             printf '%s\n' "$@" > "$PWD/codex-args.txt"
@@ -58,6 +66,7 @@ public sealed class FakeCodex(TempFolder temp)
               esac
             done
             """.Replace("@BEFORE@", before ?? ":").Replace("@TURN@", turn ?? Notifications(reply)).Replace("@STEER@", steer ?? ":"));
+    }
 
     private string Notifications(string reply)
     {

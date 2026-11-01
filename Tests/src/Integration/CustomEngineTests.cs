@@ -172,7 +172,7 @@ public sealed class CustomEngineTests : IDisposable
 
         Assert.Empty(await session.GetHistory().Take(10).ToListAsync());
         await Assert.ThrowsAsync<NotSupportedException>(() => session.Fork());
-        await Assert.ThrowsAsync<NotSupportedException>(() => engine.GetWindows());
+        Assert.Empty(await engine.GetWindows());
         Assert.Equal(2, File.ReadAllLines(temp.Combine("env.txt")).Length);
     }
 

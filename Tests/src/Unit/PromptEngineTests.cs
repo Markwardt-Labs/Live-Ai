@@ -75,6 +75,6 @@ public sealed class PromptEngineTests
     }
 
     [Fact]
-    public async Task GetWindows_OfAnEngineWithoutOne_IsNotSupported()
-        => await Assert.ThrowsAsync<NotSupportedException>(() => ((IPromptEngine)new ScriptEngine("tool")).GetWindows());
+    public async Task GetWindows_OfAnEngineWithoutOne_IsEmpty()
+        => Assert.Empty(await ((IPromptEngine)new ScriptEngine("tool")).GetWindows());
 }

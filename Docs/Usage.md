@@ -5,7 +5,7 @@ Runnable examples of `IPromptProvider` and `IPromptSession` in different situati
 ## A question about a folder
 
 ```csharp
-IPromptProvider provider = IPromptProvider.Claude;   // or IPromptProvider.Codex
+IPromptProvider provider = new PromptProvider(new ClaudeEngine());   // or new CodexEngine()
 
 IPromptSession session = await provider.Create();
 session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
@@ -43,7 +43,7 @@ void Show(PromptEvent output)
 ## Choosing the model and letting the AI change files
 
 ```csharp
-IPromptSession session = await IPromptProvider.Codex.Create();
+IPromptSession session = await new PromptProvider(new CodexEngine()).Create();
 session.Configuration.Capability = PromptCapability.Max;
 session.Configuration.Reasoning = PromptReasoning.High;
 session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
@@ -343,7 +343,7 @@ The prompt is cancelled when it runs longer than ten minutes or when the status,
 ## Reading the subscription status
 
 ```csharp
-IReadOnlyList<PromptWindow> windows = await IPromptProvider.Claude.GetWindows();   // the same shape for Codex, or session.Provider.GetWindows()
+IReadOnlyList<PromptWindow> windows = await new PromptProvider(new ClaudeEngine()).GetWindows();   // the same shape for Codex, or session.Provider.GetWindows()
 
 foreach (PromptWindow window in windows)
 {
@@ -359,11 +359,11 @@ IReadOnlyList<PromptWindow> other = await new ClaudeEngine(configFolder: "/accou
 ## Checking that a tool works
 
 ```csharp
-PromptTestResult result = await IPromptProvider.Codex.Test(Environment.GetEnvironmentVariable("CODEX_API_KEY"));
+PromptTestResult result = await new PromptProvider(new CodexEngine()).Test(Environment.GetEnvironmentVariable("CODEX_API_KEY"));
 Console.WriteLine(result.IsAvailable ? "Codex works." : $"Codex is not available: {result.Error}");
 ```
 
-The tool is run with a tiny prompt, so a missing command, a missing login and a wrong key all show up as a reason instead of as a failure in the middle of real work.
+The tool is run with a tiny prompt, so a missing command, a missing login and a wrong key all show up as a reason instead of as a failure in the middle of real work. The test ends as soon as the tool has answered and has no time limit of its own, so a model that is slow to load or to think is waited for; pass a `CancellationToken` to give up sooner.
 
 ## A loop that stops by itself
 
@@ -652,6 +652,33 @@ PromptProvider provider = new(new ClaudeEngine(), logger: logging.CreateLogger("
 `new PromptProvider(engine, dataFolder, logger, time)` also takes a `TimeProvider` for the request timeouts, retry delays and loop schedules of its sessions. In a trimmed or native AOT application, `Request<T>`, `Loop<T>` and `PromptTool.Create<,>` warn because they use reflection; keep the members of the types you pass.
 
 The logger receives what the library does, not what the AI says: state changes, processes and tool servers that were started, input given to running work, branches, retries and limits that stopped a request (information and warning levels for the notable ones, debug for the routine). Prompts, answers and files are never logged. Without a logger nothing is logged.
+
+## Running a model on this machine
+
+```csharp
+// ollama pull gemma4:26b
+IPromptProvider provider = new PromptProvider(new OpenCodeEngine(models: OpenCodeModels.Ollama("gemma4:26b")));
+
+await using IPromptSession session = await provider.Create(new PromptSessionOptions { WorkspacePath = "/path/to/project" });
+session.Configuration.Mounts["docs"] = IStore.FromDisk("/path/to/docs");
+
+Console.WriteLine(await session.Request("Which file holds the entry point?"));
+```
+
+`OpenCodeEngine` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as the first argument) and takes an `OpenCodeModels`, which says which model each capability uses and which model providers serve them. The simple cases are factories: `OpenCodeModels.Configured("anthropic/claude-sonnet")` is one model of OpenCode's own configuration, `OpenCodeModels.Ollama("gemma4:26b")` one local Ollama model, and `OpenCodeModels.ByCapability([(PromptCapability.Fast, "gemma4:e2b"), (PromptCapability.Max, "gemma4:26b")])` a model for each capability (a name with a `/` is a model of OpenCode's own configuration instead of a local one, and a capability that is not given is left to OpenCode's configuration). The address of the Ollama server and the size of its context window are optional arguments of the factories; the context size is left to OpenCode unless you give it, so give it when the server runs the model with a different size (`OLLAMA_CONTEXT_LENGTH`): `OpenCodeModels.Ollama("gemma4:26b", contextLimit: 16384)`. The advanced case is the record itself: `new OpenCodeModels { Default = "lmstudio/qwen3-coder", Providers = [new OpenCodeModelProvider { Id = "lmstudio", BaseUrl = "http://localhost:1234/v1", Models = [new OpenCodeModel { Id = "qwen3-coder" }] }] }` serves a model from any OpenAI compatible server (llama.cpp, LM Studio, vLLM). `Fast`, `Balanced` and `Max` give those capabilities a model of their own, and a capability without one uses `Default`. The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
+
+## Choosing the models from what is available
+
+```csharp
+IReadOnlyList<PromptModel> installed = await new LocalModelCatalog().List();   // the models of Ollama that can call tools
+IReadOnlyList<PromptModel> codex = await new CodexModelCatalog().List();       // what the signed in account offers
+IReadOnlyList<PromptModel> claude = await new ClaudeModelCatalog().List();     // the aliases haiku, sonnet and opus
+
+IPromptProvider provider = new PromptProvider(new CodexEngine(models: new PromptModels { Fast = "gpt-5.6-luna", Max = codex.Last().Id }));
+IPromptProvider local = new PromptProvider(new OpenCodeEngine(models: OpenCodeModels.ByCapability([(PromptCapability.Fast, installed[0].Id), (PromptCapability.Max, installed[^1].Id)])));
+```
+
+A catalog needs no engine, only the arguments the tool's engine takes (the command and configuration folder for Codex, the address of the server for local models), so the models can be listed before the provider that uses them is built. Listing never throws because the tool is missing: a tool that is not installed, a server that is not running and an answer that cannot be read all give an empty list. Each `PromptModel` has the name to assign, and a context size and the reasoning efforts it accepts where the tool tells them. `PromptModels` assigns a model to each capability for `ClaudeEngine` and `CodexEngine` (`PromptModels.Only(name)` and `PromptModels.ByCapability([...])` are the shortcuts); a capability without a model of its own uses `Default`, and when that is not set either, the tool's own model (`haiku`, `sonnet` and `opus` for Claude Code, `gpt-5.6-luna`, `gpt-5.6-terra` and `gpt-5.6-sol` for Codex). Codex lowers a reasoning level that a model you chose does not accept to the highest one it does. Names are not checked when the provider is built; a model that does not exist fails at the first prompt, with the tool's own message.
 
 ## Handling failures and cancelling
 

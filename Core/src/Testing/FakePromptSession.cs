@@ -64,7 +64,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     /// <param name="apiKey">The API key the session was made with, which is only kept for a test to look at.</param>
     /// <param name="time">The clock the session's timeouts, retries and loops run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that the test controls to test code that waits without waiting.</param>
     public FakePromptSession(IPromptProvider? provider = null, string? apiKey = null, TimeProvider? time = null)
-        : this(provider ?? IPromptProvider.Claude, apiKey, null, time)
+        : this(provider ?? new PromptProvider(new ClaudeEngine()), apiKey, null, time)
     {
     }
 

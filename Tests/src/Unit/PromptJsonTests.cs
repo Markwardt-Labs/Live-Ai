@@ -17,6 +17,28 @@ public sealed class PromptJsonTests
     }
 
     [Fact]
+    public void Schema_WritesAPropertyOfAnyValueAsAnEmptySchemaBecauseStrictToolParsersRefuseABoolean()
+    {
+        JsonElement properties = PromptJson.Schema(typeof(AnyBox)).GetProperty("properties");
+
+        Assert.Equal(JsonValueKind.Object, properties.GetProperty("value").ValueKind);
+        Assert.Empty(properties.GetProperty("value").EnumerateObject());
+    }
+
+    private sealed record AnyBox(JsonElement Value);
+
+    [Fact]
+    public void Schema_DescribesACollectionOfAnyValueWithoutABooleanItemSchema()
+    {
+        JsonElement list = PromptJson.Schema(typeof(AnyCollections)).GetProperty("properties").GetProperty("list");
+
+        Assert.Equal("array", list.GetProperty("type").GetString());
+        Assert.False(list.TryGetProperty("items", out JsonElement items) && items.ValueKind is JsonValueKind.True or JsonValueKind.False);
+    }
+
+    private sealed record AnyCollections(List<JsonElement> List, Dictionary<string, JsonElement> Map);
+
+    [Fact]
     public void Schema_WritesEnumsAsTheirNames()
     {
         JsonElement schema = PromptJson.Schema(typeof(Question));

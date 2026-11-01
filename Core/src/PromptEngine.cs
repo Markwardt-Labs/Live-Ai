@@ -154,9 +154,8 @@ public interface IPromptEngine
     /// Reads how much of each window of the subscription's limits the tool has used, without sending a prompt.
     /// </summary>
     /// <param name="cancellation">Cancels the read.</param>
-    /// <returns>The windows the tool reports, which are the same kind for every tool.</returns>
-    /// <exception cref="NotSupportedException">The tool reports no subscription limits.</exception>
+    /// <returns>The windows the tool reports, which are the same kind for every tool; none by default, for a tool that has no subscription limits.</returns>
     /// <exception cref="PromptSessionException">The tool did not report them.</exception>
     Task<IReadOnlyList<PromptWindow>> GetWindows(CancellationToken cancellation = default)
-        => throw new NotSupportedException($"{Identifier} reports no subscription limits.");
+        => Task.FromResult<IReadOnlyList<PromptWindow>>([]);
 }

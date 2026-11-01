@@ -441,7 +441,7 @@ public sealed class FakePromptSessionTests
         FakePromptSession plain = new();
         FakePromptSession keyed = new(provider, apiKey: "k");
 
-        Assert.Same(IPromptProvider.Claude, plain.Provider);
+        Assert.IsType<PromptProvider>(plain.Provider);
         Assert.Null(plain.ApiKey);
         Assert.Equal((provider, "k"), (keyed.Provider, keyed.ApiKey));
         Assert.Matches("^[0-9a-f]{32}$", plain.Id);

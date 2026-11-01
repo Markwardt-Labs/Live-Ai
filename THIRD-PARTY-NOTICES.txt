@@ -8,5 +8,5 @@ restored by NuGet when the package is installed. Both are under the MIT license.
 
 The package contains no third-party code.
 
-The package starts the user's own installed claude (Claude Code) and codex (OpenAI Codex) command line
-tools as separate processes and does not redistribute them.
+The package starts the user's own installed claude (Claude Code), codex (OpenAI Codex) and opencode (OpenCode)
+command line tools as separate processes and does not redistribute them.

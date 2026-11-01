@@ -32,6 +32,30 @@ public sealed class ClaudeEngineTests
         Assert.Equal(model, start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
     }
 
+    [Fact]
+    public void CreateStart_UsesTheModelsItIsGivenAndTheDefaultsForTheRest()
+    {
+        ClaudeEngine custom = new("claude", null, new PromptModels { Max = "claude-opus-x", Fast = "haiku-x" });
+
+        Assert.Equal(["haiku-x", "sonnet", "claude-opus-x"], new[] { PromptCapability.Fast, PromptCapability.Balanced, PromptCapability.Max }.Select(custom.Model));
+    }
+
+    [Fact]
+    public void CreateStart_UsesTheDefaultModelForEveryCapabilityWithoutOneOfItsOwn()
+    {
+        ProcessStartInfo start = new ClaudeEngine("claude", null, PromptModels.Only("opus")).CreateStart(Record(builder => builder.Capability = PromptCapability.Fast).ToStart(null, null, null));
+
+        Assert.Equal("opus", start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
+    }
+
+    [Fact]
+    public void CreateTestStart_RunsTheModelOfTheFastCapability()
+    {
+        ProcessStartInfo start = new ClaudeEngine("claude", null, new PromptModels { Fast = "haiku-x" }).CreateTestStart(null);
+
+        Assert.Equal("haiku-x", start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
+    }
+
     [Theory]
     [InlineData(PromptReasoning.Low, "low")]
     [InlineData(PromptReasoning.Medium, "medium")]
