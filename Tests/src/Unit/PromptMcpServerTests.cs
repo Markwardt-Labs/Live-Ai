@@ -63,13 +63,23 @@ public sealed class PromptMcpServerTests
     }
 
     [Fact]
+    public void SameProcess_OfAToolThatStartsWithItsModel_NeedsANewProcessWhenTheModelOrItsSettingsChange()
+    {
+        PromptSessionRecord record = new PromptSessionRecordBuilder().Build(new OpenCodeEngine());
+
+        Assert.True(record.SameProcess(record with { Model = record.Model! with { } }));
+        Assert.False(record.SameProcess(record with { Model = new PromptModel { Id = "other" } }));
+        Assert.False(record.SameProcess(record with { ModelSettings = new Dictionary<string, string> { ["effort"] = "high" } }));
+    }
+
+    [Fact]
     public void SameProcess_IgnoresTheSessionAndTheModelBecauseTheyChangeWhileTheProcessRunsButNotWhatTheToolIsGiven()
     {
         PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "x" }.Build(new ClaudeEngine());
 
         Assert.True(record.SameProcess(record with { AiSessionId = "other", ForkedFrom = "o", ForkedAt = "m" }));
-        Assert.True(record.SameProcess(record with { Capability = PromptCapability.Max }));
-        Assert.True(record.SameProcess(record with { Reasoning = PromptReasoning.Max }));
+        Assert.True(record.SameProcess(record with { Model = new PromptModel { Id = "opus" } }));
+        Assert.True(record.SameProcess(record with { ModelSettings = new Dictionary<string, string> { ["effort"] = "max" } }));
         Assert.False(record.SameProcess(record with { Instructions = "y" }));
         Assert.False(record.SameProcess(record with { McpServers = new Dictionary<string, PromptMcpServer> { ["a"] = PromptMcpServer.Http("https://a") } }));
     }

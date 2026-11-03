@@ -31,7 +31,7 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
     IObservable<PromptEvent> Output { get; }
 
     /// <summary>
-    /// Gets the settings of the session: the model, the reasoning, whether its process stays alive, the shell, instructions, the tools and stores it can use, and what every request starts with. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
+    /// Gets the settings of the session: the model and its settings, whether its process stays alive, the shell, instructions, the tools and stores it can use, and what every request starts with. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
     /// </summary>
     IPromptSessionConfiguration Configuration { get; }
 

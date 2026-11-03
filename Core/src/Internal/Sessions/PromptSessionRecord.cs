@@ -16,14 +16,14 @@ internal sealed record PromptSessionRecord
     public required IPromptEngine Engine { get; init; }
 
     /// <summary>
-    /// Gets how capable the model is.
+    /// Gets the selected model, or <see langword="null" /> while none is. Its identifier is stored.
     /// </summary>
-    public required PromptCapability Capability { get; init; }
+    public PromptModel? Model { get; init; }
 
     /// <summary>
-    /// Gets how much reasoning effort the model puts into each prompt.
+    /// Gets the values of the model's settings, which are stored.
     /// </summary>
-    public required PromptReasoning Reasoning { get; init; }
+    public IReadOnlyDictionary<string, string> ModelSettings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
     /// Gets the custom instructions for the AI, or <see langword="null" /> for none.
@@ -76,20 +76,28 @@ internal sealed record PromptSessionRecord
     /// <param name="other">The record to compare with.</param>
     /// <returns>Whether the process can be kept.</returns>
     public bool SameProcess(PromptSessionRecord other)
-        => Instructions == other.Instructions && McpServers.Count == other.McpServers.Count && McpServers.All(server => other.McpServers.TryGetValue(server.Key, out PromptMcpServer? same) && same.Equals(server.Value));
+        => Instructions == other.Instructions && McpServers.Count == other.McpServers.Count && McpServers.All(server => other.McpServers.TryGetValue(server.Key, out PromptMcpServer? same) && same.Equals(server.Value)) && (!Engine.StartsWithModel || SameModel(other));
+
+    /// <summary>
+    /// Tells whether the other record runs the same model with the same settings.
+    /// </summary>
+    /// <param name="other">The record to compare with.</param>
+    /// <returns>Whether the model and the values of its settings are the same.</returns>
+    public bool SameModel(PromptSessionRecord other)
+        => Model?.Id == other.Model?.Id && ModelSettings.Count == other.ModelSettings.Count && ModelSettings.All(setting => other.ModelSettings.TryGetValue(setting.Key, out string? same) && same == setting.Value);
 
     /// <summary>
     /// Takes the part that is stored.
     /// </summary>
     /// <returns>The link.</returns>
     public PromptSessionLink ToLink()
-        => new() { Id = Id, Created = Created, Provider = Engine.Identifier, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, Sandbox = Sandbox, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt };
+        => new() { Id = Id, Created = Created, Provider = Engine.Identifier, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, Sandbox = Sandbox, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Model = Model?.Id, ModelSettings = Model is null ? null : new Dictionary<string, string>(ModelSettings) };
 
     /// <inheritdoc />
     public bool Equals(PromptSessionRecord? other)
-        => other is not null && Id == other.Id && ReferenceEquals(Engine, other.Engine) && SameProcess(other) && Capability == other.Capability && Reasoning == other.Reasoning && ForkedFrom == other.ForkedFrom && ForkedAt == other.ForkedAt && WorkingFolder == other.WorkingFolder && WorkspacePath == other.WorkspacePath && Sandbox == other.Sandbox && AiSessionId == other.AiSessionId;
+        => other is not null && Id == other.Id && ReferenceEquals(Engine, other.Engine) && SameProcess(other) && SameModel(other) && ForkedFrom == other.ForkedFrom && ForkedAt == other.ForkedAt && WorkingFolder == other.WorkingFolder && WorkspacePath == other.WorkspacePath && Sandbox == other.Sandbox && AiSessionId == other.AiSessionId;
 
     /// <inheritdoc />
     public override int GetHashCode()
-        => HashCode.Combine(Id, Engine, Capability, Reasoning, AiSessionId);
+        => HashCode.Combine(Id, Engine, Model?.Id, AiSessionId);
 }

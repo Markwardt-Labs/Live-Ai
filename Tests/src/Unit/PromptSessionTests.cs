@@ -58,8 +58,8 @@ public sealed class PromptSessionTests
 
         Assert.Equal(record.Id.ToString("N"), session.Id);
         Assert.Same(provider.Object, session.Provider);
-        Assert.Equal(PromptCapability.Balanced, session.Configuration.Capability);
-        Assert.Equal(PromptReasoning.Medium, session.Configuration.Reasoning);
+        Assert.Equal("sonnet", session.Configuration.Model!.Id);
+        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
     }
 
     [Fact]
@@ -149,22 +149,22 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(Record());
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.Low;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium"])] };
+        session.Configuration.ModelSettings["effort"] = "low";
 
-        Assert.Equal(PromptCapability.Max, session.Configuration.Capability);
-        Assert.Equal(PromptReasoning.Low, session.Configuration.Reasoning);
+        Assert.Equal("opus", session.Configuration.Model!.Id);
+        Assert.Equal("low", session.Configuration.ModelSettings["effort"]);
         store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public void Settings_RejectUndefinedValues()
+    public void Settings_RejectValuesTheModelDoesNotAccept()
     {
         PromptSession session = Session(Record());
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Capability = (PromptCapability)99);
-        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Reasoning = (PromptReasoning)99);
-        Assert.Equal(PromptCapability.Balanced, session.Configuration.Capability);
+        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["effort"] = "extreme");
+        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["unknown"] = "x");
+        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
     }
 
     [Fact]
@@ -176,13 +176,13 @@ public sealed class PromptSessionTests
         Task<List<string>> first = session.Messages("one");
         await Task.Delay(100);
 
-        session.Configuration.Reasoning = PromptReasoning.Max;
+        session.Configuration.ModelSettings["effort"] = "max";
         release.SetResult();
         await first;
         await session.Messages("two");
 
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Reasoning == PromptReasoning.Medium && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Reasoning == PromptReasoning.Max && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Settings["effort"] == "medium" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Settings["effort"] == "max" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
     }
 
     private PromptSession Persistent(PromptSessionRecord? record = null)
@@ -293,13 +293,13 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.Max;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "max"])] };
+        session.Configuration.ModelSettings["effort"] = "max";
         await session.Messages("two");
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Once);
-        process.Verify(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "one" && turn.Capability == PromptCapability.Balanced && turn.Reasoning == PromptReasoning.Medium), It.IsAny<CancellationToken>()), Times.Once);
-        process.Verify(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "two" && turn.Capability == PromptCapability.Max && turn.Reasoning == PromptReasoning.Max), It.IsAny<CancellationToken>()), Times.Once);
+        process.Verify(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "one" && turn.Model == "sonnet" && turn.Settings["effort"] == "medium"), It.IsAny<CancellationToken>()), Times.Once);
+        process.Verify(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "two" && turn.Model == "opus" && turn.Settings["effort"] == "max"), It.IsAny<CancellationToken>()), Times.Once);
         process.Verify(mock => mock.Stop(), Times.Never);
         process.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
@@ -328,7 +328,7 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.Capability = session.Configuration.Capability;
+        session.Configuration.Model = session.Configuration.Model;
         session.Configuration.IsPersistent = true;
         await Task.Delay(100);
         await session.Messages("two");
@@ -1299,10 +1299,10 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         await session.DisposeAsync();
 
-        Assert.Throws<ObjectDisposedException>(() => session.Configuration.Reasoning = PromptReasoning.High);
+        Assert.Throws<ObjectDisposedException>(() => session.Configuration.ModelSettings["effort"] = "high");
         Assert.Throws<ObjectDisposedException>(() => session.Configuration.Tools.Add(Tool("late")));
         Assert.Throws<ObjectDisposedException>(() => session.Configuration.Mounts["late"] = new Mock<IStore>().Object);
-        Assert.Equal(PromptReasoning.Medium, session.Configuration.Reasoning);
+        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
     }
 
     [Fact]
@@ -1313,10 +1313,10 @@ public sealed class PromptSessionTests
 
         Assert.Throws<ArgumentException>(() => session.Configuration.Mounts["bad//name"] = new Mock<IStore>().Object);
         Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(Tool("bad name")));
-        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Reasoning = (PromptReasoning)99);
+        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["effort"] = "extreme");
 
         Assert.Equal(["docs"], session.Configuration.Mounts.Keys);
-        Assert.Equal(PromptReasoning.Medium, session.Configuration.Reasoning);
+        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
         Assert.Empty(session.Configuration.Tools);
     }
 
@@ -1326,13 +1326,13 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.High;
+        session.Configuration.ModelSettings["effort"] = "high";
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
         session.Configuration.Instructions = "Be brief.";
         await session.Messages("two");
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
-        engine.Verify(mock => mock.CreatePersistentStart(It.Is<PromptEngineStart>(start => start.Capability == PromptCapability.Max && start.Reasoning == PromptReasoning.High && start.Instructions.EndsWith("Be brief.") && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
+        engine.Verify(mock => mock.CreatePersistentStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.Settings["effort"] == "high" && start.Instructions.EndsWith("Be brief.") && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
     }
 
     [Fact]
@@ -1345,30 +1345,30 @@ public sealed class PromptSessionTests
         Task<List<string>> first = session.Messages("one");
         await Task.Delay(100);
 
-        session.Configuration.Capability = PromptCapability.Max;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high", "max"])] };
         session.Configuration.Tools.Add(Tool("late"));
         release.SetResult();
         await first;
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
         await session.Messages("two");
 
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Capability == PromptCapability.Balanced && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Capability == PromptCapability.Max && start.ApiKey == null && start.Schema == null)), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "sonnet" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.ApiKey == null && start.Schema == null)), Times.Once);
     }
 
     [Fact]
-    public async Task Send_RunsWithChangedSettingsAndStoresNothingAboutThem()
+    public async Task Send_RunsWithChangedSettingsAndStoresTheModelAndItsSettingsOnce()
     {
         PromptSession session = Session(Record());
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.Low;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium"])] };
+        session.Configuration.ModelSettings["effort"] = "low";
 
         await session.Messages("one");
         await session.Messages("two");
 
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Capability == PromptCapability.Max && start.Reasoning == PromptReasoning.Low && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Exactly(2));
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.Settings["effort"] == "low" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Exactly(2));
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Model == "opus" && link.ModelSettings!["effort"] == "low"), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -1376,7 +1376,7 @@ public sealed class PromptSessionTests
     {
         IPromptSessionConfiguration configuration = Session(Record()).Configuration;
 
-        Assert.Equal((PromptCapability.Balanced, PromptReasoning.Medium, false, false), (configuration.Capability, configuration.Reasoning, configuration.IsPersistent, configuration.EnableShell));
+        Assert.Equal(("sonnet", "medium", false, false), (configuration.Model!.Id, configuration.ModelSettings["effort"], configuration.IsPersistent, configuration.EnableShell));
         Assert.Empty(configuration.Mounts);
         Assert.Empty(configuration.Tools);
         Assert.Empty(configuration.McpServers);
@@ -1552,7 +1552,7 @@ public sealed class PromptSessionTests
         PromptSession branch = Session(Record("copy"));
         Answers();
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "abc"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(branch);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(branch);
         session.Configuration.Instructions = "Be brief.";
         await session.Request("go");
 

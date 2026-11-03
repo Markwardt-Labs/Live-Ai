@@ -6,19 +6,19 @@ namespace Markwardt.LiveAi;
 public interface IPromptProvider
 {
     /// <summary>
-    /// Creates a session and stores it under a new identifier. The tool's own session starts with the first prompt. The session starts with balanced capability and medium reasoning; change them with <see cref="IPromptSessionConfiguration.Capability" /> and <see cref="IPromptSessionConfiguration.Reasoning" />, also before the first prompt.
+    /// Creates a session and stores it under a new identifier. The tool's own session starts with the first prompt. The session needs a model before it can do anything: give one in the options, or set <see cref="IPromptSessionConfiguration.Model" /> before the first prompt (see <see cref="GetModels" />).
     /// </summary>
-    /// <param name="options">The API key and the workspace (<see cref="PromptSessionOptions.WorkspacePath" /> and <see cref="PromptSessionOptions.Sandbox" />), or <see langword="null" /> for the configured subscription and no workspace. The workspace path is stored with the session: the session's <see cref="IPromptSessionConfiguration.Workspace" /> is set to <c>IStore.FromDisk</c> of it, now and every time the session is loaded, and the tool runs in it instead of in an empty folder of its own. A session that is deleted never deletes the folder. It is the only workspace that is stored: assigning <see cref="IPromptSessionConfiguration.Workspace" /> later changes the running session only, and a load starts with this path again (use <see cref="IPromptSession.AttachTo" /> to change it). The API key is never stored.</param>
+    /// <param name="options">The API key, the model and the workspace (<see cref="PromptSessionOptions.WorkspacePath" /> and <see cref="PromptSessionOptions.Sandbox" />), or <see langword="null" /> for the configured subscription, no model and no workspace. The workspace path is stored with the session: the session's <see cref="IPromptSessionConfiguration.Workspace" /> is set to <c>IStore.FromDisk</c> of it, now and every time the session is loaded, and the tool runs in it instead of in an empty folder of its own. A session that is deleted never deletes the folder. It is the only workspace that is stored: assigning <see cref="IPromptSessionConfiguration.Workspace" /> later changes the running session only, and a load starts with this path again (use <see cref="IPromptSession.AttachTo" /> to change it). The API key is never stored.</param>
     /// <param name="cancellation">Cancels the creation.</param>
     /// <returns>The new session.</returns>
     /// <exception cref="DirectoryNotFoundException">The workspace path is not an existing folder.</exception>
     Task<IPromptSession> Create(PromptSessionOptions? options = null, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Resumes the session stored under an identifier: only the link to the tool's conversation is stored, so the session starts with the default settings (balanced capability, medium reasoning, nothing else) and the caller sets again whatever it needs through <see cref="IPromptSession.Configuration" /> before the next prompt. Its next prompt continues the tool's session, so the AI still has its context. When the tool's session has been deleted the load fails; the stored session is kept, since the provider may only be a wrong one (another configuration folder), and <see cref="Delete" /> removes it.
+    /// Resumes the session stored under an identifier: only the link to the tool's conversation and the model with the values of its settings are stored. The session starts with that model, brought up to date with what the tool offers now (a setting the model no longer has is dropped, a value it no longer accepts goes back to the setting's default, and a new setting gets its default), and the caller sets again whatever else it needs through <see cref="IPromptSession.Configuration" /> before the next prompt. When the stored model is no longer offered the session starts without one, and <see cref="IPromptSessionConfiguration.Model" /> has to be set before it is used; when the tool cannot be asked, the stored model is kept as it is. Its next prompt continues the tool's session, so the AI still has its context. When the tool's session has been deleted the load fails; the stored session is kept, since the provider may only be a wrong one (another configuration folder), and <see cref="Delete" /> removes it.
     /// </summary>
     /// <param name="id">The identifier of the session, from <see cref="IPromptSession.Id" />.</param>
-    /// <param name="options">The API key to run with, or <see langword="null" /> to use the configured subscription (a key is never stored, so it is given again on every load). The workspace is stored with the session, so giving a workspace path here is refused.</param>
+    /// <param name="options">The API key to run with, or <see langword="null" /> to use the configured subscription (a key is never stored, so it is given again on every load), and optionally a model to run instead of the stored one (the settings that both models have keep their values). The workspace is stored with the session, so giving a workspace path here is refused.</param>
     /// <param name="cancellation">Cancels the load.</param>
     /// <returns>The session.</returns>
     /// <exception cref="PromptSessionNotFoundException"><paramref name="id" /> is not a session identifier, no session is stored under it, or the tool's session it was linked to is not there.</exception>
@@ -52,6 +52,24 @@ public interface IPromptProvider
     Task<PromptTestResult> Test(string? apiKey = null, CancellationToken cancellation = default);
 
     /// <summary>
+    /// Lists the models the tool can run, for the account or API key it is used with, each with the settings it offers (a reasoning effort, say). A session runs one of them once it is chosen with <see cref="IPromptSessionConfiguration.Model" />. The answer is kept for about a minute, so asking again is cheap; a model that a stored session names and the list lacks makes the list be asked for again once. A tool that is not installed, a server that is not running and an answer that cannot be read all give an empty list, which <see cref="Test" /> tells apart.
+    /// </summary>
+    /// <param name="apiKey">The API key the models are for, or <see langword="null" /> for the configured sign in. The list can differ by account, so it is kept apart per key. The key is never stored.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The models.</returns>
+    Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default);
+
+    /// <summary>
+    /// Finds one of the models <see cref="GetModels" /> lists.
+    /// </summary>
+    /// <param name="id">The identifier of the model (<see cref="PromptModel.Id" />).</param>
+    /// <param name="apiKey">The API key the model is for, or <see langword="null" /> for the configured sign in.</param>
+    /// <param name="cancellation">Cancels the lookup.</param>
+    /// <returns>The model.</returns>
+    /// <exception cref="PromptSessionModelException">The tool does not offer such a model, or could not be asked.</exception>
+    Task<PromptModel> GetModel(string id, string? apiKey = null, CancellationToken cancellation = default);
+
+    /// <summary>
     /// Reads how much of each window of the subscription's limits the tool has used, without sending a prompt. It takes a second or two and costs nothing. A tool that has no subscription limits to report, such as OpenCode, returns an empty list.
     /// </summary>
     /// <param name="cancellation">Cancels the read.</param>
@@ -73,6 +91,12 @@ public sealed class PromptProvider : IPromptProvider
 
     private readonly TimeProvider time;
 
+    private readonly IPromptLog log;
+
+    private readonly Dictionary<string, (DateTimeOffset Listed, IReadOnlyList<PromptModel> Models)> listed = [];
+
+    private readonly SemaphoreSlim listing = new(1, 1);
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PromptProvider" /> class.
     /// </summary>
@@ -86,7 +110,7 @@ public sealed class PromptProvider : IPromptProvider
     }
 
     private PromptProvider(IPromptEngine engine, IPromptSessionStore store, ITurnRunner runner, ILogger? logger, TimeProvider time)
-        : this(engine, store, new PromptSessionOpener(store, runner, new PromptToolHost(), new PromptLibraryTools(), logger, time), runner, time)
+        : this(engine, store, new PromptSessionOpener(store, runner, new PromptToolHost(), new PromptLibraryTools(), logger, time), runner, time, logger)
     {
     }
 
@@ -97,15 +121,22 @@ public sealed class PromptProvider : IPromptProvider
     /// <param name="store">Keeps the stored sessions.</param>
     /// <param name="opener">Makes the session objects.</param>
     /// <param name="runner">Runs the engine's processes.</param>
-    /// <param name="time">The clock that dates the sessions, or <see langword="null" /> for the system's.</param>
-    internal PromptProvider(IPromptEngine engine, IPromptSessionStore store, IPromptSessionOpener opener, ITurnRunner runner, TimeProvider? time = null)
+    /// <param name="time">The clock that dates the sessions and ages the list of models, or <see langword="null" /> for the system's.</param>
+    /// <param name="logger">The caller's logger, or <see langword="null" /> for none.</param>
+    internal PromptProvider(IPromptEngine engine, IPromptSessionStore store, IPromptSessionOpener opener, ITurnRunner runner, TimeProvider? time = null, ILogger? logger = null)
     {
+        log = new PromptLog(logger);
         this.time = time ?? TimeProvider.System;
         this.engine = engine;
         this.store = store;
         this.opener = opener;
         this.runner = runner;
     }
+
+    /// <summary>
+    /// Gets how long a list of models is kept before the tool is asked again.
+    /// </summary>
+    internal TimeSpan ModelsLifetime { get; init; } = TimeSpan.FromMinutes(1);
 
     /// <inheritdoc />
     public async Task<IPromptSession> Create(PromptSessionOptions? options = null, CancellationToken cancellation = default)
@@ -126,12 +157,13 @@ public sealed class PromptProvider : IPromptProvider
             throw new DirectoryNotFoundException($"The workspace folder '{workspacePath}' does not exist.");
         }
 
-        PromptSessionLink link = new() { Id = id, Created = time.GetUtcNow(), Provider = engine.Identifier, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Sandbox = sandbox };
+        PromptModel? model = options?.Model;
+        PromptSessionLink link = new() { Id = id, Created = time.GetUtcNow(), Provider = engine.Identifier, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Sandbox = sandbox, Model = model?.Id, ModelSettings = model?.Reconcile(new Dictionary<string, string>()).Settings };
 
         try
         {
             await store.Save(link, cancellation);
-            return opener.Open(link, this, engine, apiKey);
+            return opener.Open(link, this, engine, apiKey, model);
         }
         catch
         {
@@ -166,7 +198,8 @@ public sealed class PromptProvider : IPromptProvider
             Directory.CreateDirectory(record.WorkingFolder);
         }
 
-        return opener.Open(record, this, engine, apiKey);
+        (PromptSessionLink resolved, PromptModel? model) = await Resolve(record, options?.Model, apiKey, cancellation);
+        return opener.Open(resolved, this, engine, apiKey, model);
     }
 
     /// <inheritdoc />
@@ -211,7 +244,7 @@ public sealed class PromptProvider : IPromptProvider
     {
         try
         {
-            await foreach (PromptEngineEvent output in runner.Run(engine, engine.CreateTestStart(apiKey), "Reply with the digit 1.", cancellation))
+            await foreach (PromptEngineEvent output in runner.Run(engine, await engine.CreateTestStart(apiKey, cancellation), "Reply with the digit 1.", cancellation))
             {
                 switch (output.Kind)
                 {
@@ -233,6 +266,94 @@ public sealed class PromptProvider : IPromptProvider
     /// <inheritdoc />
     public Task<IReadOnlyList<PromptWindow>> GetWindows(CancellationToken cancellation = default)
         => engine.GetWindows(cancellation);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+        => (await Models(apiKey, false, cancellation)).Models;
+
+    /// <inheritdoc />
+    public async Task<PromptModel> GetModel(string id, string? apiKey = null, CancellationToken cancellation = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        (IReadOnlyList<PromptModel> models, bool cached) = await Models(apiKey, false, cancellation);
+
+        if (models.FirstOrDefault(model => model.Id == id) is { } found)
+        {
+            return found;
+        }
+
+        return (cached ? (await Models(apiKey, true, cancellation)).Models : models).FirstOrDefault(model => model.Id == id) ?? throw new PromptSessionModelException($"{engine.Identifier} does not offer a model '{id}'.");
+    }
+
+    private async Task<(IReadOnlyList<PromptModel> Models, bool Cached)> Models(string? apiKey, bool fresh, CancellationToken cancellation)
+    {
+        string key = apiKey is null ? string.Empty : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
+        await listing.WaitAsync(cancellation);
+
+        try
+        {
+            DateTimeOffset now = time.GetUtcNow();
+
+            if (!fresh && listed.TryGetValue(key, out (DateTimeOffset Listed, IReadOnlyList<PromptModel> Models) known) && now - known.Listed < ModelsLifetime)
+            {
+                return (known.Models, true);
+            }
+
+            IReadOnlyList<PromptModel> models = await engine.GetModels(apiKey, cancellation);
+
+            if (models.Count > 0)
+            {
+                listed[key] = (now, models);
+            }
+            else
+            {
+                listed.Remove(key);
+            }
+
+            return (models, false);
+        }
+        finally
+        {
+            listing.Release();
+        }
+    }
+
+    private async Task<(PromptSessionLink Link, PromptModel? Model)> Resolve(PromptSessionLink stored, PromptModel? chosen, string? apiKey, CancellationToken cancellation)
+    {
+        PromptModel? model = chosen;
+
+        if (model is null && stored.Model is { } id)
+        {
+            (IReadOnlyList<PromptModel> models, bool cached) = await Models(apiKey, false, cancellation);
+
+            if (cached && !models.Any(known => known.Id == id))
+            {
+                models = (await Models(apiKey, true, cancellation)).Models;
+            }
+
+            model = models.FirstOrDefault(known => known.Id == id) ?? (models.Count == 0 ? new PromptModel { Id = id } : null);
+
+            if (model is null)
+            {
+                log.ModelChanged(stored.Id.ToString("N"), $"The model {id} is no longer offered by {engine.Identifier}, so the session has none selected");
+            }
+        }
+
+        if (model is null)
+        {
+            return (stored with { Model = null, ModelSettings = null }, null);
+        }
+
+        (Dictionary<string, string> settings, IReadOnlyList<string> notes) = model.Reconcile(stored.ModelSettings ?? []);
+
+        foreach (string note in notes)
+        {
+            log.ModelChanged(stored.Id.ToString("N"), note);
+        }
+
+        return (stored with { Model = model.Id, ModelSettings = settings }, model);
+    }
 
     private PromptTestResult Unavailable(string error)
         => new() { IsAvailable = false, Error = error };

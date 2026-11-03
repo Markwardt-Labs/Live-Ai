@@ -228,7 +228,7 @@ public sealed class EngineWindowTests : IDisposable
     {
         string usage = Usage("Current session: 95% used · resets 11pm (UTC)");
         ClaudeEngine claude = Claude("case \"$*\" in *'/usage'*) ;; *) cat > /dev/null; sleep 20;; esac\n" + usage);
-        await using IPromptSession session = temp.Track(await Provider(claude).Create());
+        await using IPromptSession session = temp.Track(await Provider(claude).Create(TestModels.Options));
         session.Configuration.Limits = session.Configuration.Limits with { WindowLimit = new PromptWindowLimit { Reached = windows => windows.Any(window => window.Used > 0.9) } };
 
         PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("go"));

@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// How a request to a session is made, everything optional: what goes along with any input (the attachments and the note of <see cref="PromptOptions" />) and what only a request has. How the AI works (the model, the reasoning, the tools, the mounts) and the limits (the timeout, the window limit, the retries, the limit on tool calls) belong to the session and are set on its <see cref="IPromptSession.Configuration" />. Options are only read when the request starts, so one can be kept and used for many requests.
+/// How a request to a session is made, everything optional: what goes along with any input (the attachments and the note of <see cref="PromptOptions" />) and what only a request has. How the AI works (the model and its settings, the tools, the mounts) and the limits (the timeout, the window limit, the retries, the limit on tool calls) belong to the session and are set on its <see cref="IPromptSession.Configuration" />. Options are only read when the request starts, so one can be kept and used for many requests.
 /// </summary>
 public sealed record PromptRequestOptions : PromptOptions
 {

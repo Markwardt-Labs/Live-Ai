@@ -17,11 +17,11 @@ public sealed class PromptSessionSettingsTests
     [Fact]
     public void ItStartsWithWhatIsStored()
     {
-        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { Capability = PromptCapability.Max, Reasoning = PromptReasoning.High };
+        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { ModelSettings = new Dictionary<string, string> { ["effort"] = "high" } };
 
         PromptSessionSettings settings = Settings(record);
 
-        Assert.Equal((PromptCapability.Max, PromptReasoning.High, false, false, "Be brief."), (settings.Capability, settings.Reasoning, settings.IsPersistent, settings.EnableShell, settings.Instructions));
+        Assert.Equal(("sonnet", "high", false, false, "Be brief."), (settings.Model!.Id, settings.ModelSettings["effort"], settings.IsPersistent, settings.EnableShell, settings.Instructions));
         Assert.Equal(["db"], settings.McpServers.Keys);
         Assert.Empty(settings.Tools);
         Assert.Null(settings.Limits.Budget);
@@ -31,12 +31,72 @@ public sealed class PromptSessionSettingsTests
     }
 
     [Fact]
+    public void ChangingTheModelKeepsTheValuesBothModelsHaveAndGivesTheRestTheirDefaults()
+    {
+        PromptSessionSettings settings = Settings();
+        settings.ModelSettings["effort"] = "high";
+        PromptModel other = new() { Id = "other", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"]), PromptModelSetting.Count("context", "Context window", 1024, 8192, 4096)] };
+
+        settings.Model = other;
+
+        Assert.Equal(["context", "effort"], settings.ModelSettings.Keys.Order());
+        Assert.Equal(("high", "4096"), (settings.ModelSettings["effort"], settings.ModelSettings["context"]));
+    }
+
+    [Fact]
+    public void AValueTheNewModelDoesNotAcceptGoesBackToItsDefaultAndASettingItLacksIsDropped()
+    {
+        PromptSessionSettings settings = Settings();
+        settings.ModelSettings["effort"] = "max";
+        PromptModel other = new() { Id = "other", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "high"], "low")] };
+
+        settings.Model = other;
+        settings.Model = new PromptModel { Id = "plain", Settings = [] };
+
+        Assert.Empty(settings.ModelSettings);
+    }
+
+    [Fact]
+    public void ARecordThatAnEffortOfTheOldModelIsNotAcceptedByTheNewOneFallsBack()
+    {
+        PromptSessionSettings settings = Settings();
+        settings.ModelSettings["effort"] = "max";
+
+        settings.Model = new PromptModel { Id = "other", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "high"], "low")] };
+
+        Assert.Equal("low", settings.ModelSettings["effort"]);
+    }
+
+    [Fact]
+    public void WithoutAModelNoSettingCanBeSetAndSelectingNoneClearsThem()
+    {
+        PromptSessionSettings settings = Settings();
+
+        settings.Model = null;
+
+        Assert.Empty(settings.ModelSettings);
+        Assert.Throws<PromptSessionModelException>(() => settings.ModelSettings["effort"] = "low");
+    }
+
+    [Fact]
+    public void AModelWhoseSettingsAreNotKnownTakesTheValuesAsTheyAre()
+    {
+        PromptSessionSettings settings = Settings();
+
+        settings.Model = new PromptModel { Id = "stored" };
+        settings.ModelSettings["anything"] = "goes";
+
+        Assert.Equal("goes", settings.ModelSettings["anything"]);
+        Assert.Equal("medium", settings.ModelSettings["effort"]);
+    }
+
+    [Fact]
     public void EverySetterTellsTheOwnerOnce()
     {
         PromptSessionSettings settings = Settings();
 
-        settings.Capability = PromptCapability.Max;
-        settings.Reasoning = PromptReasoning.Low;
+        settings.Model = TestModels.Model;
+        settings.ModelSettings["effort"] = "low";
         settings.IsPersistent = true;
         settings.EnableShell = true;
         settings.Workspace = IStore.FromMemory();
@@ -90,8 +150,8 @@ public sealed class PromptSessionSettingsTests
     {
         PromptSessionSettings settings = Settings();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => settings.Capability = (PromptCapability)99);
-        Assert.Throws<ArgumentOutOfRangeException>(() => settings.Reasoning = (PromptReasoning)99);
+        Assert.Throws<ArgumentException>(() => settings.ModelSettings["effort"] = "extreme");
+        Assert.Throws<ArgumentException>(() => settings.ModelSettings["unknown"] = "x");
         Assert.Throws<ArgumentException>(() => settings.Limits = settings.Limits with { Budget = new PromptBudget { MaxTokens = 0 } });
         Assert.Throws<ArgumentException>(() => settings.Limits = settings.Limits with { Timeout = TimeSpan.Zero });
         Assert.Throws<ArgumentException>(() => settings.Limits = settings.Limits with { WindowLimit = new PromptWindowLimit { Reached = _ => false, Interval = TimeSpan.FromDays(25) } });
@@ -107,7 +167,8 @@ public sealed class PromptSessionSettingsTests
         Assert.Throws<ArgumentException>(() => settings.Limits = settings.Limits with { MaxToolCalls = -1 });
 
         Assert.Equal(0, changes);
-        Assert.Equal(PromptCapability.Balanced, settings.Capability);
+        Assert.Equal("sonnet", settings.Model!.Id);
+        Assert.Equal("medium", settings.ModelSettings["effort"]);
     }
 
     [Fact]
@@ -293,18 +354,19 @@ public sealed class PromptSessionSettingsTests
     public void ASnapshotIsACopyThatLaterChangesDoNotReach()
     {
         PromptSessionSettings settings = Settings();
-        settings.Capability = PromptCapability.Max;
+        settings.Model = TestModels.Model;
         settings.Tools.Add(Tool("alpha"));
         settings.Mounts["docs"] = new Mock<IStore>().Object;
         settings.McpServers["db"] = PromptMcpServer.Http("https://example.com");
 
         PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
-        settings.Capability = PromptCapability.Fast;
+        settings.Model = null;
         settings.Tools.Clear();
         settings.Mounts.Clear();
         settings.McpServers.Clear();
 
-        Assert.Equal(PromptCapability.Max, snapshot.Capability);
+        Assert.Equal("test-model", snapshot.Model!.Id);
+        Assert.Equal("medium", snapshot.ModelSettings["effort"]);
         Assert.Equal(["alpha"], snapshot.Tools.Select(tool => tool.Name));
         Assert.Equal(["docs"], snapshot.Mounts.Keys);
         Assert.Equal(["db"], snapshot.McpServers.Keys);

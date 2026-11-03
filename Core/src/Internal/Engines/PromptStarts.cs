@@ -18,8 +18,8 @@ internal static class PromptStarts
         public PromptEngineStart ToStart(string? apiKey, string? schema, ToolEndpoint? tools, IReadOnlyList<string>? files = null)
             => new()
             {
-                Capability = record.Capability,
-                Reasoning = record.Reasoning,
+                Model = record.Model?.Id,
+                Settings = record.ModelSettings,
                 WorkingFolder = record.WorkingFolder,
                 AiSessionId = record.AiSessionId,
                 ForkedFrom = record.AiSessionId is null ? record.ForkedFrom : null,

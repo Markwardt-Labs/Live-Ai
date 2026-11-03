@@ -10,6 +10,8 @@ public sealed class ScriptEngine(string script) : IPromptEngine
 
     public bool TakesImages { get; set; }
 
+    public IReadOnlyList<PromptModel> Models { get; set; } = [];
+
     public string Identifier => "Script Tool";
 
     public ProcessStartInfo CreateStart(PromptEngineStart start)
@@ -17,7 +19,7 @@ public sealed class ScriptEngine(string script) : IPromptEngine
         Starts.Add(start);
         ProcessStartInfo info = new(script) { WorkingDirectory = start.WorkingFolder };
 
-        foreach (string argument in (string[])["--model", start.Capability.ToString(), "--reasoning", start.Reasoning.ToString(), .. start.AiSessionId is null ? (string[])[] : ["--resume", start.AiSessionId], .. start.ForkedFrom is null ? (string[])[] : ["--fork", start.ForkedFrom], .. start.Files.SelectMany(file => new[] { "--file", file })])
+        foreach (string argument in (string[])["--model", start.Model ?? "none", "--effort", start.Settings.GetValueOrDefault("effort") ?? "none", .. start.AiSessionId is null ? (string[])[] : ["--resume", start.AiSessionId], .. start.ForkedFrom is null ? (string[])[] : ["--fork", start.ForkedFrom], .. start.Files.SelectMany(file => new[] { "--file", file })])
         {
             info.ArgumentList.Add(argument);
         }
@@ -45,6 +47,9 @@ public sealed class ScriptEngine(string script) : IPromptEngine
             ["DONE"] => [new PromptEngineEvent { Kind = PromptEngineEventKind.Finished }],
             _ => []
         };
+
+    public Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+        => Task.FromResult(Models);
 
     public bool Accepts(string mediaType)
     {

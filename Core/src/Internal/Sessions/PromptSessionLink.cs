@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// The only thing the library stores about a session: what connects its identifier to the conversation the engine's tool keeps. Everything else about a session, its settings, is the caller's to set again whenever the session is opened.
+/// What the library stores about a session: what connects its identifier to the conversation the engine's tool keeps, and the model the conversation last ran on with the values of its settings. Everything else about a session is the caller's to set again whenever the session is opened.
 /// </summary>
 internal sealed record PromptSessionLink
 {
@@ -51,18 +51,28 @@ internal sealed record PromptSessionLink
     public string? ForkedAt { get; init; }
 
     /// <summary>
+    /// Gets the identifier of the model the session runs, or <see langword="null" /> when none was selected. It is the last one a prompt ran on.
+    /// </summary>
+    public string? Model { get; init; }
+
+    /// <summary>
+    /// Gets the values of the model's settings as they were when the last prompt started, or <see langword="null" /> when none were stored. They are brought up to date with what the model offers when the session is loaded.
+    /// </summary>
+    public Dictionary<string, string>? ModelSettings { get; init; }
+
+    /// <summary>
     /// Makes the in-memory description of a session that was just opened: its link, and the settings every session starts with.
     /// </summary>
     /// <param name="engine">The command line tool the session runs on.</param>
-    /// <returns>The record, with balanced capability, medium reasoning and no instructions or servers.</returns>
+    /// <returns>The record, with the stored model as one the tool could not be asked about, and no instructions or servers.</returns>
     public PromptSessionRecord ToRecord(IPromptEngine engine)
         => new()
         {
             Id = Id,
             Created = Created,
             Engine = engine,
-            Capability = PromptCapability.Balanced,
-            Reasoning = PromptReasoning.Medium,
+            Model = Model is null ? null : new PromptModel { Id = Model },
+            ModelSettings = ModelSettings ?? [],
             WorkingFolder = WorkingFolder,
             WorkspacePath = WorkspacePath,
             Sandbox = Sandbox,

@@ -154,8 +154,9 @@ internal sealed class OpenCodeProcess(OpenCodeEngine engine, Process process, Pr
             return known;
         }
 
-        PromptContext read = await engine.ReadContext(session!, start.Capability, cancellation);
-        return context = read with { Limit = Limit() is > 0 and var limit ? limit : read.Limit };
+        long declared = start.Settings.TryGetValue("context", out string? size) && long.TryParse(size, NumberStyles.Integer, CultureInfo.InvariantCulture, out long tokens) ? tokens : 0;
+        PromptContext read = await engine.ReadContext(session!, Limit() is > 0 and var limit ? limit : declared, cancellation);
+        return context = read;
     }
 
     /// <inheritdoc />
@@ -485,15 +486,15 @@ internal sealed class OpenCodeProcess(OpenCodeEngine engine, Process process, Pr
     {
         await Models(cancellation);
 
-        string? wanted = engine.Model(prompt.Capability);
-        (string? providerId, string? modelId) = wanted is not null && wanted.IndexOf('/') is > 0 and var slash ? (wanted[..slash], wanted[(slash + 1)..]) : (provider, model);
+        int slash = prompt.Model.IndexOf('/');
 
-        if (providerId is null || modelId is null)
+        if (slash <= 0)
         {
             return;
         }
 
-        string? wantedVariant = Variant(providerId, modelId, prompt.Reasoning);
+        (string providerId, string modelId) = (prompt.Model[..slash], prompt.Model[(slash + 1)..]);
+        string? wantedVariant = prompt.Settings.GetValueOrDefault("variant");
 
         if (providerId == provider && modelId == model && wantedVariant == variant)
         {
@@ -509,20 +510,6 @@ internal sealed class OpenCodeProcess(OpenCodeEngine engine, Process process, Pr
 
         _ = await Send(HttpMethod.Post, $"/api/session/{session}/model", new JsonObject { ["model"] = choice }, cancellation);
         (provider, model, variant) = (providerId, modelId, wantedVariant);
-    }
-
-    private string? Variant(string providerId, string modelId, PromptReasoning reasoning)
-    {
-        string[] wanted = reasoning switch
-        {
-            PromptReasoning.Low => ["low", "minimal"],
-            PromptReasoning.High => ["high"],
-            PromptReasoning.Max => ["max", "xhigh", "high"],
-            _ => []
-        };
-
-        Choice? known = choices.FirstOrDefault(choice => choice.Provider == providerId && choice.Model == modelId);
-        return known is null ? null : wanted.Select(name => known.Variants.FirstOrDefault(option => string.Equals(option, name, StringComparison.OrdinalIgnoreCase))).FirstOrDefault(option => option is not null);
     }
 
     private async Task Models(CancellationToken cancellation = default)

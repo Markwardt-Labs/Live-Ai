@@ -21,51 +21,48 @@ public sealed class ClaudeEngineTests
         Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--effort", "medium", "--strict-mcp-config", "--append-system-prompt", Guidance(null), "--permission-mode", "dontAsk", "--tools", ""], start.ArgumentList);
     }
 
-    [Theory]
-    [InlineData(PromptCapability.Fast, "haiku")]
-    [InlineData(PromptCapability.Balanced, "sonnet")]
-    [InlineData(PromptCapability.Max, "opus")]
-    public void CreateStart_TranslatesCapabilityToAModel(PromptCapability capability, string model)
-    {
-        ProcessStartInfo start = engine.CreateStart(Record(builder => builder.Capability = capability).ToStart(null, null, null));
-
-        Assert.Equal(model, start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
-    }
-
     [Fact]
-    public void CreateStart_UsesTheModelsItIsGivenAndTheDefaultsForTheRest()
+    public void CreateStart_RunsTheModelOfTheRecordAtTheEffortItIsGiven()
     {
-        ClaudeEngine custom = new("claude", null, new PromptModels { Max = "claude-opus-x", Fast = "haiku-x" });
-
-        Assert.Equal(["haiku-x", "sonnet", "claude-opus-x"], new[] { PromptCapability.Fast, PromptCapability.Balanced, PromptCapability.Max }.Select(custom.Model));
-    }
-
-    [Fact]
-    public void CreateStart_UsesTheDefaultModelForEveryCapabilityWithoutOneOfItsOwn()
-    {
-        ProcessStartInfo start = new ClaudeEngine("claude", null, PromptModels.Only("opus")).CreateStart(Record(builder => builder.Capability = PromptCapability.Fast).ToStart(null, null, null));
+        ProcessStartInfo start = engine.CreateStart(Record(builder =>
+        {
+            builder.Model = new PromptModel { Id = "opus" };
+            builder.ModelSettings = new Dictionary<string, string> { ["effort"] = "max" };
+        }).ToStart(null, null, null));
 
         Assert.Equal("opus", start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
+        Assert.Equal("max", start.ArgumentList[start.ArgumentList.IndexOf("--effort") + 1]);
     }
 
     [Fact]
-    public void CreateTestStart_RunsTheModelOfTheFastCapability()
+    public void CreateStart_LeavesOutTheFlagsOfWhatIsNotChosen()
     {
-        ProcessStartInfo start = new ClaudeEngine("claude", null, new PromptModels { Fast = "haiku-x" }).CreateTestStart(null);
+        ProcessStartInfo start = engine.CreateStart(Record(builder =>
+        {
+            builder.Model = null;
+            builder.ModelSettings = new Dictionary<string, string>();
+        }).ToStart(null, null, null));
 
-        Assert.Equal("haiku-x", start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
+        Assert.DoesNotContain("--model", start.ArgumentList);
+        Assert.DoesNotContain("--effort", start.ArgumentList);
     }
 
-    [Theory]
-    [InlineData(PromptReasoning.Low, "low")]
-    [InlineData(PromptReasoning.Medium, "medium")]
-    [InlineData(PromptReasoning.High, "high")]
-    [InlineData(PromptReasoning.Max, "max")]
-    public void CreateStart_TranslatesReasoningToAnEffort(PromptReasoning reasoning, string effort)
+    [Fact]
+    public async Task CreateTestStart_RunsTheCheapestModelAtTheLowestEffort()
     {
-        ProcessStartInfo start = engine.CreateStart(Record(builder => builder.Reasoning = reasoning).ToStart(null, null, null));
+        ProcessStartInfo start = await engine.CreateTestStart(null);
 
-        Assert.Equal(effort, start.ArgumentList[start.ArgumentList.IndexOf("--effort") + 1]);
+        Assert.Equal("haiku", start.ArgumentList[start.ArgumentList.IndexOf("--model") + 1]);
+        Assert.Equal("low", start.ArgumentList[start.ArgumentList.IndexOf("--effort") + 1]);
+    }
+
+    [Fact]
+    public async Task CreateTestStart_PassesTheApiKeyAndTheConfigFolder()
+    {
+        ProcessStartInfo start = await new ClaudeEngine("claude", "/state").CreateTestStart("key");
+
+        Assert.Equal("key", start.Environment["ANTHROPIC_API_KEY"]);
+        Assert.Equal("/state", start.Environment["CLAUDE_CONFIG_DIR"]);
     }
 
     [Fact]
@@ -297,7 +294,7 @@ public sealed class ClaudeEngineTests
     }
 
     private PromptInput Turn(string text, IReadOnlyList<string>? notes = null, IReadOnlyList<PromptAttachment>? attachments = null)
-        => new() { Text = text, Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium, Notes = notes ?? [], Attachments = attachments ?? [] };
+        => new() { Text = text, Model = "sonnet", Notes = notes ?? [], Attachments = attachments ?? [] };
 
     private string Guidance(ToolEndpoint? tools)
         => tools.Guidance(Record());
@@ -391,14 +388,6 @@ public sealed class ClaudeEngineTests
         Assert.Equal("user", document.RootElement.GetProperty("message").GetProperty("role").GetString());
         Assert.Equal("say \"hi\"\nplease", document.RootElement.GetProperty("message").GetProperty("content").GetString());
     }
-
-    [Fact]
-    public void CreateStart_RejectsAnUndefinedCapability()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => engine.CreateStart(Record(builder => builder.Capability = (PromptCapability)99).ToStart(null, null, null)));
-
-    [Fact]
-    public void CreateStart_RejectsAnUndefinedReasoning()
-        => Assert.Throws<ArgumentOutOfRangeException>(() => engine.CreateStart(Record(builder => builder.Reasoning = (PromptReasoning)99).ToStart(null, null, null)));
 
     [Fact]
     public void Parse_ReadsTheTextOfAnAssistantMessageAndItsToolCallsInOrder()

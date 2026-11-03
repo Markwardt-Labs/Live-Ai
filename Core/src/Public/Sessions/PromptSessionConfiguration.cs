@@ -1,24 +1,24 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// The settings of an <see cref="IPromptSession" />, which are changed by assigning to them or by changing their collections, at any time. Nothing happens at once: the session takes all the settings together when the next prompt starts, so changing several costs at most one restart of the AI's process, and a prompt that is running keeps what it started with. None of the settings is stored: a session that is loaded starts with the defaults, and the caller sets what it needs again. A value that is not allowed throws at the moment it is set and changes nothing, and once the session is disposed every change throws <see cref="ObjectDisposedException" />.
+/// The settings of an <see cref="IPromptSession" />, which are changed by assigning to them or by changing their collections, at any time. Nothing happens at once: the session takes all the settings together when the next prompt starts, so changing several costs at most one restart of the AI's process, and a prompt that is running keeps what it started with. Only the model and its settings are stored with the session: a session that is loaded starts with them (brought up to date with what the model offers now), and the caller sets everything else again. A value that is not allowed throws at the moment it is set and changes nothing, and once the session is disposed every change throws <see cref="ObjectDisposedException" />.
 /// </summary>
 public interface IPromptSessionConfiguration
 {
     /// <summary>
-    /// Gets or sets how capable the model is.
+    /// Gets or sets the model the session runs, one of the models <see cref="IPromptProvider.GetModels" /> lists, or <see langword="null" /> while none is selected. A session needs a model to do anything with the tool: <c>Request</c>, <c>Send</c>, <c>Loop</c>, <c>Compact</c> and <c>GetContext</c> throw <see cref="PromptSessionModelException" /> until one is. Changing the model keeps the values of the settings both models have and gives the rest their defaults, so <see cref="ModelSettings" /> always holds a value for every setting the model offers.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The value is not a defined <see cref="PromptCapability" />.</exception>
-    PromptCapability Capability { get; set; }
+    PromptModel? Model { get; set; }
 
     /// <summary>
-    /// Gets or sets how much reasoning effort the model puts into each prompt.
+    /// Gets the values of the selected model's settings, by <see cref="PromptModelSetting.Id" />, as text. A value is checked when it is set: it has to be one the setting accepts.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The value is not a defined <see cref="PromptReasoning" />.</exception>
-    PromptReasoning Reasoning { get; set; }
+    /// <exception cref="ArgumentException">Assigning a value: the model has no such setting, or the setting does not accept the value.</exception>
+    /// <exception cref="PromptSessionModelException">Assigning a value: no model is selected.</exception>
+    IDictionary<string, string> ModelSettings { get; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the AI's process stays alive between prompts. When <see langword="true" /> the process starts with the first prompt and is never ended by the library, except when a changed setting needs a new one (the instructions, the external servers, the offered tools), a prompt is cancelled or the session is disposed; the model and the effort are changed in the running process. When <see langword="false" /> (the default) every prompt gets a process of its own, and a live process is ended in the background, after the prompt it is running. Only the providers the library drives through a conversation process (Claude Code and Codex) can stay alive; with a custom provider this has no effect and every prompt gets its own process.
+    /// Gets or sets a value indicating whether the AI's process stays alive between prompts. When <see langword="true" /> the process starts with the first prompt and is never ended by the library, except when a changed setting needs a new one (the instructions, the external servers, the offered tools), a prompt is cancelled or the session is disposed; the model and its settings are changed in the running process (except for a tool that takes them when it starts, which gets a new one). When <see langword="false" /> (the default) every prompt gets a process of its own, and a live process is ended in the background, after the prompt it is running. Only the providers the library drives through a conversation process (Claude Code and Codex) can stay alive; with a custom provider this has no effect and every prompt gets its own process.
     /// </summary>
     bool IsPersistent { get; set; }
 

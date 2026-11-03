@@ -132,6 +132,24 @@ internal sealed class GuardedDictionary<TValue>(object gate, Action<string, TVal
     }
 
     /// <inheritdoc />
+    /// <summary>
+    /// Replaces all the entries at once without checking them or reporting a change, for a caller that does both itself.
+    /// </summary>
+    /// <param name="items">The new entries.</param>
+    public void Replace(IEnumerable<KeyValuePair<string, TValue>> items)
+    {
+        lock (gate)
+        {
+            begin();
+            entries.Clear();
+
+            foreach ((string key, TValue value) in items)
+            {
+                entries[key] = value;
+            }
+        }
+    }
+
     public void Clear()
     {
         bool any;

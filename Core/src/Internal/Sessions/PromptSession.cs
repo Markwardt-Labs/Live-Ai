@@ -99,6 +99,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private Task? disposal;
 
+    private PromptSessionRecord persisted;
+
+    private PromptModel? asked;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PromptSession" /> class.
     /// </summary>
@@ -116,6 +120,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     public PromptSession(PromptSessionRecord record, string? apiKey, IPromptSessionStore store, IPromptProvider provider, IPromptEngine engine, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, IPromptSessionOpener opener, ILogger? logger = null, TimeProvider? time = null)
     {
         current = record;
+        persisted = record;
         log = new PromptLog(logger);
         Time = time ?? TimeProvider.System;
         this.apiKey = apiKey;
@@ -211,22 +216,30 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     /// <inheritdoc />
     public Task<PromptResult> Collect(object input, PromptRequestOptions? options = null, PromptRequestLimits? limits = null, CancellationToken cancellation = default)
-        => requester.Collect(input, options ?? new(), settings.RequestLimits(limits), cancellation);
+    {
+        RequireModel();
+        return requester.Collect(input, options ?? new(), settings.RequestLimits(limits), cancellation);
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<PromptEvent> Execute(PromptRun run, CancellationToken cancellation = default)
-        => run.Mode switch
+    {
+        RequireModel();
+
+        return run.Mode switch
         {
             PromptRequestMode.Direct => Direct(run, cancellation),
             PromptRequestMode.Mixed => Mixed(run, cancellation),
             PromptRequestMode.Fork => Forked(run, cancellation),
             _ => throw new ArgumentOutOfRangeException(nameof(run))
         };
+    }
 
     /// <inheritdoc />
     public async Task Send(object input, PromptOptions? options = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(input);
+        RequireModel();
 
         foreach (string note in options?.Notes ?? [])
         {
@@ -652,7 +665,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <param name="cancellation">Cancels the wait.</param>
     /// <returns>One message with the answer.</returns>
     /// <exception cref="PromptSessionStateException">The session is responding.</exception>
-    /// <exception cref="NotSupportedException">The request has a model, reasoning, tool or mount of its own, which the turn it is mixed into does not take.</exception>
+    /// <exception cref="NotSupportedException">The request has a tool or mount of its own, which the turn it is mixed into does not take.</exception>
     private async IAsyncEnumerable<PromptEvent> Mixed(PromptRun run, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(Disposed, this);
@@ -736,8 +749,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     private async Task Deliver(Queued item, CancellationToken cancellation = default)
     {
         IPromptProcess? target = null;
-        PromptCapability capability;
-        PromptReasoning reasoning;
+        PromptModel? model;
+        IReadOnlyDictionary<string, string> modelSettings;
         string[] told;
 
         lock (gate)
@@ -762,8 +775,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 return;
             }
 
-            capability = current.Capability;
-            reasoning = current.Reasoning;
+            model = current.Model;
+            modelSettings = current.ModelSettings;
             told = [.. notes.Skip(notesInFlight)];
             notes.RemoveRange(notesInFlight, told.Length);
             delivered.Add(item);
@@ -774,7 +787,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
         try
         {
-            taken = await target.Steer(new PromptInput { Text = prompt, Attachments = binary, Capability = capability, Reasoning = reasoning, Notes = told }, cancellation);
+            taken = await target.Steer(new PromptInput { Text = prompt, Attachments = binary, Model = model?.Id ?? string.Empty, Settings = modelSettings, Notes = told }, cancellation);
         }
         catch (Exception)
         {
@@ -966,9 +979,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     {
         try
         {
+            await Verify(running);
             PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
             CheckBudget(snapshot.Limits.Budget);
             Update(record => Merge(record, snapshot));
+            await PersistModel(running);
 
             PromptSessionRecord effective;
             List<string> given;
@@ -1011,7 +1026,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private async IAsyncEnumerable<PromptEngineEvent> Run(TurnStart start, string prompt, IReadOnlyList<PromptAttachment> attachments, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
-        PromptInput prompting = new() { Text = prompt, Attachments = attachments, Schema = start.Schema, Capability = start.Record.Capability, Reasoning = start.Record.Reasoning, Notes = start.Notes };
+        PromptInput prompting = new() { Text = prompt, Attachments = attachments, Schema = start.Schema, Model = start.Record.Model?.Id ?? string.Empty, Settings = start.Record.ModelSettings, Notes = start.Notes };
 
         if (engine.CanPersist)
         {
@@ -1181,7 +1196,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             string folder = source.WorkspacePath ?? Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}");
             Directory.CreateDirectory(folder);
 
-            PromptSessionLink link = new() { Id = id, Created = Time.GetUtcNow(), Provider = source.Engine.Identifier, WorkingFolder = folder, WorkspacePath = source.WorkspacePath, Sandbox = source.Sandbox, AiSessionId = branch.AiSessionId, ForkedFrom = branch.ForkedFrom, ForkedAt = branch.ForkedAt };
+            PromptSessionLink link = new() { Id = id, Created = Time.GetUtcNow(), Provider = source.Engine.Identifier, WorkingFolder = folder, WorkspacePath = source.WorkspacePath, Sandbox = source.Sandbox, AiSessionId = branch.AiSessionId, ForkedFrom = branch.ForkedFrom, ForkedAt = branch.ForkedAt, Model = source.Model?.Id, ModelSettings = source.Model is null ? null : new Dictionary<string, string>(source.ModelSettings) };
             await store.Save(link, linked.Token);
 
             IPromptSession fork = opener.Open(link, provider, engine, apiKey);
@@ -1221,6 +1236,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             throw new NotSupportedException($"{engine.Identifier} cannot do this.");
         }
 
+        RequireModel();
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation, closing.Token);
         await turn.WaitAsync(linked.Token);
 
@@ -1228,6 +1244,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             ObjectDisposedException.ThrowIf(Disposed, this);
 
+            await Verify(linked.Token);
             PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
             Update(record => Merge(record, snapshot));
 
@@ -1480,7 +1497,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)
-        => record with { Capability = snapshot.Capability, Reasoning = snapshot.Reasoning, Instructions = snapshot.Instructions, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
+        => record with { Model = snapshot.Model, ModelSettings = snapshot.ModelSettings, Instructions = snapshot.Instructions, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
 
     private void Update(Func<PromptSessionRecord, PromptSessionRecord> change)
     {
@@ -1494,12 +1511,69 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     {
         PromptSessionLink link;
 
+        PromptSessionRecord saving;
+
         lock (gate)
         {
-            link = current.ToLink();
+            saving = current;
+            link = saving.ToLink();
         }
 
         await store.Save(link, cancellation);
+
+        lock (gate)
+        {
+            persisted = saving;
+        }
+    }
+
+    private async Task PersistModel(CancellationToken cancellation)
+    {
+        bool changed;
+
+        lock (gate)
+        {
+            changed = !current.SameModel(persisted);
+        }
+
+        if (changed)
+        {
+            await Persist(cancellation);
+        }
+    }
+
+    private PromptModel RequireModel()
+        => settings.Model ?? throw new PromptSessionModelException("No model is selected: set Configuration.Model first.");
+
+    private async Task Verify(CancellationToken cancellation)
+    {
+        PromptModel model = RequireModel();
+
+        if (model.Settings is not null || ReferenceEquals(model, asked))
+        {
+            return;
+        }
+
+        if ((await provider.GetModels(apiKey, cancellation)).Count == 0)
+        {
+            asked = model;
+            return;
+        }
+
+        try
+        {
+            settings.Model = await provider.GetModel(model.Id, apiKey, cancellation);
+        }
+        catch (PromptSessionModelException)
+        {
+            if (ReferenceEquals(settings.Model, model))
+            {
+                settings.Model = null;
+            }
+
+            log.ModelChanged(Id, $"The model {model.Id} is no longer offered by {engine.Identifier}, so the session has none selected");
+            throw new PromptSessionModelException($"The model '{model.Id}' is no longer offered by {engine.Identifier}. Select another with Configuration.Model.");
+        }
     }
 
     private sealed record Queued(string Text, IReadOnlyList<PromptAttachment> Attachments, string? Request, IReadOnlyList<string> Notes);

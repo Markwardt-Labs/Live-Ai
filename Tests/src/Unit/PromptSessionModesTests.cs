@@ -351,7 +351,7 @@ public sealed class PromptSessionModesTests
         PromptSession session = Session("origin");
         PromptSession fork = Session();
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(fork);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(fork);
         Answers("side question", () => Replying("side answer"));
         Recorder<PromptEvent> recorder = new();
         session.Output.Subscribe(recorder);
@@ -370,7 +370,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session("origin");
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
-        opener.SetupSequence(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(Session()).Returns(Session());
+        opener.SetupSequence(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(Session()).Returns(Session());
         TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int started = 0;
         Answers("work", () => Blocked(release.Task, () => Interlocked.Increment(ref started)));

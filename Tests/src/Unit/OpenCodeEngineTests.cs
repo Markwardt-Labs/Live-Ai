@@ -2,7 +2,7 @@ namespace Markwardt.LiveAi.Tests.Unit;
 
 public sealed class OpenCodeEngineTests
 {
-    private readonly OpenCodeEngine engine = new("opencode", new OpenCodeModels { Default = "p/base", Fast = "p/fast", Max = "p/max" });
+    private readonly OpenCodeEngine engine = new("opencode", []);
 
     private IPromptEngine Generic => engine;
 
@@ -16,20 +16,9 @@ public sealed class OpenCodeEngineTests
         Assert.True(engine.SchemaPerTurn);
         Assert.True(Generic.Accepts("image/png"));
         Assert.False(Generic.Accepts("application/pdf"));
-        Assert.Throws<NotSupportedException>(() => engine.CreateStart(new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = "/", Instructions = string.Empty }));
+        Assert.Throws<NotSupportedException>(() => engine.CreateStart(new PromptEngineStart { WorkingFolder = "/", Instructions = string.Empty }));
         Assert.Empty(await Generic.GetWindows());
     }
-
-    [Theory]
-    [InlineData(PromptCapability.Fast, "p/fast")]
-    [InlineData(PromptCapability.Balanced, "p/base")]
-    [InlineData(PromptCapability.Max, "p/max")]
-    public void TheModelFollowsTheCapabilityAndFallsBackToTheDefaultModel(PromptCapability capability, string expected)
-        => Assert.Equal(expected, engine.Model(capability));
-
-    [Fact]
-    public void WithoutModelsTheChoiceIsLeftToOpenCode()
-        => Assert.Null(new OpenCodeEngine().Model(PromptCapability.Max));
 
     [Theory]
     [InlineData("liveai", "liveai")]
@@ -72,35 +61,38 @@ public sealed class OpenCodeEngineTests
     public void ALineThatIsNotAnEventIsIgnored(string line)
         => Assert.Empty(engine.Parse(line));
 
+    private OpenCodeEngine WithProvider(params OpenCodeModel[] models)
+        => new("/nonexistent/opencode", [], [new OpenCodeModelProvider { Id = "x", BaseUrl = "http://localhost/v1", Models = models }]);
+
     [Fact]
-    public void TheStartOfTheTestRunsTheFastModelWithoutAServerOfItsOwn()
+    public async Task TheStartOfTheTestRunsTheFirstModelWithoutAServerOfItsOwn()
     {
-        ProcessStartInfo start = Generic.CreateTestStart("key");
+        ProcessStartInfo start = await WithProvider(new OpenCodeModel { Id = "small" }, new OpenCodeModel { Id = "big" }).CreateTestStart("key");
 
         Assert.Equal(["run", "--standalone", "--format", "json"], start.ArgumentList);
         JsonElement config = JsonDocument.Parse(start.Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
-        Assert.Equal("p/fast", config.GetProperty("model").GetString());
+        Assert.Equal("x/small", config.GetProperty("model").GetString());
         Assert.False(config.TryGetProperty("mcp", out _));
         Assert.False(config.TryGetProperty("permissions", out _));
     }
 
     [Fact]
-    public void TheApiKeyOfTheSessionIsGivenToAProviderThatHasNone()
+    public async Task TheApiKeyOfTheSessionIsGivenToAProviderThatHasNone()
     {
-        OpenCodeEngine keyed = new("opencode", OpenCodeModels.Ollama("m"));
+        OpenCodeEngine keyed = WithProvider(new OpenCodeModel { Id = "m" });
 
-        JsonElement config = JsonDocument.Parse(keyed.CreateTestStart("secret").Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+        JsonElement config = JsonDocument.Parse((await keyed.CreateTestStart("secret")).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
 
-        Assert.Equal("secret", config.GetProperty("provider").GetProperty("ollama").GetProperty("options").GetProperty("apiKey").GetString());
-        Assert.Equal("none", JsonDocument.Parse(keyed.CreateTestStart(null).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("ollama").GetProperty("options").GetProperty("apiKey").GetString());
+        Assert.Equal("secret", config.GetProperty("provider").GetProperty("x").GetProperty("options").GetProperty("apiKey").GetString());
+        Assert.Equal("none", JsonDocument.Parse((await keyed.CreateTestStart(null)).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("x").GetProperty("options").GetProperty("apiKey").GetString());
     }
 
     [Fact]
-    public void ALimitThatIsGivenAloneIsCompletedBecauseOpenCodeDropsAModelWithAnIncompleteOne()
+    public async Task ALimitThatIsGivenAloneIsCompletedBecauseOpenCodeDropsAModelWithAnIncompleteOne()
     {
-        OpenCodeModels chosen = new() { Default = "x/small", Providers = [new OpenCodeModelProvider { Id = "x", BaseUrl = "http://localhost/v1", Models = [new OpenCodeModel { Id = "small", ContextLimit = 4000 }, new OpenCodeModel { Id = "capped", OutputLimit = 100 }, new OpenCodeModel { Id = "plain" }] }] };
+        OpenCodeEngine limited = WithProvider(new OpenCodeModel { Id = "small", ContextLimit = 4000 }, new OpenCodeModel { Id = "capped", OutputLimit = 100 }, new OpenCodeModel { Id = "plain" });
 
-        JsonElement models = JsonDocument.Parse(new OpenCodeEngine("opencode", chosen).CreateTestStart(null).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("x").GetProperty("models");
+        JsonElement models = JsonDocument.Parse((await limited.CreateTestStart(null)).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("x").GetProperty("models");
 
         Assert.Equal((4000, 2000), (models.GetProperty("small").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("small").GetProperty("limit").GetProperty("output").GetInt32()));
         Assert.Equal((32768, 100), (models.GetProperty("capped").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("capped").GetProperty("limit").GetProperty("output").GetInt32()));
@@ -108,13 +100,51 @@ public sealed class OpenCodeEngineTests
     }
 
     [Fact]
-    public void TheOllamaShortcutsDescribeALocalServer()
+    public void TheModelOfALocalServerGetsItsProviderAndTheContextSizeOfItsSetting()
     {
-        OpenCodeModels models = OpenCodeModels.Ollama("gemma4:26b", "http://box:11434/v1", 8192);
+        OpenCodeEngine local = new("opencode", ["http://localhost:11434/v1", "http://localhost:1234/v1"]);
+        PromptEngineStart given = new() { Model = "ollama/gemma4:26b", Settings = new Dictionary<string, string> { ["context"] = "8192", ["variant"] = "high" }, WorkingFolder = "/", Instructions = string.Empty };
 
-        Assert.Equal("ollama/gemma4:26b", models.Default);
-        OpenCodeModelProvider provider = Assert.Single(models.Providers);
-        Assert.Equal(("ollama", "http://box:11434/v1", "gemma4:26b", 8192), (provider.Id, provider.BaseUrl, provider.Models[0].Id, provider.Models[0].ContextLimit));
+        JsonElement config = JsonDocument.Parse(local.CreatePersistentStart(given).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+
+        Assert.Equal("ollama/gemma4:26b", config.GetProperty("model").GetString());
+        JsonElement provider = config.GetProperty("provider").GetProperty("ollama");
+        Assert.Equal("http://localhost:11434/v1", provider.GetProperty("options").GetProperty("baseURL").GetString());
+        Assert.Equal(8192, provider.GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32());
+        Assert.Single(config.GetProperty("provider").EnumerateObject());
+    }
+
+    [Fact]
+    public void TheModelOfAnotherLocalServerIsFoundByItsProviderIdentifier()
+    {
+        OpenCodeEngine local = new("opencode", ["http://localhost:11434/v1", "http://127.0.0.1:1234/v1"]);
+        PromptEngineStart given = new() { Model = "local-1234/qwen3-coder", WorkingFolder = "/", Instructions = string.Empty };
+
+        JsonElement config = JsonDocument.Parse(local.CreatePersistentStart(given).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+
+        Assert.Equal("http://127.0.0.1:1234/v1", config.GetProperty("provider").GetProperty("local-1234").GetProperty("options").GetProperty("baseURL").GetString());
+        Assert.False(config.GetProperty("provider").GetProperty("local-1234").GetProperty("models").GetProperty("qwen3-coder").TryGetProperty("limit", out _));
+    }
+
+    [Fact]
+    public void AModelOfOpenCodesOwnConfigurationAddsNoProvider()
+    {
+        OpenCodeEngine local = new("opencode", ["http://localhost:11434/v1"]);
+        PromptEngineStart given = new() { Model = "anthropic/claude-sonnet", WorkingFolder = "/", Instructions = string.Empty };
+
+        JsonElement config = JsonDocument.Parse(local.CreatePersistentStart(given).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+
+        Assert.Equal("anthropic/claude-sonnet", config.GetProperty("model").GetString());
+        Assert.False(config.TryGetProperty("provider", out _));
+    }
+
+    [Fact]
+    public async Task TheModelsOfTheProvidersItWasGivenAreListedWithoutAnySettings()
+    {
+        PromptModel model = Assert.Single(await WithProvider(new OpenCodeModel { Id = "small", Name = "Small", ContextLimit = 4000 }).GetModels());
+
+        Assert.Equal(("x/small", "Small", 4000), (model.Id, model.Name, model.ContextLimit));
+        Assert.Empty(model.Settings!);
     }
 
     [Fact]

@@ -21,7 +21,7 @@ public sealed class CodexSessionTests : IDisposable
 
     private async Task<IPromptSession> Create(string command, bool persistent = false)
     {
-        IPromptSession session = temp.Track(await Provider(Codex(command)).Create());
+        IPromptSession session = temp.Track(await Provider(Codex(command)).Create(TestModels.Options));
         session.Configuration.IsPersistent = persistent;
         return session;
     }
@@ -75,8 +75,7 @@ public sealed class CodexSessionTests : IDisposable
     {
         await using IPromptSession session = await Create(fake.Script());
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.High;
+        session.Configuration.ModelSettings["effort"] = "high";
 
         await session.Request("hi");
 
@@ -85,24 +84,8 @@ public sealed class CodexSessionTests : IDisposable
         Assert.Equal(("never", "read-only", false), (thread.GetProperty("approvalPolicy").GetString(), thread.GetProperty("sandbox").GetString(), thread.GetProperty("ephemeral").GetBoolean()));
         Assert.Equal(PromptDirectory(session), thread.GetProperty("cwd").GetString());
         JsonElement turn = Assert.Single(await fake.Parameters("turn/start"));
-        Assert.Equal(("gpt-5.6-sol", "high", "codex-thread"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString(), turn.GetProperty("threadId").GetString()));
+        Assert.Equal(("test-model", "high", "codex-thread"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString(), turn.GetProperty("threadId").GetString()));
         Assert.Equal(("text", "hi"), (turn.GetProperty("input")[0].GetProperty("type").GetString(), turn.GetProperty("input")[0].GetProperty("text").GetString()));
-    }
-
-    [Fact]
-    public async Task TheTurnCarriesTheModelTheProviderWasGivenAtTheEffortTheModelAccepts()
-    {
-        string catalog = """{"models":[{"slug":"gpt-custom","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}]}]}""";
-        IPromptProvider provider = Provider(new CodexEngine(fake.Script(models: catalog), temp.Combine("codex-state"), new PromptModels { Max = "gpt-custom" }));
-        await using IPromptSession session = temp.Track(await provider.Create());
-        session.Configuration.IsPersistent = false;
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.Max;
-
-        await session.Request("hi");
-
-        JsonElement turn = Assert.Single(await fake.Parameters("turn/start"));
-        Assert.Equal(("gpt-custom", "high"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString()));
     }
 
     private string PromptDirectory(IPromptSession session)
@@ -243,7 +226,7 @@ public sealed class CodexSessionTests : IDisposable
     public async Task GetContext_OfAResumedThread_IsWhatTheAppServerReportsOnResume()
     {
         IPromptProvider provider = Provider(Codex(fake.Script()));
-        IPromptSession first = temp.Track(await provider.Create());
+        IPromptSession first = temp.Track(await provider.Create(TestModels.Options));
         await first.Request("one");
 
         IPromptSession loaded = await provider.Load(first.Id);
@@ -255,7 +238,7 @@ public sealed class CodexSessionTests : IDisposable
     public async Task GetContext_OfAThreadThatHasNoTurnYet_ReportsNothingOnceTheWaitIsOver()
     {
         CodexEngine provider = new(fake.Script(), temp.Path) { ContextWait = TimeSpan.FromMilliseconds(100) };
-        PromptSessionRecord record = new() { Id = Guid.NewGuid(), Engine = provider, Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium, WorkingFolder = temp.Path };
+        PromptSessionRecord record = new() { Id = Guid.NewGuid(), Engine = provider, Model = TestModels.Model, WorkingFolder = temp.Path };
         PromptEngineStart given = record.ToStart(null, null, null);
         await using IPromptProcess process = new TurnRunner().Open(provider, provider.CreatePersistentStart(given), given);
 

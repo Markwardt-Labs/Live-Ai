@@ -5,15 +5,8 @@ namespace Markwardt.LiveAi;
 /// </summary>
 /// <param name="command">The command that starts Codex.</param>
 /// <param name="configFolder">The folder Codex keeps its state in, or <see langword="null" /> for <c>CODEX_HOME</c> or <c>.codex</c> in the user's home folder. It is also passed to the tool as <c>CODEX_HOME</c>, so the library and the tool look in the same place.</param>
-/// <param name="models">The model of each capability (the names a <see cref="CodexModelCatalog" /> lists), or <see langword="null" /> for <c>gpt-5.6-luna</c>, <c>gpt-5.6-terra</c> and <c>gpt-5.6-sol</c>. A reasoning level the chosen model does not accept is lowered to the highest one it does.</param>
-public sealed class CodexEngine(string command = "codex", string? configFolder = null, PromptModels? models = null) : IPromptEngine
+public sealed class CodexEngine(string command = "codex", string? configFolder = null) : IPromptEngine
 {
-    private readonly PromptModels settings = models ?? new();
-
-    private readonly Lazy<Task<IReadOnlyList<PromptModel>>> catalog = new(() => new CodexModelCatalog(command, configFolder).List());
-
-    private readonly string[] efforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
-
     private readonly ITurnRunner turns = new TurnRunner();
 
     private readonly TimeSpan branchTimeout = TimeSpan.FromSeconds(60);
@@ -28,6 +21,11 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
     /// Gets how long a read of the context window waits for the app server to report it, which it does by itself once a conversation has begun.
     /// </summary>
     internal TimeSpan ContextWait { get; init; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Gets how long a listing of the models waits for the tool before it gives none.
+    /// </summary>
+    internal TimeSpan ModelsTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
     public string Identifier => "Codex";
@@ -247,19 +245,65 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
         => new CodexLimits(command, configFolder).Read(cancellation);
 
     /// <summary>
-    /// Describes the smallest process that proves the tool works: the cheapest model, no tools and nothing stored. The prompt is written to its standard input.
+    /// Lists the models Codex offers to the account it is signed in with, from <c>codex debug models</c>, with the reasoning efforts each one accepts. The models Codex hides, which are for its own use, are left out.
+    /// </summary>
+    /// <param name="apiKey">The API key the models are for, or <see langword="null" /> for the configured sign in.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The models, or none when the tool could not be asked.</returns>
+    public async Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+    {
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        limit.CancelAfter(ModelsTimeout);
+
+        try
+        {
+            ProcessStartInfo start = new(command);
+            start.ArgumentList.Add("debug");
+            start.ArgumentList.Add("models");
+            Configure(start, apiKey);
+            List<string> lines = [];
+
+            await foreach (string line in turns.Exchange(Identifier, start, [], true, limit.Token))
+            {
+                lines.Add(line);
+            }
+
+            using JsonDocument catalog = JsonDocument.Parse(string.Join('\n', lines));
+            return [.. catalog.RootElement.GetProperty("models").EnumerateArray().Where(model => model.TryGetProperty("visibility", out JsonElement visibility) && visibility.GetString() == "list").Select(Read)];
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        {
+            return [];
+        }
+        catch (Exception exception) when (exception is PromptSessionException or JsonException or KeyNotFoundException or InvalidOperationException or InvalidDataException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Describes the smallest process that proves the tool works: the cheapest model Codex lists (the one it describes as fast, else the first) at its lowest effort, with no tools and nothing stored. The prompt is written to its standard input.
     /// </summary>
     /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured sign in.</param>
+    /// <param name="cancellation">Cancels the choice of the model.</param>
     /// <returns>The process to start, without its streams redirected.</returns>
-    public ProcessStartInfo CreateTestStart(string? apiKey)
+    public async Task<ProcessStartInfo> CreateTestStart(string? apiKey, CancellationToken cancellation = default)
     {
+        IReadOnlyList<PromptModel> models = await GetModels(apiKey, cancellation);
+        PromptModel? cheapest = models.FirstOrDefault(model => model.Description?.Contains("fast", StringComparison.OrdinalIgnoreCase) == true) ?? models.FirstOrDefault();
         ProcessStartInfo start = new(command) { WorkingDirectory = Path.GetTempPath() };
 
-        foreach (string argument in (string[])["exec", "--json", "--skip-git-repo-check", "--ephemeral", "-m", Model(PromptCapability.Fast), "-c", $"model_reasoning_effort=\"{Effort(PromptReasoning.Low)}\"", .. access, "-"])
+        foreach (string argument in (string[])["exec", "--json", "--skip-git-repo-check", "--ephemeral", .. cheapest is null ? [] : (string[])["-m", cheapest.Id], .. cheapest?.Lowest().GetValueOrDefault("effort") is { } effort ? (string[])["-c", $"model_reasoning_effort=\"{effort}\""] : [], .. access, "-"])
         {
             start.ArgumentList.Add(argument);
         }
 
+        Configure(start, apiKey);
+        return start;
+    }
+
+    private void Configure(ProcessStartInfo start, string? apiKey)
+    {
         if (configFolder is not null)
         {
             start.Environment["CODEX_HOME"] = configFolder;
@@ -269,8 +313,21 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
         {
             start.Environment["CODEX_API_KEY"] = apiKey;
         }
+    }
 
-        return start;
+    private PromptModel Read(JsonElement model)
+    {
+        string[] efforts = model.TryGetProperty("supported_reasoning_levels", out JsonElement levels) && levels.ValueKind == JsonValueKind.Array ? [.. levels.EnumerateArray().Where(level => level.TryGetProperty("effort", out _)).Select(level => level.GetProperty("effort").GetString()).OfType<string>()] : [];
+        string? preferred = model.TryGetProperty("default_reasoning_level", out JsonElement fallback) && fallback.ValueKind == JsonValueKind.String ? fallback.GetString() : null;
+
+        return new PromptModel
+        {
+            Id = model.GetProperty("slug").GetString() ?? throw new InvalidDataException("A model has no name."),
+            Name = model.TryGetProperty("display_name", out JsonElement name) && name.ValueKind == JsonValueKind.String ? name.GetString() : null,
+            Description = model.TryGetProperty("description", out JsonElement description) && description.ValueKind == JsonValueKind.String ? description.GetString() : null,
+            AcceptsImages = model.TryGetProperty("input_modalities", out JsonElement inputs) && inputs.ValueKind == JsonValueKind.Array ? inputs.EnumerateArray().Any(input => input.GetString() == "image") : null,
+            Settings = efforts.Length == 0 ? [] : [PromptModelSetting.Choose("effort", "Effort", efforts, preferred is not null && efforts.Contains(preferred) ? preferred : null)]
+        };
     }
 
     private string? Find(string aiSessionId)
@@ -563,63 +620,6 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
             schema["additionalProperties"] = false;
             schema["required"] = new JsonArray(properties.Select(entry => (JsonNode?)JsonValue.Create(entry.Key)).ToArray());
         }
-    }
-
-    /// <summary>
-    /// Names the model that runs a capability.
-    /// </summary>
-    /// <param name="capability">The capability.</param>
-    /// <returns>The name the tool takes.</returns>
-    internal string Model(PromptCapability capability)
-        => settings.For(capability) ?? capability switch
-        {
-            PromptCapability.Fast => "gpt-5.6-luna",
-            PromptCapability.Balanced => "gpt-5.6-terra",
-            PromptCapability.Max => "gpt-5.6-sol",
-            _ => throw new ArgumentOutOfRangeException(nameof(capability), capability, null)
-        };
-
-    /// <summary>
-    /// Names the effort that a level of reasoning is.
-    /// </summary>
-    /// <param name="reasoning">The reasoning.</param>
-    /// <returns>The name the tool takes.</returns>
-    internal string Effort(PromptReasoning reasoning)
-        => reasoning switch
-        {
-            PromptReasoning.Low => "low",
-            PromptReasoning.Medium => "medium",
-            PromptReasoning.High => "high",
-            PromptReasoning.Max => "max",
-            _ => throw new ArgumentOutOfRangeException(nameof(reasoning), reasoning, null)
-        };
-
-    /// <summary>
-    /// Names the effort a model is run at: the one the level of reasoning is, or the highest one below it that the model accepts when the model is one the caller chose and the catalog says it does not accept that one.
-    /// </summary>
-    /// <param name="capability">The capability whose model runs.</param>
-    /// <param name="reasoning">The reasoning.</param>
-    /// <param name="cancellation">Cancels the lookup.</param>
-    /// <returns>The name the tool takes.</returns>
-    internal async Task<string> Effort(PromptCapability capability, PromptReasoning reasoning, CancellationToken cancellation = default)
-    {
-        string wanted = Effort(reasoning);
-
-        if (settings.For(capability) is not { } model)
-        {
-            return wanted;
-        }
-
-        IReadOnlyList<string>? accepted = (await catalog.Value.WaitAsync(cancellation)).FirstOrDefault(listed => listed.Id == model)?.Efforts;
-
-        if (accepted is not { Count: > 0 } || accepted.Contains(wanted))
-        {
-            return wanted;
-        }
-
-        int rank = Array.IndexOf(efforts, wanted);
-        string[] known = [.. accepted.Where(effort => Array.IndexOf(efforts, effort) >= 0).OrderBy(effort => Array.IndexOf(efforts, effort))];
-        return known.LastOrDefault(effort => Array.IndexOf(efforts, effort) <= rank) ?? known.FirstOrDefault() ?? wanted;
     }
 
     /// <summary>

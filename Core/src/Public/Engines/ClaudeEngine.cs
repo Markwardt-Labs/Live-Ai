@@ -5,14 +5,18 @@ namespace Markwardt.LiveAi;
 /// </summary>
 /// <param name="command">The command that starts Claude Code.</param>
 /// <param name="configFolder">The folder Claude Code keeps its state in, or <see langword="null" /> for <c>CLAUDE_CONFIG_DIR</c> or <c>.claude</c> in the user's home folder. It is also passed to the tool as <c>CLAUDE_CONFIG_DIR</c>, so the library and the tool look in the same place.</param>
-/// <param name="models">The model of each capability (the names a <see cref="ClaudeModelCatalog" /> lists), or <see langword="null" /> for <c>haiku</c>, <c>sonnet</c> and <c>opus</c>.</param>
-public sealed class ClaudeEngine(string command = "claude", string? configFolder = null, PromptModels? models = null) : IPromptEngine
+public sealed class ClaudeEngine(string command = "claude", string? configFolder = null) : IPromptEngine
 {
-    private readonly PromptModels settings = models ?? new();
+    private readonly ITurnRunner turns = new TurnRunner();
 
     private readonly string[] access = ["--permission-mode", "dontAsk", "--tools", string.Empty];
 
     private readonly string projects = Path.Combine(configFolder ?? Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"), "projects");
+
+    /// <summary>
+    /// Gets how long a listing of the models waits for the tool before it gives none.
+    /// </summary>
+    internal TimeSpan ModelsTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
     public string Identifier => "Claude Code";
@@ -214,19 +218,61 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
         => new ClaudeUsage(command, configFolder).Read(cancellation);
 
     /// <summary>
-    /// Describes the smallest process that proves the tool works: the cheapest model, no tools, a minimal system prompt and nothing stored. The prompt is written to its standard input.
+    /// Lists the models of Claude Code, as the tool itself reports them to a client (the same list its model picker shows, with the effort levels each model accepts). The pinned versions it lists are included, and its own <c>default</c> entry is not, since it is a name for one of the others.
     /// </summary>
-    /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured subscription.</param>
-    /// <returns>The process to start, without its streams redirected.</returns>
-    public ProcessStartInfo CreateTestStart(string? apiKey)
+    /// <param name="apiKey">The API key the models are for, or <see langword="null" /> for the configured sign in.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The models, or none when the tool could not be asked.</returns>
+    public async Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+    {
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        limit.CancelAfter(ModelsTimeout);
+
+        try
+        {
+            ProcessStartInfo start = new(command) { WorkingDirectory = Path.GetTempPath() };
+
+            foreach (string argument in (string[])["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", .. access])
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            Configure(start, apiKey);
+
+            await foreach (string line in turns.Exchange(Identifier, start, ["""{"type":"control_request","request_id":"liveai-models","request":{"subtype":"initialize"}}"""], false, limit.Token))
+            {
+                if (ReadModels(line) is { } models)
+                {
+                    return models;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        {
+        }
+        catch (PromptSessionException)
+        {
+        }
+
+        return [];
+    }
+
+    /// <inheritdoc />
+    public Task<ProcessStartInfo> CreateTestStart(string? apiKey, CancellationToken cancellation = default)
     {
         ProcessStartInfo start = new(command) { WorkingDirectory = Path.GetTempPath() };
 
-        foreach (string argument in (string[])["-p", "--output-format", "stream-json", "--verbose", "--model", Model(PromptCapability.Fast), "--effort", Effort(PromptReasoning.Low), "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "Be terse.", .. access])
+        foreach (string argument in (string[])["-p", "--output-format", "stream-json", "--verbose", "--model", "haiku", "--effort", "low", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "Be terse.", .. access])
         {
             start.ArgumentList.Add(argument);
         }
 
+        Configure(start, apiKey);
+        return Task.FromResult(start);
+    }
+
+    private void Configure(ProcessStartInfo start, string? apiKey)
+    {
         if (configFolder is not null)
         {
             start.Environment["CLAUDE_CONFIG_DIR"] = configFolder;
@@ -236,8 +282,57 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
         {
             start.Environment["ANTHROPIC_API_KEY"] = apiKey;
         }
+    }
 
-        return start;
+    private IReadOnlyList<PromptModel>? ReadModels(string line)
+    {
+        JsonDocument document;
+
+        try
+        {
+            document = JsonDocument.Parse(line);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            JsonElement root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("type", out JsonElement type) || type.GetString() != "control_response" || !root.TryGetProperty("response", out JsonElement envelope) || envelope.ValueKind != JsonValueKind.Object || !envelope.TryGetProperty("request_id", out JsonElement id) || id.GetString() != "liveai-models")
+            {
+                return null;
+            }
+
+            if (!envelope.TryGetProperty("response", out JsonElement body) || body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("models", out JsonElement models) || models.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            try
+            {
+                return [.. models.EnumerateArray().Where(model => model.ValueKind == JsonValueKind.Object && model.TryGetProperty("value", out JsonElement value) && value.GetString() is { Length: > 0 } name && name != "default").Select(Read)];
+            }
+            catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+            {
+                return [];
+            }
+        }
+    }
+
+    private PromptModel Read(JsonElement model)
+    {
+        string[] efforts = model.TryGetProperty("supportedEffortLevels", out JsonElement levels) && levels.ValueKind == JsonValueKind.Array ? [.. levels.EnumerateArray().Select(level => level.GetString()).OfType<string>()] : [];
+
+        return new PromptModel
+        {
+            Id = model.GetProperty("value").GetString()!,
+            Name = model.TryGetProperty("displayName", out JsonElement name) && name.ValueKind == JsonValueKind.String ? name.GetString() : null,
+            Description = model.TryGetProperty("description", out JsonElement description) && description.ValueKind == JsonValueKind.String ? description.GetString() : null,
+            Settings = efforts.Length == 0 ? [] : [PromptModelSetting.Choose("effort", "Effort", efforts)]
+        };
     }
 
     private string? Find(string aiSessionId)
@@ -489,7 +584,7 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
     {
         ProcessStartInfo start = new(command) { WorkingDirectory = given.WorkingFolder };
 
-        foreach (string argument in (string[])["-p", .. persistent ? (string[])["--input-format", "stream-json", "--replay-user-messages"] : [], "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", Model(given.Capability), "--effort", Effort(given.Reasoning), "--strict-mcp-config", "--append-system-prompt", given.Instructions, .. given.Schema is { } schema ? (string[])["--json-schema", schema.GetRawText()] : [], .. Servers(given), .. access, .. Resume(given)])
+        foreach (string argument in (string[])["-p", .. persistent ? (string[])["--input-format", "stream-json", "--replay-user-messages"] : [], "--output-format", "stream-json", "--verbose", "--include-partial-messages", .. given.Model is { } model ? (string[])["--model", model] : [], .. given.Settings.TryGetValue("effort", out string? effort) ? (string[])["--effort", effort] : [], "--strict-mcp-config", "--append-system-prompt", given.Instructions, .. given.Schema is { } schema ? (string[])["--json-schema", schema.GetRawText()] : [], .. Servers(given), .. access, .. Resume(given)])
         {
             start.ArgumentList.Add(argument);
         }
@@ -559,35 +654,6 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
             ["command"] = server.Command,
             ["args"] = new JsonArray([.. server.Arguments.Select(argument => (JsonNode?)JsonValue.Create(argument))]),
             ["env"] = new JsonObject(server.EnvironmentVariables.Select(entry => KeyValuePair.Create<string, JsonNode?>(entry.Key, JsonValue.Create(entry.Value))))
-        };
-
-    /// <summary>
-    /// Names the model that runs a capability.
-    /// </summary>
-    /// <param name="capability">The capability.</param>
-    /// <returns>The name the tool takes.</returns>
-    internal string Model(PromptCapability capability)
-        => settings.For(capability) ?? capability switch
-        {
-            PromptCapability.Fast => "haiku",
-            PromptCapability.Balanced => "sonnet",
-            PromptCapability.Max => "opus",
-            _ => throw new ArgumentOutOfRangeException(nameof(capability), capability, null)
-        };
-
-    /// <summary>
-    /// Names the effort that a level of reasoning is.
-    /// </summary>
-    /// <param name="reasoning">The reasoning.</param>
-    /// <returns>The name the tool takes.</returns>
-    internal string Effort(PromptReasoning reasoning)
-        => reasoning switch
-        {
-            PromptReasoning.Low => "low",
-            PromptReasoning.Medium => "medium",
-            PromptReasoning.High => "high",
-            PromptReasoning.Max => "max",
-            _ => throw new ArgumentOutOfRangeException(nameof(reasoning), reasoning, null)
         };
 
     private string Failure(JsonElement result)

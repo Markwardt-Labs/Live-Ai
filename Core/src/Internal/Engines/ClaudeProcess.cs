@@ -5,7 +5,7 @@ namespace Markwardt.LiveAi;
 /// </summary>
 /// <param name="engine">Frames the prompts and reads what the process writes.</param>
 /// <param name="process">The started process, whose streams are redirected.</param>
-/// <param name="start">What the process was started for, which says the capability and reasoning it started with.</param>
+/// <param name="start">What the process was started for, which says the model and settings it started with.</param>
 internal sealed class ClaudeProcess(ClaudeEngine engine, Process process, PromptEngineStart start) : IPromptProcess
 {
     private readonly Task<string> errors = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -16,9 +16,9 @@ internal sealed class ClaudeProcess(ClaudeEngine engine, Process process, Prompt
 
     private readonly SemaphoreSlim writing = new(1, 1);
 
-    private PromptCapability capability = start.Capability;
+    private string? model = start.Model;
 
-    private PromptReasoning reasoning = start.Reasoning;
+    private string? effort = start.Settings.GetValueOrDefault("effort");
 
     private decimal cost;
 
@@ -51,7 +51,7 @@ internal sealed class ClaudeProcess(ClaudeEngine engine, Process process, Prompt
     /// <inheritdoc />
     public async IAsyncEnumerable<PromptEngineEvent> Run(PromptInput input, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
-        await Retune(input.Capability, input.Reasoning, cancellation);
+        await Retune(input.Model, input.Settings.GetValueOrDefault("effort"), cancellation);
 
         await foreach (PromptEngineEvent output in Read(engine.Frame(input), cancellation))
         {
@@ -92,7 +92,7 @@ internal sealed class ClaudeProcess(ClaudeEngine engine, Process process, Prompt
     /// <inheritdoc />
     public async IAsyncEnumerable<PromptEngineEvent> Compact([EnumeratorCancellation] CancellationToken cancellation = default)
     {
-        await foreach (PromptEngineEvent output in Read(engine.Frame(new PromptInput { Text = "/compact", Capability = capability, Reasoning = reasoning }), cancellation))
+        await foreach (PromptEngineEvent output in Read(engine.Frame(new PromptInput { Text = "/compact", Model = model ?? string.Empty }), cancellation))
         {
             yield return output;
         }
@@ -256,18 +256,18 @@ internal sealed class ClaudeProcess(ClaudeEngine engine, Process process, Prompt
         }
     }
 
-    private async Task Retune(PromptCapability wanted, PromptReasoning effort, CancellationToken cancellation = default)
+    private async Task Retune(string wantedModel, string? wantedEffort, CancellationToken cancellation = default)
     {
-        if (wanted != capability)
+        if (wantedModel != model)
         {
-            await Control("set_model", new JsonObject { ["model"] = engine.Model(wanted) }, cancellation);
-            capability = wanted;
+            await Control("set_model", new JsonObject { ["model"] = wantedModel }, cancellation);
+            model = wantedModel;
         }
 
-        if (effort != reasoning)
+        if (wantedEffort is not null && wantedEffort != effort)
         {
-            await Control("apply_flag_settings", new JsonObject { ["settings"] = new JsonObject { ["effortLevel"] = engine.Effort(effort) } }, cancellation);
-            reasoning = effort;
+            await Control("apply_flag_settings", new JsonObject { ["settings"] = new JsonObject { ["effortLevel"] = wantedEffort } }, cancellation);
+            effort = wantedEffort;
         }
     }
 

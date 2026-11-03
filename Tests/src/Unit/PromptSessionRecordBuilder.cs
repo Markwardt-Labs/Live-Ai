@@ -2,9 +2,9 @@ namespace Markwardt.LiveAi.Tests.Unit;
 
 internal sealed class PromptSessionRecordBuilder
 {
-    public PromptCapability Capability { get; set; } = PromptCapability.Balanced;
+    public PromptModel? Model { get; set; } = new() { Id = "sonnet", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high", "max"])] };
 
-    public PromptReasoning Reasoning { get; set; } = PromptReasoning.Medium;
+    public IReadOnlyDictionary<string, string> ModelSettings { get; set; } = new Dictionary<string, string> { ["effort"] = "medium" };
 
     public string? AiSessionId { get; set; }
 
@@ -21,8 +21,8 @@ internal sealed class PromptSessionRecordBuilder
         {
             Id = Guid.NewGuid(),
             Engine = engine,
-            Capability = Capability,
-            Reasoning = Reasoning,
+            Model = Model,
+            ModelSettings = ModelSettings,
             WorkingFolder = "/work",
             AiSessionId = AiSessionId,
             ForkedFrom = ForkedFrom,

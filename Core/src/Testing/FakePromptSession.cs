@@ -60,11 +60,11 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     /// <summary>
     /// Initializes a new instance of the <see cref="FakePromptSession" /> class.
     /// </summary>
-    /// <param name="provider">The provider the session says it runs on, Claude Code by default.</param>
+    /// <param name="provider">The provider the session says it runs on, Claude Code by default. The session starts with the first model of a <see cref="FakePromptProvider" />, and with the model of a fake one when the provider is not.</param>
     /// <param name="apiKey">The API key the session was made with, which is only kept for a test to look at.</param>
     /// <param name="time">The clock the session's timeouts, retries and loops run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that the test controls to test code that waits without waiting.</param>
     public FakePromptSession(IPromptProvider? provider = null, string? apiKey = null, TimeProvider? time = null)
-        : this(provider ?? new PromptProvider(new ClaudeEngine()), apiKey, null, time)
+        : this(provider ?? new PromptProvider(new ClaudeEngine()), apiKey, null, time, (provider as FakePromptProvider)?.Models.FirstOrDefault())
     {
     }
 
@@ -75,7 +75,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     /// <param name="apiKey">The API key the session reports.</param>
     /// <param name="sharedWindows">Gives the windows of the provider the session belongs to, or <see langword="null" /> for none.</param>
     /// <param name="time">The clock the session runs on, or <see langword="null" /> for the system's.</param>
-    internal FakePromptSession(IPromptProvider provider, string? apiKey, Func<IReadOnlyList<PromptWindow>?>? sharedWindows, TimeProvider? time = null)
+    /// <param name="model">The model the session starts with, or <see langword="null" /> for a fake one.</param>
+    internal FakePromptSession(IPromptProvider provider, string? apiKey, Func<IReadOnlyList<PromptWindow>?>? sharedWindows, TimeProvider? time = null, PromptModel? model = null)
     {
         this.time = time ?? TimeProvider.System;
         Provider = provider;
@@ -84,7 +85,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         requester = new PromptRequester(new Executor(this), null, this.time);
         Id = Guid.NewGuid().ToString("N");
         PromptLibraryTools library = new();
-        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium, WorkingFolder = string.Empty }, [.. library.Names, library.ShellName, library.AskName, "respond"]);
+        PromptModel start = model ?? new FakePromptProvider().Models[0];
+        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Model = start, ModelSettings = start.Reconcile(new Dictionary<string, string>()).Settings, WorkingFolder = string.Empty }, [.. library.Names, library.ShellName, library.AskName, "respond"]);
     }
 
     /// <inheritdoc />
@@ -291,6 +293,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public async Task<string> Request(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        RequireModel();
         return (await ((IPromptCollector)this).Collect(input, options, null, cancellation)).Text;
     }
 
@@ -303,6 +306,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public Task Send(object input, PromptOptions? options = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(input);
+        RequireModel();
 
         foreach (string note in options?.Notes ?? [])
         {
@@ -419,6 +423,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public async Task Compact(CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        RequireModel();
         await turn.WaitAsync(cancellation);
 
         try
@@ -438,6 +443,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public async Task<PromptContext> GetContext(CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        RequireModel();
         await turn.WaitAsync(cancellation);
 
         try
@@ -602,13 +608,17 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         }
 
         public IAsyncEnumerable<PromptEvent> Execute(PromptRun run, CancellationToken cancellation = default)
-            => run.Mode switch
+        {
+            session.RequireModel();
+
+            return run.Mode switch
             {
                 PromptRequestMode.Direct => session.Direct(run, cancellation),
                 PromptRequestMode.Mixed => session.Mixed(run, cancellation),
                 PromptRequestMode.Fork => session.Forked(run, cancellation),
                 _ => throw new ArgumentOutOfRangeException(nameof(run))
             };
+        }
     }
 
     /// <summary>
@@ -933,6 +943,17 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         }
     }
 
+    private string NoModel
+        => "No model is selected: set Configuration.Model first.";
+
+    private void RequireModel()
+    {
+        if (settings.Model is null)
+        {
+            throw new PromptSessionModelException(NoModel);
+        }
+    }
+
     private FakePrompt Start(PromptRun run)
     {
         lock (gate)
@@ -943,8 +964,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
                 Text = run.Text,
                 Attachments = run.Attachments,
                 Schema = run.Schema,
-                Capability = settings.Capability,
-                Reasoning = settings.Reasoning,
+                Model = settings.Model ?? throw new PromptSessionModelException(NoModel),
+                ModelSettings = settings.ModelSettings.Copy(),
                 Notes = [.. notes]
             };
 

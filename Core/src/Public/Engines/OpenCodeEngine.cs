@@ -1,15 +1,18 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// OpenCode 2.x, driven through the HTTP server it starts with <c>opencode serve --stdio</c>. OpenCode runs models from many providers, among them models on this machine served by Ollama, llama.cpp or LM Studio (see <see cref="OpenCodeModels.Ollama(string, string, int?)" />), so this is the engine for local models. Its tools are the MCP servers of the session only: its own file, shell and web tools are turned off, because the library serves the file tools and the shell itself.
+/// OpenCode 2.x, driven through the HTTP server it starts with <c>opencode serve --stdio</c>. OpenCode runs models from many providers, among them models on this machine served by Ollama, llama.cpp or LM Studio (see <paramref name="localServers" />), so this is the engine for local models. Its tools are the MCP servers of the session only: its own file, shell and web tools are turned off, because the library serves the file tools and the shell itself.
 /// </summary>
 /// <param name="command">The command that starts OpenCode: <c>opencode</c> found on the <c>PATH</c>, or the path of another one.</param>
-/// <param name="models">The models to use and the model providers to add to OpenCode's configuration, or <see langword="null" /> to leave both to OpenCode's own configuration files.</param>
-public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? models = null) : IPromptEngine
+/// <param name="localServers">The addresses of the OpenAI compatible APIs of the servers on this machine whose models are offered (the identifier of a model is <c>provider/model</c>, with <c>ollama</c> as the provider of Ollama on its usual port), or <see langword="null" /> for Ollama on <c>http://localhost:11434/v1</c>. Give an empty list to offer none. The models are listed when asked, so a server that is started later is found.</param>
+/// <param name="providers">Model providers to add to OpenCode's configuration, besides the servers above and the ones its own configuration files define, or <see langword="null" /> for none. Their models are offered as <c>provider/model</c>.</param>
+public sealed class OpenCodeEngine(string command = "opencode", IEnumerable<string>? localServers = null, IEnumerable<OpenCodeModelProvider>? providers = null) : IPromptEngine
 {
     private readonly ITurnRunner turns = new TurnRunner();
 
-    private readonly OpenCodeModels settings = models ?? new();
+    private readonly List<ILocalServer> servers = [.. (localServers ?? ["http://localhost:11434/v1"]).Select(url => (ILocalServer)new LocalServer(url))];
+
+    private readonly List<OpenCodeModelProvider> extra = [.. providers ?? []];
 
     private readonly TimeSpan exchangeTimeout = TimeSpan.FromSeconds(60);
 
@@ -39,6 +42,9 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
 
     /// <inheritdoc />
     public bool NeedsFiles => false;
+
+    /// <inheritdoc />
+    public bool StartsWithModel => true;
 
     /// <inheritdoc />
     public bool Accepts(string mediaType)
@@ -159,10 +165,29 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
         }
     }
 
-    /// <inheritdoc />
-    public ProcessStartInfo CreateTestStart(string? apiKey)
+    /// <summary>
+    /// Lists the models OpenCode can run: those of the local servers, then those of the model providers it was given, then those of OpenCode's own configuration (the models of a provider it is signed in to; its built-in free hosted models are left out, since they are not on this machine).
+    /// </summary>
+    /// <param name="apiKey">The API key the models are for, which OpenCode's own configuration does not depend on.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The models, with the settings each one offers.</returns>
+    public async Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
     {
-        PromptEngineStart given = new() { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = Path.GetTempPath(), ApiKey = apiKey, Instructions = string.Empty };
+        List<PromptModel> models = [.. await Local(cancellation), .. Described()];
+        models.AddRange(await Configured(cancellation));
+        return models;
+    }
+
+    /// <summary>
+    /// Describes the smallest process that proves the tool works: the first model on this machine (else the first one OpenCode lists) at its lowest settings. The prompt is written to its standard input and the output is read with <see cref="Parse" />.
+    /// </summary>
+    /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured sign in.</param>
+    /// <param name="cancellation">Cancels the choice of the model.</param>
+    /// <returns>The process to start, without its streams redirected.</returns>
+    public async Task<ProcessStartInfo> CreateTestStart(string? apiKey, CancellationToken cancellation = default)
+    {
+        PromptModel? model = (await Local(cancellation)).Concat(Described()).FirstOrDefault() ?? (await Configured(cancellation)).FirstOrDefault();
+        PromptEngineStart given = new() { Model = model?.Id, Settings = model?.Lowest() ?? [], WorkingFolder = Path.GetTempPath(), ApiKey = apiKey, Instructions = string.Empty };
         ProcessStartInfo start = WithEnvironment(new ProcessStartInfo(command) { WorkingDirectory = Path.GetTempPath() }, given, false);
 
         foreach (string argument in (string[])["run", "--standalone", "--format", "json"])
@@ -177,14 +202,11 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
     /// Reads how full the context is from the last answer of the conversation, as exported by the tool.
     /// </summary>
     /// <param name="aiSessionId">The session of the tool.</param>
-    /// <param name="capability">The capability whose model's context size is the limit, when the models are given.</param>
+    /// <param name="limit">The size of the context window, or zero when it is not known.</param>
     /// <param name="cancellation">Cancels the read.</param>
     /// <returns>The tokens in the context and the limit, which is zero when it is not known.</returns>
-    internal async Task<PromptContext> ReadContext(string aiSessionId, PromptCapability capability, CancellationToken cancellation = default)
+    internal async Task<PromptContext> ReadContext(string aiSessionId, long limit, CancellationToken cancellation = default)
     {
-        string? model = Model(capability);
-        long limit = model is null ? 0 : settings.Providers.SelectMany(provider => provider.Models.Select(known => (Name: $"{provider.Id}/{known.Id}", known.ContextLimit))).FirstOrDefault(known => known.Name == model).ContextLimit ?? 0;
-
         foreach (JsonElement message in (await Export(aiSessionId, cancellation)).Reverse())
         {
             if (message.TryGetProperty("type", out JsonElement type) && type.GetString() == "assistant" && message.TryGetProperty("tokens", out JsonElement tokens) && tokens.ValueKind == JsonValueKind.Object)
@@ -196,14 +218,6 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
 
         return new PromptContext { Tokens = 0, Limit = limit };
     }
-
-    /// <summary>
-    /// Names the model that runs a capability.
-    /// </summary>
-    /// <param name="capability">The capability.</param>
-    /// <returns>The model written <c>provider/model</c>, or <see langword="null" /> when OpenCode's own configuration decides.</returns>
-    internal string? Model(PromptCapability capability)
-        => settings.For(capability);
 
     /// <summary>
     /// Reads the history entries of one message of an exported conversation.
@@ -343,7 +357,7 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
 
     private async Task<IReadOnlyList<JsonElement>> Export(string aiSessionId, CancellationToken cancellation = default)
     {
-        ProcessStartInfo start = WithEnvironment(new ProcessStartInfo(command) { WorkingDirectory = Path.GetTempPath() }, new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = Path.GetTempPath(), Instructions = string.Empty }, false);
+        ProcessStartInfo start = WithEnvironment(new ProcessStartInfo(command) { WorkingDirectory = Path.GetTempPath() }, new PromptEngineStart { WorkingFolder = Path.GetTempPath(), Instructions = string.Empty }, false);
 
         foreach (string argument in (string[])["session", "export", "--standalone", aiSessionId])
         {
@@ -373,7 +387,7 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
 
     private async Task<string> Command(IReadOnlyList<string> arguments, string folder, CancellationToken cancellation = default)
     {
-        ProcessStartInfo start = WithEnvironment(new ProcessStartInfo(command) { WorkingDirectory = folder }, new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = folder, Instructions = string.Empty }, false);
+        ProcessStartInfo start = WithEnvironment(new ProcessStartInfo(command) { WorkingDirectory = folder }, new PromptEngineStart { WorkingFolder = folder, Instructions = string.Empty }, false);
 
         foreach (string argument in arguments)
         {
@@ -424,20 +438,25 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
     {
         JsonObject config = new() { ["update"] = "disable", ["share"] = "disabled", ["snapshots"] = false, ["websearch"] = false };
 
-        if (Model(given.Capability) is { } model)
+        if (given.Model is { } model)
         {
             config["model"] = model;
         }
 
-        if (settings.Providers.Count > 0)
+        JsonObject providers = [];
+
+        foreach (OpenCodeModelProvider provider in extra)
         {
-            JsonObject providers = [];
+            providers[provider.Id] = Describe(provider, given.ApiKey);
+        }
 
-            foreach (OpenCodeModelProvider provider in settings.Providers)
-            {
-                providers[provider.Id] = Describe(provider, given.ApiKey);
-            }
+        if (LocalProvider(given) is { } local)
+        {
+            providers[local.Id] = Describe(local, given.ApiKey);
+        }
 
+        if (providers.Count > 0)
+        {
             config["provider"] = providers;
         }
 
@@ -468,6 +487,64 @@ public sealed class OpenCodeEngine(string command = "opencode", OpenCodeModels? 
         }
 
         return config;
+    }
+
+    private async Task<List<PromptModel>> Local(CancellationToken cancellation)
+        => [.. (await Task.WhenAll(servers.Select(server => server.List(cancellation)))).SelectMany(models => models)];
+
+    private IEnumerable<PromptModel> Described()
+        => extra.SelectMany(provider => provider.Models.Select(model => new PromptModel { Id = $"{provider.Id}/{model.Id}", Name = model.Name ?? model.Id, ContextLimit = model.ContextLimit, Settings = [] }));
+
+    private async Task<IReadOnlyList<PromptModel>> Configured(CancellationToken cancellation)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(await Command(["api", "--standalone", "GET", "/api/model"], Path.GetTempPath(), cancellation));
+            JsonElement list = document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("data", out JsonElement data) ? data : document.RootElement;
+            HashSet<string> ours = [.. servers.Select(server => server.ProviderId), .. extra.Select(provider => provider.Id), "opencode"];
+
+            return list.ValueKind != JsonValueKind.Array ? [] : [.. list.EnumerateArray().Where(model => model.TryGetProperty("providerID", out JsonElement owner) && owner.GetString() is { } id && !ours.Contains(id) && model.TryGetProperty("modelID", out _) && (!model.TryGetProperty("enabled", out JsonElement enabled) || enabled.ValueKind != JsonValueKind.False)).Select(Known)];
+        }
+        catch (Exception exception) when (exception is PromptSessionException or JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return [];
+        }
+    }
+
+    private PromptModel Known(JsonElement model)
+    {
+        string[] variants = model.TryGetProperty("variants", out JsonElement options) && options.ValueKind == JsonValueKind.Array ? [.. options.EnumerateArray().Select(option => option.TryGetProperty("id", out JsonElement name) ? name.GetString() : null).OfType<string>().Where(name => name.Length > 0)] : [];
+        JsonElement capabilities = model.TryGetProperty("capabilities", out JsonElement found) && found.ValueKind == JsonValueKind.Object ? found : default;
+        string provider = model.GetProperty("providerID").GetString()!;
+        string id = model.GetProperty("modelID").GetString()!;
+
+        return new PromptModel
+        {
+            Id = $"{provider}/{id}",
+            Name = model.TryGetProperty("name", out JsonElement name) && name.ValueKind == JsonValueKind.String ? name.GetString() : id,
+            AcceptsImages = capabilities.ValueKind == JsonValueKind.Object && capabilities.TryGetProperty("input", out JsonElement input) && input.ValueKind == JsonValueKind.Array ? input.EnumerateArray().Any(kind => kind.GetString() == "image") : null,
+            CallsTools = capabilities.ValueKind == JsonValueKind.Object && capabilities.TryGetProperty("tools", out JsonElement tools) && tools.ValueKind is JsonValueKind.True or JsonValueKind.False ? tools.GetBoolean() : null,
+            ContextLimit = model.TryGetProperty("limit", out JsonElement limit) ? (int?)Count(limit, "context") is > 0 and var context ? context : null : null,
+            Settings = variants.Length == 0 ? [] : [PromptModelSetting.Choose("variant", "Reasoning", variants)]
+        };
+    }
+
+    private OpenCodeModelProvider? LocalProvider(PromptEngineStart given)
+    {
+        if (given.Model is not { } id)
+        {
+            return null;
+        }
+
+        ILocalServer? server = servers.FirstOrDefault(known => id.StartsWith($"{known.ProviderId}/", StringComparison.Ordinal));
+
+        return server is null ? null : new OpenCodeModelProvider
+        {
+            Id = server.ProviderId,
+            Name = server.ProviderId == "ollama" ? "Ollama" : server.ProviderId,
+            BaseUrl = server.BaseUrl,
+            Models = [new OpenCodeModel { Id = id[(server.ProviderId.Length + 1)..], ContextLimit = given.Settings.TryGetValue("context", out string? size) && int.TryParse(size, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tokens) ? tokens : null }]
+        };
     }
 
     private JsonObject Describe(OpenCodeModelProvider provider, string? apiKey)

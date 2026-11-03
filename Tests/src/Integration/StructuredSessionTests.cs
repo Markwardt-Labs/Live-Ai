@@ -18,7 +18,7 @@ public sealed class StructuredSessionTests : IDisposable
         => new CodexEngine(new FakeCodex(temp).Script(reply: """{"summary":"fine","score":7,"details":{"note":"n"}}"""), temp.Combine("codex-state"));
 
     private async Task<IPromptSession> Create(IPromptEngine provider)
-        => temp.Track(await Provider(provider).Create());
+        => temp.Track(await Provider(provider).Create(TestModels.Options));
 
     [Fact]
     public async Task Claude_AnswersWithTheStructuredOutputOfItsResult()

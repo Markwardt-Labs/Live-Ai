@@ -61,6 +61,13 @@ internal interface IPromptLog
     /// <param name="sessionId">The identifier of the session.</param>
     /// <param name="what">What was done.</param>
     void Moved(string sessionId, string what);
+
+    /// <summary>
+    /// Reports that what a loaded session was stored with was changed to fit the model as it is now.
+    /// </summary>
+    /// <param name="sessionId">The identifier of the session.</param>
+    /// <param name="what">What was changed.</param>
+    void ModelChanged(string sessionId, string what);
 }
 
 /// <inheritdoc />
@@ -106,4 +113,8 @@ internal sealed partial class PromptLog : IPromptLog
     /// <inheritdoc />
     [LoggerMessage(EventId = 8, Level = LogLevel.Information, Message = "Session {SessionId}: {What}.")]
     public partial void Moved(string sessionId, string what);
+
+    /// <inheritdoc />
+    [LoggerMessage(EventId = 9, Level = LogLevel.Information, Message = "Session {SessionId}: {What}.")]
+    public partial void ModelChanged(string sessionId, string what);
 }

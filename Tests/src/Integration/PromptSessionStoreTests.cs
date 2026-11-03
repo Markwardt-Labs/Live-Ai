@@ -40,14 +40,14 @@ public sealed class PromptSessionStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task OnlyTheLinkIsWrittenAndNothingAboutTheSettings()
+    public async Task OnlyTheLinkAndTheModelWithItsSettingsAreWritten()
     {
         PromptSessionLink link = Link("abc");
 
         await new PromptSessionStore(temp.Path).Save(link, CancellationToken.None);
 
         JsonElement written = JsonDocument.Parse(await File.ReadAllTextAsync(Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single())).RootElement;
-        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "sandbox", "forkedFrom", "forkedAt"], written.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "sandbox", "forkedFrom", "forkedAt", "model", "modelSettings"], written.EnumerateObject().Select(property => property.Name));
         Assert.Equal("Codex", written.GetProperty("provider").GetString());
     }
 
@@ -157,13 +157,13 @@ public sealed class PromptSessionStoreTests : IDisposable
     }
 
     [Fact]
-    public void ALinkBecomesASessionWithTheDefaultSettingsAndABecomesBackTheSameLink()
+    public void ALinkBecomesASessionWithNothingSelectedAndBecomesBackTheSameLink()
     {
         PromptSessionLink link = Link("abc") with { ForkedFrom = "origin" };
 
         PromptSessionRecord record = link.ToRecord(new CodexEngine());
 
-        Assert.Equal((PromptCapability.Balanced, PromptReasoning.Medium, null, 0), (record.Capability, record.Reasoning, record.Instructions, record.McpServers.Count));
+        Assert.Equal((null, 0, null, 0), (record.Model, record.ModelSettings.Count, record.Instructions, record.McpServers.Count));
         Assert.Equal(link, record.ToLink());
     }
 }

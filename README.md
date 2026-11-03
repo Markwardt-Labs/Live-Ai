@@ -26,22 +26,22 @@ The command of each tool you use must be installed: `claude` and `codex` signed 
 ## Getting started
 
 ```csharp
-IPromptProvider provider = new PromptProvider(new ClaudeEngine());                  // Claude Code
-// IPromptProvider provider = new PromptProvider(new CodexEngine());                // Codex
-// IPromptProvider provider = new PromptProvider(new OpenCodeEngine(models: OpenCodeModels.Ollama("gemma4:26b")));   // a local model
+IPromptProvider provider = new PromptProvider(new ClaudeEngine());       // Claude Code
+// IPromptProvider provider = new PromptProvider(new CodexEngine());     // Codex
+// IPromptProvider provider = new PromptProvider(new OpenCodeEngine());  // models on this machine (Ollama)
 
-await using IPromptSession session = await provider.Create();
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
+IReadOnlyList<PromptModel> models = await provider.GetModels();          // each model lists the settings it offers (effort, context size)
+
+await using IPromptSession session = await provider.Create(new PromptSessionOptions { Model = models[0], WorkspacePath = "/path/to/project" });
 
 Console.WriteLine(await session.Request("Which file holds the entry point?"));
 
-// Later, possibly in another process: the conversation comes back with it, and the settings are set again.
+// Later, possibly in another process: the conversation comes back with its workspace and its model.
 await using IPromptSession resumed = await provider.Load(session.Id);
-resumed.Configuration.Workspace = IStore.FromDisk("/path/to/project");
 Console.WriteLine(await resumed.Request("And what does it do?"));
 ```
 
-Each engine takes the command, and for Claude Code and Codex the configuration folder, and the models to run (`new CodexEngine(models: new PromptModels { Max = "gpt-5.6-sol" })`); a catalog (`CodexModelCatalog`, `ClaudeModelCatalog`, `LocalModelCatalog`) lists the models to choose from.
+A session runs the model chosen for it, with the values of that model's settings (`session.Configuration.ModelSettings["effort"] = "high"`), and both are stored with it, as is the workspace folder. Each engine takes the command and, for Claude Code and Codex, the configuration folder; `OpenCodeEngine` takes the servers on this machine whose models it offers.
 
 ## Documentation
 

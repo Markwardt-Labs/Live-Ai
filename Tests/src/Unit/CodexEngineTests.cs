@@ -158,27 +158,12 @@ public sealed class CodexEngineTests
         => Assert.Equal((true, true, true), (engine.CanPersist, engine.KeepsInstructions, engine.SchemaPerTurn));
 
     [Fact]
-    public void Model_TranslatesCapabilityToAModel()
-        => Assert.Equal(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"], new[] { PromptCapability.Fast, PromptCapability.Balanced, PromptCapability.Max }.Select(engine.Model));
-
-    [Fact]
-    public void Effort_TranslatesReasoningToAnEffort()
-        => Assert.Equal(["low", "medium", "high", "max"], new[] { PromptReasoning.Low, PromptReasoning.Medium, PromptReasoning.High, PromptReasoning.Max }.Select(engine.Effort));
-
-    [Fact]
-    public void ModelAndEffort_RejectAnUndefinedValue()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => engine.Model((PromptCapability)99));
-        Assert.Throws<ArgumentOutOfRangeException>(() => engine.Effort((PromptReasoning)99));
-    }
-
-    [Fact]
     public void ThePromptsAreNotTakenAsLinesOrOneProcessPerPrompt()
     {
         Assert.Throws<NotSupportedException>(() => engine.CreateStart(Record().ToStart(null, null, null)));
         Assert.Throws<NotSupportedException>(() => engine.CreateAttachmentStart(Record().ToStart(null, null, null, [])));
-        Assert.Throws<NotSupportedException>(() => engine.Frame(new PromptInput { Text = "hi", Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium }));
-        Assert.Throws<NotSupportedException>(() => engine.Plain(new PromptInput { Text = "hi", Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium }));
+        Assert.Throws<NotSupportedException>(() => engine.Frame(new PromptInput { Text = "hi", Model = "m" }));
+        Assert.Throws<NotSupportedException>(() => engine.Plain(new PromptInput { Text = "hi", Model = "m" }));
     }
 
     [Fact]

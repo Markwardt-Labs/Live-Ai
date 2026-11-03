@@ -26,14 +26,14 @@ public sealed record PromptInput
     public string? Schema { get; init; }
 
     /// <summary>
-    /// Gets the capability to run the prompt on.
+    /// Gets the identifier of the model to run the prompt on (<see cref="PromptModel.Id" />).
     /// </summary>
-    public required PromptCapability Capability { get; init; }
+    public required string Model { get; init; }
 
     /// <summary>
-    /// Gets the reasoning to run the prompt with.
+    /// Gets the values of the model's settings to run the prompt with, by <see cref="PromptModelSetting.Id" />.
     /// </summary>
-    public required PromptReasoning Reasoning { get; init; }
+    public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
     /// Gets the notes to put in front of the prompt, which are for the AI and not part of what the user said.

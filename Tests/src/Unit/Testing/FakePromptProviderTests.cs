@@ -179,4 +179,66 @@ public sealed class FakePromptProviderTests
         await cancelled.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.GetWindows(cancelled.Token));
     }
+
+    [Fact]
+    public async Task GetModelsListsTheModelsItWasGivenAndNotesTheKeysItWasAskedWith()
+    {
+        FakePromptProvider provider = new();
+
+        IReadOnlyList<PromptModel> models = await provider.GetModels();
+        await provider.GetModels("key");
+
+        PromptModel model = Assert.Single(models);
+        Assert.Equal("fake-model", model.Id);
+        Assert.Equal(["low", "medium", "high"], model.Settings!.Single().Choices);
+        Assert.Equal([null, "key"], provider.Listings);
+    }
+
+    [Fact]
+    public async Task GetModelFindsAListedModelAndRefusesOthers()
+    {
+        FakePromptProvider provider = new() { Models = [new PromptModel { Id = "a" }, new PromptModel { Id = "b" }] };
+
+        Assert.Equal("b", (await provider.GetModel("b")).Id);
+        await Assert.ThrowsAsync<PromptSessionModelException>(() => provider.GetModel("c"));
+    }
+
+    [Fact]
+    public async Task ASessionStartsWithTheFirstModelOfTheProviderOrTheOneItIsGiven()
+    {
+        FakePromptProvider provider = new() { Models = [new PromptModel { Id = "first" }] };
+        PromptModel chosen = new() { Id = "chosen", Settings = [] };
+
+        IPromptSession started = await provider.Create();
+        IPromptSession given = await provider.Create(new PromptSessionOptions { Model = chosen });
+
+        Assert.Equal("first", started.Configuration.Model!.Id);
+        Assert.Same(chosen, given.Configuration.Model);
+    }
+
+    [Fact]
+    public async Task LoadWithAModelSelectsIt()
+    {
+        FakePromptProvider provider = new();
+        IPromptSession created = await provider.Create();
+        await created.DisposeAsync();
+        PromptModel chosen = new() { Id = "chosen", Settings = [] };
+
+        IPromptSession loaded = await provider.Load(created.Id, new PromptSessionOptions { Model = chosen });
+
+        Assert.Same(chosen, loaded.Configuration.Model);
+    }
+
+    [Fact]
+    public async Task ASessionWithoutAModelRefusesLikeTheRealOne()
+    {
+        FakePromptSession session = new FakePromptSession().Reply("ok");
+        session.Configuration.Model = null;
+
+        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Request("go"));
+        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Send("go"));
+        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Compact());
+        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.GetContext());
+        Assert.Empty(session.Prompts);
+    }
 }

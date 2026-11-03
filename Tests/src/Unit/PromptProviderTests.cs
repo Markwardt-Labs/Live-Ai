@@ -22,7 +22,7 @@ public sealed class PromptProviderTests
 
     private PromptProvider Subject()
     {
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(session.Object);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(session.Object);
         store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Callback<PromptSessionLink, CancellationToken>((record, _) => folders.Add(record.WorkingFolder)).Returns(Task.CompletedTask);
         return new PromptProvider(engine.Object, store.Object, opener.Object, runner.Object);
     }
@@ -57,10 +57,10 @@ public sealed class PromptProviderTests
     public async Task Create_RecordsWhenTheSessionWasMadeOnTheClockOfTheProvider()
     {
         ManualTime clock = new();
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(session.Object);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(session.Object);
         store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Callback<PromptSessionLink, CancellationToken>((record, _) => folders.Add(record.WorkingFolder)).Returns(Task.CompletedTask);
 
-        await new PromptProvider(engine.Object, store.Object, opener.Object, runner.Object, clock).Create();
+        await new PromptProvider(engine.Object, store.Object, opener.Object, runner.Object, clock).Create(TestModels.Options);
 
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Created == clock.GetUtcNow()), It.IsAny<CancellationToken>()), Times.Once);
         Directory.Delete(folders.Single());
@@ -69,12 +69,12 @@ public sealed class PromptProviderTests
     [Fact]
     public async Task Create_StoresTheLinkUnderANewIdentifierAndOpensTheSession()
     {
-        IPromptSession created = await Subject().Create(new PromptSessionOptions { ApiKey = "key" });
+        IPromptSession created = await Subject().Create(new PromptSessionOptions { Model = TestModels.Model, ApiKey = "key" });
 
         Assert.Same(session.Object, created);
         Func<PromptSessionLink, bool> expected = record => record.Id != Guid.Empty && record.Provider == "Fake" && record.AiSessionId == null && record.ForkedFrom == null;
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(record => expected(record)), It.IsAny<CancellationToken>()), Times.Once);
-        opener.Verify(mock => mock.Open(It.Is<PromptSessionLink>(record => expected(record)), It.IsAny<IPromptProvider>(), engine.Object, "key"), Times.Once);
+        opener.Verify(mock => mock.Open(It.Is<PromptSessionLink>(record => expected(record)), It.IsAny<IPromptProvider>(), engine.Object, "key", It.IsAny<PromptModel?>()), Times.Once);
         Directory.Delete(folders.Single());
     }
 
@@ -83,18 +83,18 @@ public sealed class PromptProviderTests
     {
         using TempFolder workspace = new();
 
-        await Subject().Create(new PromptSessionOptions { WorkspacePath = workspace.Path, Sandbox = false });
+        await Subject().Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = workspace.Path, Sandbox = false });
 
         Func<PromptSessionLink, bool> expected = link => link.WorkingFolder == workspace.Path && link.WorkspacePath == workspace.Path && !link.Sandbox;
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => expected(link)), It.IsAny<CancellationToken>()), Times.Once);
-        opener.Verify(mock => mock.Open(It.Is<PromptSessionLink>(link => expected(link)), It.IsAny<IPromptProvider>(), engine.Object, null), Times.Once);
+        opener.Verify(mock => mock.Open(It.Is<PromptSessionLink>(link => expected(link)), It.IsAny<IPromptProvider>(), engine.Object, null, It.IsAny<PromptModel?>()), Times.Once);
         Assert.Equal([workspace.Path], folders);
     }
 
     [Fact]
     public async Task Create_WithAWorkspacePathThatDoesNotExist_ThrowsAndStoresNothing()
     {
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Subject().Create(new PromptSessionOptions { WorkspacePath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}") }));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Subject().Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}") }));
 
         store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -102,7 +102,7 @@ public sealed class PromptProviderTests
     [Fact]
     public async Task Create_WithoutAWorkspacePath_StoresNoWorkspace()
     {
-        await Subject().Create();
+        await Subject().Create(TestModels.Options);
 
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.WorkspacePath == null && link.Sandbox), It.IsAny<CancellationToken>()), Times.Once);
         Directory.Delete(folders.Single());
@@ -111,7 +111,7 @@ public sealed class PromptProviderTests
     [Fact]
     public async Task Load_WithAWorkspacePath_IsRefusedBecauseTheWorkspaceIsStoredWithTheSession()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => Subject().Load(Guid.NewGuid().ToString("N"), new PromptSessionOptions { WorkspacePath = "/somewhere" }));
+        await Assert.ThrowsAsync<ArgumentException>(() => Subject().Load(Guid.NewGuid().ToString("N"), new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = "/somewhere" }));
 
         store.Verify(mock => mock.Find(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -126,7 +126,7 @@ public sealed class PromptProviderTests
         await Subject().Load(record.Id.ToString("N"));
 
         Assert.False(Directory.Exists(folder));
-        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, null), Times.Once);
+        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, null, It.IsAny<PromptModel?>()), Times.Once);
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class PromptProviderTests
         PromptProvider subject = Subject();
         store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Callback<PromptSessionLink, CancellationToken>((link, _) => folder = link.WorkingFolder).ThrowsAsync(new IOException("disk full"));
 
-        await Assert.ThrowsAsync<IOException>(() => subject.Create());
+        await Assert.ThrowsAsync<IOException>(() => subject.Create(TestModels.Options));
 
         Assert.NotNull(folder);
         Assert.False(Directory.Exists(folder));
@@ -167,8 +167,8 @@ public sealed class PromptProviderTests
             folders.Add(record.WorkingFolder);
         }).Returns(Task.CompletedTask);
 
-        await provider.Create();
-        await provider.Create();
+        await provider.Create(TestModels.Options);
+        await provider.Create(TestModels.Options);
 
         Assert.Equal(2, ids.Distinct().Count());
         Assert.Equal(2, folders.Distinct().Count());
@@ -178,7 +178,7 @@ public sealed class PromptProviderTests
     [Fact]
     public async Task Create_MakesTheFolderTheToolsRunInInTheSystemTempFolderNamedAfterTheSession()
     {
-        await Subject().Create();
+        await Subject().Create(TestModels.Options);
 
         string folder = folders.Single();
         Assert.True(Directory.Exists(folder));
@@ -196,7 +196,7 @@ public sealed class PromptProviderTests
         IPromptSession loaded = await Subject().Load(record.Id.ToString("N"), new PromptSessionOptions { ApiKey = "key" });
 
         Assert.Same(session.Object, loaded);
-        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, "key"), Times.Once);
+        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, "key", It.IsAny<PromptModel?>()), Times.Once);
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public sealed class PromptProviderTests
 
         Assert.Equal(record.Id.ToString("N"), exception.Id);
         store.Verify(mock => mock.Delete(It.IsAny<Guid>()), Times.Never);
-        opener.Verify(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>()), Times.Never);
+        opener.Verify(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>()), Times.Never);
     }
 
     [Fact]
@@ -346,7 +346,7 @@ public sealed class PromptProviderTests
 
         await Subject().Load(record.Id.ToString("N"));
 
-        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, null), Times.Once);
+        opener.Verify(mock => mock.Open(record, It.IsAny<IPromptProvider>(), engine.Object, null, It.IsAny<PromptModel?>()), Times.Once);
     }
 
     [Fact]
@@ -361,7 +361,7 @@ public sealed class PromptProviderTests
         Assert.Contains("Other", load.Message);
         store.Verify(mock => mock.Delete(It.IsAny<Guid>()), Times.Never);
         engine.Verify(mock => mock.DeleteSession(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        opener.Verify(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>()), Times.Never);
+        opener.Verify(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>()), Times.Never);
     }
 
     [Fact]

@@ -20,7 +20,7 @@ public sealed class ForkSessionTests : IDisposable
         => new PromptProvider(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine provider)
-        => temp.Track(await Provider(provider).Create());
+        => temp.Track(await Provider(provider).Create(TestModels.Options));
 
     private async Task<JsonElement> Stored(IPromptSession session)
         => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement;
@@ -32,7 +32,7 @@ public sealed class ForkSessionTests : IDisposable
     public async Task Fork_OfAWorkspaceSession_RunsInTheSameFolderWithTheSameWorkspace()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        await using IPromptSession origin = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { WorkspacePath = project, Sandbox = false }));
+        await using IPromptSession origin = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project, Sandbox = false }));
         await origin.Request("first");
 
         await using IPromptSession fork = temp.Track(await origin.Fork());
@@ -119,9 +119,9 @@ public sealed class ForkSessionTests : IDisposable
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         IPromptProvider provider = Provider(Claude);
-        await using IPromptSession first = temp.Track(await provider.Create(new PromptSessionOptions { WorkspacePath = project }));
+        await using IPromptSession first = temp.Track(await provider.Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
         await first.Request("one");
-        await using IPromptSession second = temp.Track(await provider.Create(new PromptSessionOptions { WorkspacePath = project }));
+        await using IPromptSession second = temp.Track(await provider.Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
 
         await second.AttachTo("claude-0");
         await second.Request("two");
@@ -136,10 +136,10 @@ public sealed class ForkSessionTests : IDisposable
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         IPromptProvider provider = Provider(Claude);
-        IPromptSession session = await provider.Create();
+        IPromptSession session = await provider.Create(TestModels.Options);
         await session.Request("one");
 
-        await session.AttachTo("claude-0", new PromptSessionOptions { WorkspacePath = project, Sandbox = false });
+        await session.AttachTo("claude-0", new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project, Sandbox = false });
         await session.Request("two");
         string id = session.Id;
         await session.DisposeAsync();
@@ -199,8 +199,8 @@ public sealed class ForkSessionTests : IDisposable
         IStore notes = IStore.FromMemory();
         PromptTool tool = PromptTool.Create<Question, string>("ask", "asks", (_, _) => Task.FromResult("a"));
         Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>> approval = (_, _) => Task.FromResult(PromptToolDecision.Allow);
-        origin.Configuration.Capability = PromptCapability.Max;
-        origin.Configuration.Reasoning = PromptReasoning.High;
+        origin.Configuration.ModelSettings["effort"] = "high";
+        origin.Configuration.ModelSettings["fast"] = "true";
         origin.Configuration.EnableShell = true;
         origin.Configuration.BeforeToolCall = approval;
         origin.Configuration.Workspace = notes;
@@ -211,8 +211,9 @@ public sealed class ForkSessionTests : IDisposable
 
         await using IPromptSession fork = temp.Track(await origin.Fork());
 
-        Assert.Equal(origin.Configuration.Capability, fork.Configuration.Capability);
-        Assert.Equal(origin.Configuration.Reasoning, fork.Configuration.Reasoning);
+        Assert.Equal(origin.Configuration.Model, fork.Configuration.Model);
+        Assert.Equal(origin.Configuration.ModelSettings.OrderBy(entry => entry.Key), fork.Configuration.ModelSettings.OrderBy(entry => entry.Key));
+        Assert.Equal("high", fork.Configuration.ModelSettings["effort"]);
         Assert.True(fork.Configuration.EnableShell);
         Assert.Same(approval, fork.Configuration.BeforeToolCall);
         Assert.Same(notes, fork.Configuration.Workspace);
@@ -262,7 +263,7 @@ public sealed class ForkSessionTests : IDisposable
     public async Task ALoadedBranch_ThatWasNotPromptedYet_NeedsTheOriginalConversationToStillExist()
     {
         IPromptProvider provider = Provider(Claude);
-        await using IPromptSession origin = temp.Track(await provider.Create());
+        await using IPromptSession origin = temp.Track(await provider.Create(TestModels.Options));
         await origin.Request("first");
         string forkId;
 

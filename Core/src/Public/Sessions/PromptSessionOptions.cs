@@ -11,6 +11,11 @@ public sealed record PromptSessionOptions
     public string? ApiKey { get; init; }
 
     /// <summary>
+    /// Gets the model the session runs, one of the models <see cref="IPromptProvider.GetModels" /> lists, or <see langword="null" /> to select one later with <see cref="IPromptSessionConfiguration.Model" /> (a loaded session then starts with the model it was stored with). The settings of the model start at their defaults; a loaded session keeps the values of the settings that both models have.
+    /// </summary>
+    public PromptModel? Model { get; init; }
+
+    /// <summary>
     /// Gets the folder on disk that is the session's workspace, or <see langword="null" /> for none. The session's <see cref="IPromptSessionConfiguration.Workspace" /> is set to it and the tool runs in it, which is the folder a Claude Code conversation is found by; without a workspace the tool runs in an empty folder of its own. The folder must exist.
     /// </summary>
     public string? WorkspacePath { get; init; }

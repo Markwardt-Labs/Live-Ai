@@ -13,7 +13,28 @@ public sealed class FakePromptProvider : IPromptProvider
 
     private readonly Dictionary<string, (DateTimeOffset Created, string? WorkspacePath)> made = [];
 
+    private readonly List<string?> listings = [];
+
     private PromptTestResult testResult = new() { IsAvailable = true };
+
+    /// <summary>
+    /// Gets or sets the models <see cref="GetModels" /> lists, which every session this provider makes starts with the first of. The default is one fake model, <c>fake-model</c>, that offers an <c>effort</c> setting (<c>low</c>, <c>medium</c>, <c>high</c>). Give an empty list for a tool that offers none.
+    /// </summary>
+    public IReadOnlyList<PromptModel> Models { get; set; } = [new PromptModel { Id = "fake-model", Name = "Fake model", AcceptsImages = true, CallsTools = true, Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] }];
+
+    /// <summary>
+    /// Gets the API keys <see cref="GetModels" /> was asked with, in order, with <see langword="null" /> for the configured sign in.
+    /// </summary>
+    public IReadOnlyList<string?> Listings
+    {
+        get
+        {
+            lock (gate)
+            {
+                return [.. listings];
+            }
+        }
+    }
 
     /// <summary>
     /// Gets or sets a function that is called with every session this provider makes, to script its answers before the code under test gets it.
@@ -97,7 +118,7 @@ public sealed class FakePromptProvider : IPromptProvider
         cancellation.ThrowIfCancellationRequested();
         string? workspacePath = options?.WorkspacePath;
         bool sandbox = options?.Sandbox ?? true;
-        FakePromptSession session = new(this, options?.ApiKey, () => Windows, Time);
+        FakePromptSession session = new(this, options?.ApiKey, () => Windows, Time, options?.Model ?? Models.FirstOrDefault());
 
         lock (gate)
         {
@@ -165,9 +186,31 @@ public sealed class FakePromptProvider : IPromptProvider
                 sessions[index] = sessions[index].Resume();
             }
 
+            if (options?.Model is { } model)
+            {
+                sessions[index].Configuration.Model = model;
+            }
+
             return Task.FromResult<IPromptSession>(sessions[index]);
         }
     }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+    {
+        cancellation.ThrowIfCancellationRequested();
+
+        lock (gate)
+        {
+            listings.Add(apiKey);
+        }
+
+        return Task.FromResult(Models);
+    }
+
+    /// <inheritdoc />
+    public async Task<PromptModel> GetModel(string id, string? apiKey = null, CancellationToken cancellation = default)
+        => (await GetModels(apiKey, cancellation)).FirstOrDefault(model => model.Id == id) ?? throw new PromptSessionModelException($"The fake provider does not offer a model '{id}'.");
 
     /// <inheritdoc />
     public Task<PromptTestResult> Test(string? apiKey = null, CancellationToken cancellation = default)

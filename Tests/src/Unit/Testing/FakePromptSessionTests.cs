@@ -170,15 +170,14 @@ public sealed class FakePromptSessionTests
     {
         FakePromptSession session = Session().Reply("ok");
         PromptAttachment file = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1 } };
-        session.Configuration.Capability = PromptCapability.Fast;
-        session.Configuration.Reasoning = PromptReasoning.Max;
+        session.Configuration.ModelSettings["effort"] = "high";
 
         await session.Request("look\n\nmore", new PromptRequestOptions { Attachments = [file] });
         FakePrompt prompt = session.Prompts.Single();
 
         Assert.Equal("look\n\nmore", prompt.Text);
         Assert.Equal([file], prompt.Attachments);
-        Assert.Equal((PromptCapability.Fast, PromptReasoning.Max), (prompt.Capability, prompt.Reasoning));
+        Assert.Equal(("fake-model", "high"), (prompt.Model.Id, prompt.ModelSettings["effort"]));
         Assert.True(DateTimeOffset.UtcNow - prompt.Time < TimeSpan.FromMinutes(1));
     }
 
@@ -321,13 +320,13 @@ public sealed class FakePromptSessionTests
         FakePromptSession session = Session();
         PromptTool tool = PromptTool.Create<Question, string>("mine", "d", (_, _) => Task.FromResult("x"));
 
-        session.Configuration.Capability = PromptCapability.Max;
+        session.Configuration.ModelSettings["effort"] = "low";
         session.Configuration.Instructions = "Be brief.";
         session.Configuration.Instructions = "Be brief.";
         session.Configuration.Tools.Add(tool);
         session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
 
-        Assert.Equal(PromptCapability.Max, session.Configuration.Capability);
+        Assert.Equal("low", session.Configuration.ModelSettings["effort"]);
         Assert.Equal("Be brief.", session.Configuration.Instructions);
         Assert.Equal([tool], session.Configuration.Tools);
         Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(PromptTool.Create<Question, string>("read_file", "d", (_, _) => Task.FromResult("x"))));
@@ -492,7 +491,7 @@ public sealed class FakePromptSessionTests
         using TempFolder folder = new();
         FakePromptSession session = new();
 
-        await session.AttachTo("provider-session", new PromptSessionOptions { WorkspacePath = folder.Path, Sandbox = false });
+        await session.AttachTo("provider-session", new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = folder.Path, Sandbox = false });
         Assert.Equal(folder.Path, Assert.IsAssignableFrom<IDiskStore>(session.Configuration.Workspace).Path);
 
         await session.AttachTo();

@@ -15,9 +15,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
 
     private readonly string reservedServerName = "liveai";
 
-    private PromptCapability capability;
-
-    private PromptReasoning reasoning;
+    private PromptModel? model;
 
     private bool isPersistent;
 
@@ -45,12 +43,12 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     public PromptSessionSettings(PromptSessionRecord record, IReadOnlyList<string> reservedToolNames)
     {
         this.reservedToolNames = reservedToolNames;
-        capability = record.Capability;
-        reasoning = record.Reasoning;
+        model = record.Model;
         instructions = record.Instructions;
         Tools = new GuardedList<PromptTool>(gate, CheckTool, Begin, Notify);
         Mounts = new GuardedDictionary<IStore>(gate, CheckMount, Begin, Notify, []);
         McpServers = new GuardedDictionary<PromptMcpServer>(gate, CheckServer, Begin, Notify, record.McpServers);
+        ModelSettings = new GuardedDictionary<string>(gate, CheckModelSetting, Begin, Notify, record.ModelSettings);
     }
 
     /// <summary>
@@ -59,39 +57,21 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     public event Action? Changed;
 
     /// <inheritdoc />
-    public PromptCapability Capability
+    public PromptModel? Model
     {
         get
         {
             lock (gate)
             {
-                return capability;
+                return model;
             }
         }
 
-        set
+        set => Set(() =>
         {
-            Defined(value);
-            Set(() => capability = value);
-        }
-    }
-
-    /// <inheritdoc />
-    public PromptReasoning Reasoning
-    {
-        get
-        {
-            lock (gate)
-            {
-                return reasoning;
-            }
-        }
-
-        set
-        {
-            Defined(value);
-            Set(() => reasoning = value);
-        }
+            model = value;
+            ModelSettings.Replace(value is null ? [] : value.Reconcile(ModelSettings.Copy()).Settings);
+        });
     }
 
     /// <inheritdoc />
@@ -230,6 +210,11 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     /// </summary>
     public GuardedDictionary<PromptMcpServer> McpServers { get; }
 
+    /// <summary>
+    /// Gets the values of the selected model's settings.
+    /// </summary>
+    public GuardedDictionary<string> ModelSettings { get; }
+
     /// <inheritdoc />
     IList<PromptTool> IPromptSessionConfiguration.Tools => Tools;
 
@@ -238,6 +223,8 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
 
     /// <inheritdoc />
     IDictionary<string, PromptMcpServer> IPromptSessionConfiguration.McpServers => McpServers;
+
+    IDictionary<string, string> IPromptSessionConfiguration.ModelSettings => ModelSettings;
 
     /// <summary>
     /// Gets the limits a request runs under, as the settings say now, with the window limit of a loop added.
@@ -267,8 +254,8 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
         {
             return new PromptSessionSettingsSnapshot
             {
-                Capability = capability,
-                Reasoning = reasoning,
+                Model = model,
+                ModelSettings = ModelSettings.Copy(),
                 IsPersistent = isPersistent,
                 EnableShell = enableShell,
                 Workspace = workspace,
@@ -317,12 +304,23 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     private void Notify()
         => Changed?.Invoke();
 
-    private void Defined<T>(T value)
-        where T : struct, Enum
+    private void CheckModelSetting(string id, string value)
     {
-        if (!Enum.IsDefined(value))
+        if (model is null)
         {
-            throw new ArgumentOutOfRangeException(nameof(value), value, null);
+            throw new PromptSessionModelException("Select a model before changing its settings.");
+        }
+
+        if (model.Settings is null)
+        {
+            return;
+        }
+
+        PromptModelSetting setting = model.Settings.FirstOrDefault(offered => offered.Id == id) ?? throw new ArgumentException($"The model {model.Id} has no setting '{id}'.", nameof(id));
+
+        if (!setting.Accepts(value))
+        {
+            throw new ArgumentException($"The setting '{id}' does not accept '{value}'.", nameof(value));
         }
     }
 

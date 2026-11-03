@@ -20,7 +20,7 @@ public sealed class AttachmentSessionTests : IDisposable
         => new PromptProvider(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine provider)
-        => temp.Track(await Provider(provider).Create());
+        => temp.Track(await Provider(provider).Create(TestModels.Options));
 
     private PromptAttachment Png(params byte[] content)
         => new() { Name = "shot.png", MediaType = "image/png", Content = content };

@@ -7,13 +7,12 @@ Runnable examples of `IPromptProvider` and `IPromptSession` in different situati
 ```csharp
 IPromptProvider provider = new PromptProvider(new ClaudeEngine());   // or new CodexEngine()
 
-IPromptSession session = await provider.Create();
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
+IPromptSession session = await provider.Create(new PromptSessionOptions { Model = await provider.GetModel("sonnet"), WorkspacePath = "/path/to/project" });
 
 Console.WriteLine(await session.Request("Summarize what is in this folder."));
 ```
 
-The defaults are Claude, balanced capability and medium reasoning, on the subscription already configured in `claude`. The AI can reach only the workspace and the folders mounted to the session; a session with neither can only talk.
+A session runs on a model that is chosen: `GetModel` finds one of the models the tool lists (see below), and a session without one refuses to do anything with the tool. The settings of the model start at their defaults, on the subscription already configured in `claude`. The AI can reach only the workspace and the folders mounted to the session; a session with neither can only talk.
 
 ## Reading the answer as it is written
 
@@ -43,9 +42,9 @@ void Show(PromptEvent output)
 ## Choosing the model and letting the AI change files
 
 ```csharp
-IPromptSession session = await new PromptProvider(new CodexEngine()).Create();
-session.Configuration.Capability = PromptCapability.Max;
-session.Configuration.Reasoning = PromptReasoning.High;
+IPromptProvider codex = new PromptProvider(new CodexEngine());
+IPromptSession session = await codex.Create(new PromptSessionOptions { Model = await codex.GetModel("gpt-5.6-terra") });
+session.Configuration.ModelSettings["effort"] = "high";
 session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
 
 await session.Request("Add a unit test for the parser and make it pass.");
@@ -74,13 +73,13 @@ IPromptSession resumed = await provider.Load(id, new PromptSessionOptions { ApiK
 Console.WriteLine(await resumed.Request("What did I ask you before?"));
 ```
 
-`Load` continues the same conversation with the provider of the same tool (a provider over another tool refuses the session with an `ArgumentException`; `session.Provider` is the provider that made or loaded it). Only the link to the conversation is stored, so the API key is given again and every setting (capability, reasoning, mounts, tools, instructions and the rest) starts at its default and is set again through `Configuration` before the next prompt. The provider that loads must use the same data folder as the one that created the session, and an engine made with another configuration folder than the one that made the session cannot find it.
+`Load` continues the same conversation with the provider of the same tool (a provider over another tool refuses the session with an `ArgumentException`; `session.Provider` is the provider that made or loaded it). Only the link to the conversation and the model with the values of its settings are stored, so the session comes back on the model it last ran on (see the section on models), and the API key is given again and every other setting (mounts, tools, instructions and the rest) starts at its default and is set again through `Configuration` before the next prompt. The provider that loads must use the same data folder as the one that created the session, and an engine made with another configuration folder than the one that made the session cannot find it.
 
 ## Changing the model mid-conversation
 
 ```csharp
-session.Configuration.Capability = PromptCapability.Max;
-session.Configuration.Reasoning = PromptReasoning.High;
+session.Configuration.Model = await session.Provider.GetModel("opus");
+session.Configuration.ModelSettings["effort"] = "high";
 
 await session.Request("Now make the change you proposed.");
 ```
@@ -256,7 +255,7 @@ await session.Request("Which folder holds the tests?");
 session.Configuration.IsPersistent = false;
 ```
 
-The first prompt starts the tool and the second reuses the same process, which saves a start per prompt, with either provider. The model and the effort can be changed between prompts without ending it. Setting `IsPersistent` to `false` returns at once and ends the process in the background. Disposing the session ends it too: `await using` (or `DisposeAsync`) lets a running prompt finish first, and `Dispose` cancels it and ends the process at once.
+The first prompt starts the tool and the second reuses the same process, which saves a start per prompt, with either provider. The model and its settings can be changed between prompts without ending it (OpenCode starts a new process for a changed model or context size). Setting `IsPersistent` to `false` returns at once and ends the process in the background. Disposing the session ends it too: `await using` (or `DisposeAsync`) lets a running prompt finish first, and `Dispose` cancels it and ends the process at once.
 
 ## Sending a prompt repeatedly
 
@@ -305,15 +304,15 @@ await session.Request("Fix the failing test in project/.");
 ## Choosing the model and the limits for a session
 
 ```csharp
-session.Configuration.Capability = PromptCapability.Fast;
-session.Configuration.Reasoning = PromptReasoning.Low;
+session.Configuration.Model = await session.Provider.GetModel("haiku");
+session.Configuration.ModelSettings["effort"] = "low";
 session.Configuration.Tools.Add(PromptTool.Create<Lookup, Customer>("find_customer", "Finds a customer.", (input, cancellation) => customers.Find(input.Name, cancellation)));
 session.Configuration.Mounts["scratch"] = IStore.FromMemory();
 
 string answer = await session.Request("Summarize project/README.md in one line.");
 ```
 
-The model, the reasoning, the tools and the stores belong to the session and apply from the next prompt on; a request has only its schema, its mode and whether it interrupts (and, like `Send`, files and a note).
+The model with its settings, the tools and the stores belong to the session and apply from the next prompt on; a request has only its schema, its mode and whether it interrupts (and, like `Send`, files and a note).
 
 ## Timeouts and subscription limits
 
@@ -640,7 +639,7 @@ public async Task Reviews_CodeWithTheAi()
 }
 ```
 
-Pass a `TimeProvider` (`new FakePromptProvider { Time = clock }`) to run timeouts, retry delays and loop schedules on a clock the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so timeouts, retries, loops and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt.
+Pass a `TimeProvider` (`new FakePromptProvider { Time = clock }`) to run timeouts, retry delays and loop schedules on a clock the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so timeouts, retries, loops and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt. Sessions of the fake provider start with its first model (`FakePromptProvider.Models`), so a test does not have to choose one.
 
 ## Logging what sessions do
 
@@ -657,28 +656,40 @@ The logger receives what the library does, not what the AI says: state changes, 
 
 ```csharp
 // ollama pull gemma4:26b
-IPromptProvider provider = new PromptProvider(new OpenCodeEngine(models: OpenCodeModels.Ollama("gemma4:26b")));
+IPromptProvider provider = new PromptProvider(new OpenCodeEngine());   // finds Ollama on http://localhost:11434/v1
 
-await using IPromptSession session = await provider.Create(new PromptSessionOptions { WorkspacePath = "/path/to/project" });
+PromptModel model = (await provider.GetModels()).First(listed => listed.Name == "gemma4:26b");
+await using IPromptSession session = await provider.Create(new PromptSessionOptions { Model = model, WorkspacePath = "/path/to/project" });
+session.Configuration.ModelSettings["context"] = "16384";   // the size Ollama runs the model with (OLLAMA_CONTEXT_LENGTH)
 session.Configuration.Mounts["docs"] = IStore.FromDisk("/path/to/docs");
 
 Console.WriteLine(await session.Request("Which file holds the entry point?"));
 ```
 
-`OpenCodeEngine` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as the first argument) and takes an `OpenCodeModels`, which says which model each capability uses and which model providers serve them. The simple cases are factories: `OpenCodeModels.Configured("anthropic/claude-sonnet")` is one model of OpenCode's own configuration, `OpenCodeModels.Ollama("gemma4:26b")` one local Ollama model, and `OpenCodeModels.ByCapability([(PromptCapability.Fast, "gemma4:e2b"), (PromptCapability.Max, "gemma4:26b")])` a model for each capability (a name with a `/` is a model of OpenCode's own configuration instead of a local one, and a capability that is not given is left to OpenCode's configuration). The address of the Ollama server and the size of its context window are optional arguments of the factories; the context size is left to OpenCode unless you give it, so give it when the server runs the model with a different size (`OLLAMA_CONTEXT_LENGTH`): `OpenCodeModels.Ollama("gemma4:26b", contextLimit: 16384)`. The advanced case is the record itself: `new OpenCodeModels { Default = "lmstudio/qwen3-coder", Providers = [new OpenCodeModelProvider { Id = "lmstudio", BaseUrl = "http://localhost:1234/v1", Models = [new OpenCodeModel { Id = "qwen3-coder" }] }] }` serves a model from any OpenAI compatible server (llama.cpp, LM Studio, vLLM). `Fast`, `Balanced` and `Max` give those capabilities a model of their own, and a capability without one uses `Default`. The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
+`OpenCodeEngine` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as the first argument). Its models are those of the servers on this machine that it is given (`new OpenCodeEngine(localServers: ["http://localhost:1234/v1"])` for LM Studio, llama.cpp or vLLM; the default is Ollama), listed live and limited to the models that can call tools when the server says which those are; those of `OpenCodeModelProvider`s you describe (`new OpenCodeEngine(providers: [...])`, for a server that has to be configured by hand); and those of OpenCode's own configuration, such as a provider it is signed in to. A local model offers one setting, `context`: the size of the context window, which OpenCode needs to know to compact in time and which the server has to run the model with (the default is what a loaded model reports, and otherwise Ollama's own default of 4096). The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool, and `IPromptProvider.Test` waits for it). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
 
-## Choosing the models from what is available
+## Choosing a model and its settings
 
 ```csharp
-IReadOnlyList<PromptModel> installed = await new LocalModelCatalog().List();   // the models of Ollama that can call tools
-IReadOnlyList<PromptModel> codex = await new CodexModelCatalog().List();       // what the signed in account offers
-IReadOnlyList<PromptModel> claude = await new ClaudeModelCatalog().List();     // the aliases haiku, sonnet and opus
+IReadOnlyList<PromptModel> models = await provider.GetModels();   // for the subscription; pass an API key for the models of a key
 
-IPromptProvider provider = new PromptProvider(new CodexEngine(models: new PromptModels { Fast = "gpt-5.6-luna", Max = codex.Last().Id }));
-IPromptProvider local = new PromptProvider(new OpenCodeEngine(models: OpenCodeModels.ByCapability([(PromptCapability.Fast, installed[0].Id), (PromptCapability.Max, installed[^1].Id)])));
+foreach (PromptModel model in models)
+{
+    Console.WriteLine($"{model.Name ?? model.Id} (images: {model.AcceptsImages})");
+
+    foreach (PromptModelSetting setting in model.Settings ?? [])
+    {
+        Console.WriteLine($"  {setting.Name}: {setting.Kind}, {(setting.Kind == PromptModelSettingKind.Choice ? string.Join(" < ", setting.Choices) : setting.Default)}");
+    }
+}
+
+session.Configuration.Model = models.First(model => model.Id == "opus");
+session.Configuration.ModelSettings["effort"] = "high";   // refused unless the model offers it and accepts the value
 ```
 
-A catalog needs no engine, only the arguments the tool's engine takes (the command and configuration folder for Codex, the address of the server for local models), so the models can be listed before the provider that uses them is built. Listing never throws because the tool is missing: a tool that is not installed, a server that is not running and an answer that cannot be read all give an empty list. Each `PromptModel` has the name to assign, and a context size and the reasoning efforts it accepts where the tool tells them. `PromptModels` assigns a model to each capability for `ClaudeEngine` and `CodexEngine` (`PromptModels.Only(name)` and `PromptModels.ByCapability([...])` are the shortcuts); a capability without a model of its own uses `Default`, and when that is not set either, the tool's own model (`haiku`, `sonnet` and `opus` for Claude Code, `gpt-5.6-luna`, `gpt-5.6-terra` and `gpt-5.6-sol` for Codex). Codex lowers a reasoning level that a model you chose does not accept to the highest one it does. Names are not checked when the provider is built; a model that does not exist fails at the first prompt, with the tool's own message.
+The tools differ in what a model offers, so an application does not need to know them: every model lists its settings (a reasoning effort for Claude Code and Codex, the context window of a local model), each a choice ordered from the lowest to the highest, a toggle or a number in a range, with a default, and values are written as text. Selecting a model fills `ModelSettings` with the defaults of its settings, keeping the values of those the previous model also had. Listing never throws because the tool is missing; a tool that is not installed or a server that is not running gives an empty list, and `Test` tells why. The list is kept for a minute (per API key), so asking again is cheap; `GetModel(id)` finds one model and asks the tool again once if it is not in the list.
+
+A session is stored with its model and the values of its settings. When it is loaded they are brought up to date with what the tool offers now: a setting the model no longer has is dropped, a value it no longer accepts goes back to the setting's default, a new setting gets its default (the changes are logged), and a model that is no longer offered leaves the session without one, so that it has to be selected again before the session is used. Give `PromptSessionOptions.Model` to `Load` to run another model than the stored one.
 
 ## Handling failures and cancelling
 

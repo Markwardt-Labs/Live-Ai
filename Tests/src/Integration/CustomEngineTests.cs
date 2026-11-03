@@ -36,7 +36,7 @@ public sealed class CustomEngineTests : IDisposable
     }
 
     private async Task<IPromptSession> Create(IPromptProvider provider, string? apiKey = null)
-        => temp.Track(await provider.Create(new PromptSessionOptions { ApiKey = apiKey }));
+        => temp.Track(await provider.Create(TestModels.With(apiKey)));
 
     [Fact]
     public async Task ASessionOnACustomProvider_RunsPromptsAndResumesWithTheSessionTheToolReported()
@@ -55,8 +55,8 @@ public sealed class CustomEngineTests : IDisposable
         Assert.Equal("one", await File.ReadAllTextAsync(temp.Combine("stdin-1.txt")));
         Assert.Equal("two", await File.ReadAllTextAsync(temp.Combine("stdin-2.txt")));
         Assert.All(script.Starts, start => Assert.Equal("secret-key", start.ApiKey));
-        Assert.Equal(PromptCapability.Balanced, script.Starts[0].Capability);
-        Assert.Equal(PromptReasoning.Medium, script.Starts[0].Reasoning);
+        Assert.Equal("test-model", script.Starts[0].Model);
+        Assert.Equal("medium", script.Starts[0].Settings["effort"]);
         Assert.Contains("You have no access to files", script.Starts[0].Instructions);
     }
 
@@ -113,8 +113,7 @@ public sealed class CustomEngineTests : IDisposable
     {
         (IPromptProvider provider, ScriptEngine script) = Make("echo \"REPLY {\\\"score\\\":3}\"\necho DONE");
         await using IPromptSession session = await Create(provider);
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.High;
+        session.Configuration.ModelSettings["effort"] = "high";
         session.Configuration.Instructions = "Be brief.";
         session.Configuration.Tools.Add(PromptTool.Create<Question, string>("ask", "asks", (_, _) => Task.FromResult("a")));
         session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp", "DB_TOKEN");
@@ -123,7 +122,7 @@ public sealed class CustomEngineTests : IDisposable
         Answer answer = await session.Request<Answer>("rate").ContinueWith(task => task.IsFaulted ? new Answer("failed", 0) : task.Result);
         PromptEngineStart start = script.Starts.Single();
 
-        Assert.Equal((PromptCapability.Max, PromptReasoning.High), (start.Capability, start.Reasoning));
+        Assert.Equal(("test-model", "high"), (start.Model, start.Settings["effort"]));
         Assert.EndsWith("Instructions from the user:\nBe brief.", start.Instructions);
         Assert.Contains("db, git", start.Instructions);
         Assert.Equal("object", start.Schema!.Value.GetProperty("type").GetString());
@@ -240,7 +239,7 @@ public sealed class CustomEngineTests : IDisposable
     [Fact]
     public async Task TheTesterRunsTheProviderToo()
     {
-        ScriptEngine script = new(Tool());
+        ScriptEngine script = new(Tool()) { Models = [TestModels.Model] };
         ScriptEngine broken = new(Tool("echo \"FAIL not signed in\"", "broken"));
 
         PromptTestResult ok = await new PromptProvider(script, temp.Combine("data")).Test("key");
@@ -248,7 +247,7 @@ public sealed class CustomEngineTests : IDisposable
 
         Assert.True(ok.IsAvailable);
         Assert.Equal("key", script.Starts.Single().ApiKey);
-        Assert.Equal(PromptCapability.Fast, script.Starts.Single().Capability);
+        Assert.Equal(("test-model", "low"), (script.Starts.Single().Model, script.Starts.Single().Settings["effort"]));
         Assert.False(bad.IsAvailable);
         Assert.Equal("not signed in", bad.Error);
     }

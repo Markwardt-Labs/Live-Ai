@@ -248,7 +248,7 @@ public sealed class PromptSessionOptionsTests
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
         Mock<IPromptSession> opened = new();
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), "key")).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), "key", It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
         {
             stored = record;
             return opened.Object;
@@ -293,7 +293,7 @@ public sealed class PromptSessionOptionsTests
         PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -311,7 +311,7 @@ public sealed class PromptSessionOptionsTests
     {
         PromptSession session = Session();
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -333,7 +333,7 @@ public sealed class PromptSessionOptionsTests
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task));
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -824,7 +824,7 @@ public sealed class PromptSessionOptionsTests
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), entry.Point, It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin", ForkedAt = "message" });
         Mock<IPromptSession> opened = new();
         opened.SetupGet(mock => mock.Configuration).Returns(new PromptSessionSettings(Record(), []));
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(opened.Object);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(opened.Object);
 
         IPromptSession fork = await session.Fork(entry);
 

@@ -38,15 +38,16 @@ public sealed class ProviderTestTests : IDisposable
     }
 
     [Fact]
-    public async Task Codex_IsAvailableWhenItAnswersAndStoresNothing()
+    public async Task Codex_IsAvailableWhenItAnswersOnTheModelItDescribesAsFastAndStoresNothing()
     {
-        IPromptProvider codex = Codex(Record("codex") + "echo '{\"type\":\"thread.started\",\"thread_id\":\"t\"}'\necho '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"1\"}}'\necho '{\"type\":\"turn.completed\"}'");
+        string catalog = "if [ \"$1\" = \"debug\" ]; then echo '{\"models\":[{\"slug\":\"gpt-big\",\"visibility\":\"list\",\"description\":\"Frontier model.\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"high\"}]},{\"slug\":\"gpt-quick\",\"visibility\":\"list\",\"description\":\"Older fast and efficient model.\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"}]}]}'; exit 0; fi\n";
+        IPromptProvider codex = Codex(catalog + Record("codex") + "echo '{\"type\":\"thread.started\",\"thread_id\":\"t\"}'\necho '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"1\"}}'\necho '{\"type\":\"turn.completed\"}'");
 
         PromptTestResult result = await codex.Test();
 
         Assert.True(result.IsAvailable);
         string[] arguments = await File.ReadAllLinesAsync(temp.Combine("codex-args.txt"));
-        Assert.Equal("gpt-5.6-luna", arguments[Array.IndexOf(arguments, "-m") + 1]);
+        Assert.Equal("gpt-quick", arguments[Array.IndexOf(arguments, "-m") + 1]);
         Assert.Contains("--ephemeral", arguments);
         Assert.Contains("model_reasoning_effort=\"low\"", arguments);
         Assert.Equal("-", arguments[^1]);

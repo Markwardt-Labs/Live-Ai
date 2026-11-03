@@ -3,23 +3,25 @@ namespace Markwardt.LiveAi.Tests.Unit;
 public sealed class PromptEngineTests
 {
     [Fact]
-    public void TheEnginesOfTheBuiltInTools_HaveTheDefaultSettings()
+    public async Task TheEnginesOfTheBuiltInTools_HaveTheDefaultSettings()
     {
         ClaudeEngine claude = new();
-        CodexEngine codex = new();
+        CodexEngine codex = new("/nonexistent/codex");
 
-        Assert.Equal(("Claude Code", "claude"), (claude.Identifier, claude.CreateTestStart(null).FileName));
-        Assert.Equal(("Codex", "codex"), (codex.Identifier, codex.CreateTestStart(null).FileName));
+        Assert.Equal(("Claude Code", "claude"), (claude.Identifier, (await claude.CreateTestStart(null)).FileName));
+        Assert.Equal(("Codex", "/nonexistent/codex"), (codex.Identifier, (await codex.CreateTestStart(null)).FileName));
     }
 
     [Fact]
-    public void EnginesMadeWithOtherSettings_UseThem()
+    public async Task EnginesMadeWithOtherSettings_UseThem()
     {
         IPromptEngine claude = new ClaudeEngine("my-claude", "/claude");
         IPromptEngine codex = new CodexEngine("my-codex", "/codex");
+        ProcessStartInfo claudeStart = await claude.CreateTestStart(null);
+        ProcessStartInfo codexStart = await codex.CreateTestStart(null);
 
-        Assert.Equal(("my-claude", "/claude"), (claude.CreateTestStart(null).FileName, claude.CreateTestStart(null).Environment["CLAUDE_CONFIG_DIR"]));
-        Assert.Equal(("my-codex", "/codex"), (codex.CreateTestStart(null).FileName, codex.CreateTestStart(null).Environment["CODEX_HOME"]));
+        Assert.Equal(("my-claude", "/claude"), (claudeStart.FileName, claudeStart.Environment["CLAUDE_CONFIG_DIR"]));
+        Assert.Equal(("my-codex", "/codex"), (codexStart.FileName, codexStart.Environment["CODEX_HOME"]));
     }
 
     [Fact]
@@ -33,15 +35,15 @@ public sealed class PromptEngineTests
         Assert.True(engine.NeedsFiles);
         Assert.False(engine.Accepts("image/png"));
         Assert.True(engine.HasSession("any"));
-        Assert.Throws<NotSupportedException>(() => engine.CreatePersistentStart(new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = "/", Instructions = string.Empty }));
-        Assert.Throws<NotSupportedException>(() => engine.Attach(null!, new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = "/", Instructions = string.Empty }));
+        Assert.Throws<NotSupportedException>(() => engine.CreatePersistentStart(new PromptEngineStart { WorkingFolder = "/", Instructions = string.Empty }));
+        Assert.Throws<NotSupportedException>(() => engine.Attach(null!, new PromptEngineStart { WorkingFolder = "/", Instructions = string.Empty }));
     }
 
     [Fact]
     public void ThePromptOfAnEngineWithDefaults_CarriesTheNotesInFrontOfTheText()
     {
         IPromptEngine engine = new ScriptEngine("tool");
-        PromptInput plain = new() { Text = "hello", Capability = PromptCapability.Balanced, Reasoning = PromptReasoning.Medium };
+        PromptInput plain = new() { Text = "hello", Model = "m" };
         PromptInput told = plain with { Notes = ["the build passes", "it is Tuesday"] };
 
         Assert.Equal("hello", engine.Plain(plain));
@@ -53,7 +55,7 @@ public sealed class PromptEngineTests
     public async Task TheDefaultsOfAnEngine_HaveNoHistoryNothingToDeleteAndBranchOnlyAnEmptySession()
     {
         IPromptEngine engine = new ScriptEngine("tool");
-        PromptEngineStart start = new() { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = "/", Instructions = string.Empty };
+        PromptEngineStart start = new() { WorkingFolder = "/", Instructions = string.Empty };
 
         Assert.Empty(await engine.ReadHistory("any").ToListAsync());
         await engine.DeleteSession("any");
@@ -63,16 +65,31 @@ public sealed class PromptEngineTests
     }
 
     [Fact]
-    public void CreateTestStart_OfAnEngine_IsAFastLowSessionWithTheKey()
+    public async Task CreateTestStart_OfAnEngine_RunsItsFirstModelAtTheLowestSettingsWithTheKey()
+    {
+        ScriptEngine script = new("tool") { Models = [TestModels.Model, new PromptModel { Id = "other" }] };
+
+        await ((IPromptEngine)script).CreateTestStart("key");
+
+        PromptEngineStart start = Assert.Single(script.Starts);
+        Assert.Equal(("test-model", "low", "false", "key"), (start.Model, start.Settings["effort"], start.Settings["fast"], start.ApiKey));
+        Assert.Equal(Path.GetTempPath(), start.WorkingFolder);
+    }
+
+    [Fact]
+    public async Task CreateTestStart_OfAnEngineWithoutModels_RunsNoModel()
     {
         ScriptEngine script = new("tool");
 
-        ((IPromptEngine)script).CreateTestStart("key");
+        await ((IPromptEngine)script).CreateTestStart(null);
 
         PromptEngineStart start = Assert.Single(script.Starts);
-        Assert.Equal((PromptCapability.Fast, PromptReasoning.Low, "key"), (start.Capability, start.Reasoning, start.ApiKey));
-        Assert.Equal(Path.GetTempPath(), start.WorkingFolder);
+        Assert.Equal((null, 0), (start.Model, start.Settings.Count));
     }
+
+    [Fact]
+    public async Task GetModels_OfAnEngineWithoutOne_IsEmpty()
+        => Assert.Empty(await ((IPromptEngine)new ScriptEngine("tool")).GetModels());
 
     [Fact]
     public async Task GetWindows_OfAnEngineWithoutOne_IsEmpty()

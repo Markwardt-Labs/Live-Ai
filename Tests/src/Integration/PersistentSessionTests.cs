@@ -37,7 +37,7 @@ public sealed class PersistentSessionTests : IDisposable
     {
         IPromptEngine provider = new ClaudeEngine(temp.Script("claude", $"printf '%s\\n' \"$@\" > \"$PWD/args.txt\"\necho $$ >> \"$PWD/pids.txt\"\n{prefix}\nn=0\nwhile IFS= read -r line; do\nn=$((n+1))\nprintf '%s\\n' \"$line\" >> \"$PWD/frames.txt\"\n{controls ?? Controls}\n{body}\ndone"), temp.Combine("claude-state"));
 
-        IPromptSession session = temp.Track(await Provider(provider).Create());
+        IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
         session.Configuration.IsPersistent = true;
         return session;
     }
@@ -288,8 +288,8 @@ public sealed class PersistentSessionTests : IDisposable
         await using IPromptSession session = await Session(Reply("hi"));
         await session.Request("first");
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.Low;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
+        session.Configuration.ModelSettings["effort"] = "low";
         await session.Request("second");
 
         Assert.Single(await Pids());
@@ -353,7 +353,7 @@ public sealed class PersistentSessionTests : IDisposable
         await using IPromptSession session = await Session(Reply("hi"), controls: refusing);
         await session.Request("first");
 
-        session.Configuration.Capability = PromptCapability.Max;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [] };
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("second"));
 
         Assert.Equal("no such model", exception.Message);
@@ -417,7 +417,7 @@ public sealed class PersistentSessionTests : IDisposable
     public async Task Ask_WithCodex_KeepsOneAppServerForEveryPromptOnlyWhenPersistent(bool persistent, int processes)
     {
         IPromptEngine provider = new CodexEngine(new FakeCodex(temp).Script(reply: "hi"), temp.Combine("codex-state"));
-        await using IPromptSession session = temp.Track(await Provider(provider).Create());
+        await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
         session.Configuration.IsPersistent = persistent;
 
         await session.Request("first");
@@ -433,18 +433,18 @@ public sealed class PersistentSessionTests : IDisposable
     {
         FakeCodex fake = new(temp);
         IPromptEngine provider = new CodexEngine(fake.Script(reply: "hi"), temp.Combine("codex-state"));
-        await using IPromptSession session = temp.Track(await Provider(provider).Create());
+        await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
         session.Configuration.IsPersistent = true;
         await session.Request("first");
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.High;
+        session.Configuration.Model = new PromptModel { Id = "gpt-other", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
+        session.Configuration.ModelSettings["effort"] = "high";
         await session.Request("second");
 
         Assert.Single(await Pids());
         IReadOnlyList<JsonElement> turns = await fake.Parameters("turn/start");
-        Assert.Equal(("gpt-5.6-terra", "medium"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
-        Assert.Equal(("gpt-5.6-sol", "high"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
+        Assert.Equal(("test-model", "medium"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
+        Assert.Equal(("gpt-other", "high"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
     }
 
     [Fact]

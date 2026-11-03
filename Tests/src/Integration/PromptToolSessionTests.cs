@@ -42,7 +42,7 @@ public sealed class PromptToolSessionTests : IDisposable
     [Fact]
     public async Task Ask_LetsTheToolReachTheCallersFunctionWithTheSecretItWasGiven()
     {
-        await using IPromptSession session = temp.Track(await Provider(Claude(CallTool("echo", """{"note":"from the tool"}"""))).Create());
+        await using IPromptSession session = temp.Track(await Provider(Claude(CallTool("echo", """{"note":"from the tool"}"""))).Create(TestModels.Options));
         session.Configuration.Tools.Add(Echo());
 
         Assert.Equal("done", await session.Request("use it"));
@@ -57,7 +57,7 @@ public sealed class PromptToolSessionTests : IDisposable
     [Fact]
     public async Task Ask_AfterTheSessionIsDisposed_TheToolIsNoLongerReachable()
     {
-        IPromptSession session = temp.Track(await Provider(Claude("")).Create());
+        IPromptSession session = temp.Track(await Provider(Claude("")).Create(TestModels.Options));
         session.Configuration.Tools.Add(Echo());
         await session.Request("use it");
         string[] arguments = await File.ReadAllLinesAsync(temp.Combine("args.txt"));
@@ -85,7 +85,7 @@ public sealed class PromptToolSessionTests : IDisposable
 
     private async Task<IPromptSession> Session(string script, Dictionary<string, IStore>? mounts = null)
     {
-        IPromptSession session = temp.Track(await Provider(Claude(script)).Create());
+        IPromptSession session = temp.Track(await Provider(Claude(script)).Create(TestModels.Options));
 
         if (mounts is not null)
         {

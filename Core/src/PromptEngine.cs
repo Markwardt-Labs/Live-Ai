@@ -143,12 +143,30 @@ public interface IPromptEngine
     IReadOnlyList<PromptEngineEvent> Parse(string line);
 
     /// <summary>
-    /// Describes the smallest process that proves the tool works, whose prompt is written to its standard input and whose output is read with <see cref="Parse" />. The default is <see cref="CreateStart" /> with the cheapest settings in an empty folder.
+    /// Lists the models the tool can run, for the account or API key it is used with. A tool that cannot be asked, is not there, or answers in a way that cannot be read gives an empty list; a model that cannot call tools is left out when the tool tells which those are. The default is no models, which suits an engine for a tool with a single model.
+    /// </summary>
+    /// <param name="apiKey">The API key the models are for, or <see langword="null" /> for the configured sign in.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The models, with the settings each one offers.</returns>
+    Task<IReadOnlyList<PromptModel>> GetModels(string? apiKey = null, CancellationToken cancellation = default)
+        => Task.FromResult<IReadOnlyList<PromptModel>>([]);
+
+    /// <summary>
+    /// Gets a value indicating whether the model and its settings are fixed when the process starts, so that a process cannot serve a session after they change. The default is <see langword="false" />: the model and settings travel with every prompt.
+    /// </summary>
+    bool StartsWithModel => false;
+
+    /// <summary>
+    /// Describes the smallest process that proves the tool works, whose prompt is written to its standard input and whose output is read with <see cref="Parse" />. The engine chooses the cheapest model it can tell of (here: the first one <see cref="GetModels" /> lists) at the lowest setting of each choice, in an empty folder.
     /// </summary>
     /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured sign in.</param>
+    /// <param name="cancellation">Cancels the choice of the model.</param>
     /// <returns>The process to start, without its streams redirected.</returns>
-    ProcessStartInfo CreateTestStart(string? apiKey)
-        => CreateStart(new PromptEngineStart { Capability = PromptCapability.Fast, Reasoning = PromptReasoning.Low, WorkingFolder = Path.GetTempPath(), ApiKey = apiKey, Instructions = string.Empty });
+    async Task<ProcessStartInfo> CreateTestStart(string? apiKey, CancellationToken cancellation = default)
+    {
+        PromptModel? model = (await GetModels(apiKey, cancellation)).FirstOrDefault();
+        return CreateStart(new PromptEngineStart { Model = model?.Id, Settings = model?.Lowest() ?? [], WorkingFolder = Path.GetTempPath(), ApiKey = apiKey, Instructions = string.Empty });
+    }
 
     /// <summary>
     /// Reads how much of each window of the subscription's limits the tool has used, without sending a prompt.

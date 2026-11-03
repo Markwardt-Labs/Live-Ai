@@ -6,14 +6,14 @@ namespace Markwardt.LiveAi;
 public sealed record PromptEngineStart
 {
     /// <summary>
-    /// Gets how capable the model is to be.
+    /// Gets the identifier of the model to run (<see cref="PromptModel.Id" />), or <see langword="null" /> for a process that runs no model, such as one that only reads or deletes a stored conversation.
     /// </summary>
-    public required PromptCapability Capability { get; init; }
+    public string? Model { get; init; }
 
     /// <summary>
-    /// Gets how much reasoning effort the model is to put in.
+    /// Gets the values of the model's settings, by <see cref="PromptModelSetting.Id" />.
     /// </summary>
-    public required PromptReasoning Reasoning { get; init; }
+    public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
     /// Gets the folder the process runs in, which is empty and made for the session. A tool that keeps its sessions by folder needs it as the working directory.

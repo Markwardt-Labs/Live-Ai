@@ -11,3 +11,5 @@ The configuration is the real settings object with its checks, so a value that i
 ## What is not faked
 
 Nothing is stored, no process or port is started and no folder is made, so the conversation lives in the fake object and a persistent process, a shell and the file tools have nothing to do; a test that needs them uses a script as the command line tool, as the integration tests of this repository do.
+
+The fake provider lists the models in its `Models` (one fake model with an `effort` setting by default) and every session it makes starts with the first of them, so code under test does not have to choose one; a test that wants to check the refusal sets `Configuration.Model` to `null`, after which the fake session throws `PromptSessionModelException` from the same calls as the real one. A fake prompt records the model and the values of its settings it ran with.

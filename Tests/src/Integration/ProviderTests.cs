@@ -20,7 +20,7 @@ public sealed class ProviderTests : IDisposable
         => new PromptProvider(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine engine, string? apiKey = null)
-        => temp.Track(await Provider(engine).Create(new PromptSessionOptions { ApiKey = apiKey }));
+        => temp.Track(await Provider(engine).Create(new PromptSessionOptions { Model = TestModels.Model, ApiKey = apiKey }));
 
     private string WorkingFolder(string id)
         => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id}");
@@ -33,7 +33,7 @@ public sealed class ProviderTests : IDisposable
     {
         IPromptProvider provider = Provider(Claude);
         DateTimeOffset before = DateTimeOffset.UtcNow;
-        IPromptSession fresh = temp.Track(await provider.Create());
+        IPromptSession fresh = temp.Track(await provider.Create(TestModels.Options));
         PromptSessionInfo notStarted = Assert.Single(await provider.List());
         await fresh.Request("hello there");
 
@@ -59,7 +59,7 @@ public sealed class ProviderTests : IDisposable
     public async Task AForkIsListedWithItsOwnCreationTime()
     {
         IPromptProvider provider = Provider(Claude);
-        IPromptSession original = temp.Track(await provider.Create());
+        IPromptSession original = temp.Track(await provider.Create(TestModels.Options));
         await original.Request("hello there");
         await Task.Delay(20);
 
@@ -81,7 +81,7 @@ public sealed class ProviderTests : IDisposable
         Assert.Equal(WorkingFolder(session.Id), (await File.ReadAllTextAsync(temp.Combine("claude-cwd.txt"))).Trim());
         Assert.Equal("hello there", await temp.ReadPrompt());
         string[] arguments = await File.ReadAllLinesAsync(temp.Combine("claude-args.txt"));
-        Assert.Contains("sonnet", arguments);
+        Assert.Contains("test-model", arguments);
         Assert.Contains("dontAsk", arguments);
         Assert.DoesNotContain("--resume", arguments);
         Assert.Equal("mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
@@ -92,7 +92,7 @@ public sealed class ProviderTests : IDisposable
     public async Task Create_WithAWorkspacePath_SetsTheWorkspaceAndRunsTheToolInThatFolder()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { WorkspacePath = project }));
+        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
 
         IDiskStore workspace = Assert.IsAssignableFrom<IDiskStore>(session.Configuration.Workspace);
         await session.Request("hello");
@@ -108,7 +108,7 @@ public sealed class ProviderTests : IDisposable
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         string outside = temp.Combine("outside.txt");
         await File.WriteAllTextAsync(outside, "secret");
-        IPromptSession created = await Provider(Claude).Create(new PromptSessionOptions { WorkspacePath = project, Sandbox = false });
+        IPromptSession created = await Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project, Sandbox = false });
         await created.Request("hi");
         await created.DisposeAsync();
 
@@ -125,7 +125,7 @@ public sealed class ProviderTests : IDisposable
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         await File.WriteAllTextAsync(temp.Combine("outside.txt"), "secret");
 
-        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { WorkspacePath = project }));
+        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
 
         await Assert.ThrowsAnyAsync<Exception>(() => session.Configuration.Workspace!.ReadText(temp.Combine("outside.txt")));
     }
@@ -133,7 +133,7 @@ public sealed class ProviderTests : IDisposable
     [Fact]
     public async Task Create_WithAWorkspacePathThatDoesNotExist_Throws()
     {
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Provider(Claude).Create(new PromptSessionOptions { WorkspacePath = temp.Combine("missing") }));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = temp.Combine("missing") }));
 
         Assert.False(Directory.Exists(temp.Combine("data/Sessions")) && Directory.GetFiles(temp.Combine("data/Sessions")).Length > 0);
     }
@@ -145,7 +145,7 @@ public sealed class ProviderTests : IDisposable
         IPromptProvider provider = Provider(Claude);
         string marker = Path.Combine(project, "keep.txt");
         await File.WriteAllTextAsync(marker, "mine");
-        IPromptSession session = await provider.Create(new PromptSessionOptions { WorkspacePath = project });
+        IPromptSession session = await provider.Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project });
         await session.Request("hi");
         string id = session.Id;
         await session.DisposeAsync();
@@ -157,7 +157,7 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_StartsWithBalancedCapabilityMediumReasoningAndNothingElse()
+    public async Task Create_StartsWithTheModelItIsGivenAtTheDefaultsOfItsSettingsAndNothingElse()
     {
 
         IPromptSession created = await Create(Claude);
@@ -165,8 +165,8 @@ public sealed class ProviderTests : IDisposable
 
         foreach (IPromptSession session in new[] { created, loaded })
         {
-            Assert.Equal(PromptCapability.Balanced, session.Configuration.Capability);
-            Assert.Equal(PromptReasoning.Medium, session.Configuration.Reasoning);
+            Assert.Equal("test-model", session.Configuration.Model!.Id);
+            Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
             Assert.False(session.Configuration.IsPersistent);
             Assert.Empty(session.Configuration.Tools);
             Assert.Empty(session.Configuration.Mounts);
@@ -188,12 +188,11 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Load_ResumesTheProviderSessionAndStartsWithTheDefaultSettingsWhateverTheOriginalHad()
+    public async Task Load_ResumesTheProviderSessionWithTheStoredModelAndStartsEverythingElseAtTheDefaultsWhateverTheOriginalHad()
     {
         Directory.CreateDirectory(temp.Combine("project"));
         IPromptSession created = await Create(Claude);
-        created.Configuration.Capability = PromptCapability.Max;
-        created.Configuration.Reasoning = PromptReasoning.High;
+        created.Configuration.ModelSettings["effort"] = "high";
         created.Configuration.EnableShell = true;
         created.Configuration.Instructions = "Be brief.";
         created.Configuration.Mounts["project"] = IStore.FromDisk(temp.Combine("project"));
@@ -205,10 +204,10 @@ public sealed class ProviderTests : IDisposable
 
         Assert.Equal(created.Id, loaded.Id);
         Assert.Same(created.Provider, loaded.Provider);
-        Assert.Equal((PromptCapability.Balanced, PromptReasoning.Medium, false, false, null), (loaded.Configuration.Capability, loaded.Configuration.Reasoning, loaded.Configuration.IsPersistent, loaded.Configuration.EnableShell, loaded.Configuration.Instructions));
+        Assert.Equal(("test-model", "high", false, false, null), (loaded.Configuration.Model!.Id, loaded.Configuration.ModelSettings["effort"], loaded.Configuration.IsPersistent, loaded.Configuration.EnableShell, loaded.Configuration.Instructions));
         Assert.Empty(loaded.Configuration.Mounts);
         Assert.Empty(loaded.Configuration.McpServers);
-        loaded.Configuration.Capability = PromptCapability.Max;
+        loaded.Configuration.Model = new PromptModel { Id = "opus", Settings = [] };
         loaded.Configuration.Mounts["files"] = new FakeStore();
         Assert.Equal("claude says hi", await loaded.Request("second"));
         string[] arguments = await File.ReadAllLinesAsync(temp.Combine("claude-args.txt"));
@@ -218,7 +217,7 @@ public sealed class ProviderTests : IDisposable
         string stored = await Stored();
         Assert.DoesNotContain("project", stored);
         Assert.DoesNotContain("Be brief", stored);
-        Assert.DoesNotContain("opus", stored);
+        Assert.Contains("\"model\": \"opus\"", stored);
     }
 
     [Fact]
@@ -229,10 +228,9 @@ public sealed class ProviderTests : IDisposable
         await session.Request("first");
         string[] first = await File.ReadAllLinesAsync(temp.Combine("claude-args.txt"));
         Assert.Contains("mcp__liveai__write_file", first[Array.IndexOf(first, "--allowedTools") + 1].Split(','));
-        Assert.Contains("sonnet", first);
+        Assert.Contains("test-model", first);
 
-        session.Configuration.Capability = PromptCapability.Max;
-        session.Configuration.Reasoning = PromptReasoning.High;
+        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [] };
         await session.Request("second");
 
         Assert.Contains("opus", await File.ReadAllLinesAsync(temp.Combine("claude-args.txt")));
@@ -257,7 +255,7 @@ public sealed class ProviderTests : IDisposable
         Assert.Equal("codex says hi", await created.Request("one"));
         Assert.Equal("first-key", await File.ReadAllTextAsync(temp.Combine("codex-key.txt")));
 
-        IPromptSession loaded = await created.Provider.Load(created.Id, new PromptSessionOptions { ApiKey = "second-key" });
+        IPromptSession loaded = await created.Provider.Load(created.Id, new PromptSessionOptions { Model = TestModels.Model, ApiKey = "second-key" });
         await loaded.Request("two");
 
         Assert.Equal(["app-server"], (await File.ReadAllLinesAsync(temp.Combine("codex-args.txt"))).Take(1));

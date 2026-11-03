@@ -60,12 +60,12 @@ public sealed record FakePrompt
     /// <summary>
     /// Gets the model the prompt ran with: the session's at the time.
     /// </summary>
-    public required PromptCapability Capability { get; init; }
+    public required PromptModel Model { get; init; }
 
     /// <summary>
-    /// Gets the reasoning effort the prompt ran with: the session's at the time.
+    /// Gets the values of the model's settings the prompt ran with: the session's at the time.
     /// </summary>
-    public required PromptReasoning Reasoning { get; init; }
+    public IReadOnlyDictionary<string, string> ModelSettings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
     /// Gets the notes the session was told (with <see cref="IPromptSession.Send(object, PromptOptions?, CancellationToken)" />) since the prompt before this one, which are delivered with it.

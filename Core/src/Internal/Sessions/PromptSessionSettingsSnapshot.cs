@@ -6,14 +6,14 @@ namespace Markwardt.LiveAi;
 internal sealed record PromptSessionSettingsSnapshot
 {
     /// <summary>
-    /// Gets how capable the model is.
+    /// Gets the selected model, or <see langword="null" /> when none is.
     /// </summary>
-    public required PromptCapability Capability { get; init; }
+    public PromptModel? Model { get; init; }
 
     /// <summary>
-    /// Gets how much reasoning effort the model puts in.
+    /// Gets the values of the model's settings.
     /// </summary>
-    public required PromptReasoning Reasoning { get; init; }
+    public required IReadOnlyDictionary<string, string> ModelSettings { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the process stays alive between prompts.
@@ -76,8 +76,14 @@ internal sealed record PromptSessionSettingsSnapshot
     /// <param name="target">The configuration to set.</param>
     public void CopyTo(IPromptSessionConfiguration target)
     {
-        target.Capability = Capability;
-        target.Reasoning = Reasoning;
+        target.Model = Model;
+        target.ModelSettings.Clear();
+
+        foreach ((string id, string value) in ModelSettings)
+        {
+            target.ModelSettings[id] = value;
+        }
+
         target.IsPersistent = IsPersistent;
         target.EnableShell = EnableShell;
         target.Workspace = Workspace;
