@@ -33,6 +33,9 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
     /// <inheritdoc />
     public bool NeedsFiles => false;
 
+    /// <inheritdoc />
+    public bool NativeSearch => true;
+
     /// <summary>
     /// Gets the line that makes the process stop what it is doing and wait for the next prompt.
     /// </summary>
@@ -584,7 +587,7 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
     {
         ProcessStartInfo start = new(command) { WorkingDirectory = given.WorkingFolder };
 
-        foreach (string argument in (string[])["-p", .. persistent ? (string[])["--input-format", "stream-json", "--replay-user-messages"] : [], "--output-format", "stream-json", "--verbose", "--include-partial-messages", .. given.Model is { } model ? (string[])["--model", model] : [], .. given.Settings.TryGetValue("effort", out string? effort) ? (string[])["--effort", effort] : [], "--strict-mcp-config", "--append-system-prompt", given.Instructions, .. given.Schema is { } schema ? (string[])["--json-schema", schema.GetRawText()] : [], .. Servers(given), .. access, .. Resume(given)])
+        foreach (string argument in (string[])["-p", .. persistent ? (string[])["--input-format", "stream-json", "--replay-user-messages"] : [], "--output-format", "stream-json", "--verbose", "--include-partial-messages", .. given.Model is { } model ? (string[])["--model", model] : [], .. given.Settings.TryGetValue("effort", out string? effort) ? (string[])["--effort", effort] : [], "--strict-mcp-config", "--append-system-prompt", given.Instructions, .. given.Schema is { } schema ? (string[])["--json-schema", schema.GetRawText()] : [], .. Servers(given), .. Access(given.Search), .. Resume(given)])
         {
             start.ArgumentList.Add(argument);
         }
@@ -613,8 +616,32 @@ public sealed class ClaudeEngine(string command = "claude", string? configFolder
     private string[] Resume(PromptEngineStart start)
         => start.AiSessionId is { } id ? ["--resume", id, "--system-prompt-snapshot", "off"] : start.ForkedFrom is { } origin ? ["--resume", origin, .. start.ForkedAt is { } at ? (string[])["--resume-session-at", at] : [], "--fork-session", "--system-prompt-snapshot", "off"] : [];
 
+    private string[] Access(bool search)
+        => ["--permission-mode", "dontAsk", "--tools", search ? "WebSearch" : string.Empty];
+
     private string[] Servers(PromptEngineStart start)
-        => start.Servers.Count == 0 ? [] : ["--mcp-config", McpConfig(start.Servers), "--allowedTools", string.Join(',', start.Servers.SelectMany(server => server.Tools is { } names ? names.Select(name => $"mcp__{server.Name}__{name}") : [$"mcp__{server.Name}"]))];
+    {
+        List<string> allowed = [.. start.Servers.SelectMany(server => server.Tools is { } names ? names.Select(name => $"mcp__{server.Name}__{name}") : [$"mcp__{server.Name}"])];
+
+        if (start.Search)
+        {
+            allowed.Add("WebSearch");
+        }
+
+        List<string> arguments = [];
+
+        if (start.Servers.Count > 0)
+        {
+            arguments.AddRange(["--mcp-config", McpConfig(start.Servers)]);
+        }
+
+        if (allowed.Count > 0)
+        {
+            arguments.AddRange(["--allowedTools", string.Join(',', allowed)]);
+        }
+
+        return [.. arguments];
+    }
 
     private JsonNode Block(PromptAttachment attachment)
         => new JsonObject

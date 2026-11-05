@@ -130,7 +130,7 @@ public sealed class CustomEngineTests : IDisposable
         PromptEngineServer own = start.Servers[0];
         Assert.StartsWith("http://127.0.0.1:", own.Url);
         Assert.Equal("LIVEAI_TOOLS_TOKEN", own.BearerTokenVariable);
-        Assert.Equal(["ask", "respond"], own.Tools);
+        Assert.Equal(["current_time", "tool_search", "delegate", "ask", "respond"], own.Tools);
         Assert.Equal(64, own.BearerToken!.Length);
         Assert.Equal(("https://example.com/mcp", "DB_TOKEN", (string?)null), (start.Servers[1].Url, start.Servers[1].BearerTokenVariable, start.Servers[1].BearerToken));
         Assert.Equal("git-mcp", start.Servers[2].Command);

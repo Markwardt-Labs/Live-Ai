@@ -18,6 +18,7 @@ internal static class PromptStarts
         public PromptEngineStart ToStart(string? apiKey, string? schema, ToolEndpoint? tools, IReadOnlyList<string>? files = null)
             => new()
             {
+                Search = record.NativeSearch,
                 Model = record.Model?.Id,
                 Settings = record.ModelSettings,
                 WorkingFolder = record.WorkingFolder,

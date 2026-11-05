@@ -2,6 +2,7 @@ global using System.Diagnostics;
 global using System.Globalization;
 global using System.IO.Compression;
 global using System.Net;
+global using System.Net.Http.Headers;
 global using System.Net.Sockets;
 global using System.Text;
 global using System.Runtime.CompilerServices;

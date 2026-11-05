@@ -66,6 +66,41 @@ public sealed class ClaudeEngineTests
     }
 
     [Fact]
+    public void CreateStart_WhenSearchIsAllowed_OffersOnlyTheEnginesSearchBesideTheLibrarysServerAndAllowsIt()
+    {
+        PromptEngineServer server = new() { Name = "liveai", Url = "http://127.0.0.1:1/mcp", Tools = ["read_file"] };
+        PromptEngineStart given = Record(builder => builder.Model = new PromptModel { Id = "m" }).ToStart(null, null, null) with { Search = true, Servers = [server] };
+
+        ProcessStartInfo start = engine.CreateStart(given);
+
+        Assert.Equal("WebSearch", start.ArgumentList[start.ArgumentList.IndexOf("--tools") + 1]);
+        Assert.Equal("mcp__liveai__read_file,WebSearch", start.ArgumentList[start.ArgumentList.IndexOf("--allowedTools") + 1]);
+        Assert.Equal("dontAsk", start.ArgumentList[start.ArgumentList.IndexOf("--permission-mode") + 1]);
+    }
+
+    [Fact]
+    public void CreateStart_WhenSearchIsAllowedWithoutAnyServer_StillAllowsIt()
+    {
+        ProcessStartInfo start = engine.CreateStart(Record().ToStart(null, null, null) with { Search = true });
+
+        Assert.Equal("WebSearch", start.ArgumentList[start.ArgumentList.IndexOf("--allowedTools") + 1]);
+        Assert.DoesNotContain("--mcp-config", start.ArgumentList);
+    }
+
+    [Fact]
+    public void CreateStart_WhenSearchIsNotAllowed_OffersNoNativeToolAtAll()
+    {
+        ProcessStartInfo start = engine.CreateStart(Record().ToStart(null, null, null));
+
+        Assert.Equal("", start.ArgumentList[start.ArgumentList.IndexOf("--tools") + 1]);
+        Assert.DoesNotContain("--allowedTools", start.ArgumentList);
+    }
+
+    [Fact]
+    public void TheEngineHasASearchOfItsOwn()
+        => Assert.True(((IPromptEngine)engine).NativeSearch);
+
+    [Fact]
     public void CreateStart_ResumesTheClaudeSessionOnceItIsKnown()
     {
         ProcessStartInfo start = engine.CreateStart(Record(builder => builder.AiSessionId = "abc").ToStart(null, null, null));

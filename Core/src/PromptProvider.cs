@@ -110,7 +110,7 @@ public sealed class PromptProvider : IPromptProvider
     }
 
     private PromptProvider(IPromptEngine engine, IPromptSessionStore store, ITurnRunner runner, ILogger? logger, TimeProvider time)
-        : this(engine, store, new PromptSessionOpener(store, runner, new PromptToolHost(), new PromptLibraryTools(), logger, time), runner, time, logger)
+        : this(engine, store, new PromptSessionOpener(store, runner, new PromptToolHost(), new PromptLibraryTools(null, time), logger, time), runner, time, logger)
     {
     }
 

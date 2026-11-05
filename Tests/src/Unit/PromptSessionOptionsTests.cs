@@ -24,6 +24,7 @@ public sealed class PromptSessionOptionsTests
         engine.SetupGet(mock => mock.Identifier).Returns("Fake");
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
+        libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns(() => [Tool("read_file")]);
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));

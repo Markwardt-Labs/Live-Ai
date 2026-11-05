@@ -27,6 +27,7 @@ public sealed class PromptSessionTests
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
+        libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns([]);
         toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
@@ -683,7 +684,7 @@ public sealed class PromptSessionTests
         await session.Messages("one");
         await session.Messages("two");
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "alpha", "beta", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "alpha", "beta", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.Reaches(server.Object.Endpoint))), Times.Exactly(2));
         server.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
@@ -769,8 +770,10 @@ public sealed class PromptSessionTests
     private void Library(params PromptTool[] built)
         => libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns(built);
 
+    private readonly string[] everyday = ["current_time", "tool_search", "delegate"];
+
     private void Served(params string[] names)
-        => toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(names.Append("respond"))), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        => toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(names.Append("respond"))), It.IsAny<IPromptToolHooks?>()), Times.Once);
 
     [Fact]
     public void Mounts_AreEmptyUntilSetAndAreCopied()
@@ -994,6 +997,340 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
+    public async Task EnableImages_AndEnableWeb_AreOffByDefaultAndOfferNothing()
+    {
+        PromptSession session = Session(Record());
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
+        Library(Tool("read_file"));
+        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        Plain();
+
+        await session.Messages("one");
+
+        Assert.False(session.Configuration.EnableImages);
+        Assert.False(session.Configuration.EnableWeb);
+        Served("read_file");
+        libraryTools.Verify(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>()), Times.Never);
+        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    public async Task EnableImages_OffersTheImageToolOnlyWithFilesToReadAndAnEngineThatCanBeShownImages(bool mounted, bool engineTakesImages, bool offered)
+    {
+        PromptSession session = Session(Record());
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(engineTakesImages);
+        libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Returns(() => Tool("view_image"));
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        Plain();
+        session.Configuration.EnableImages = true;
+
+        if (mounted)
+        {
+            session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        }
+
+        await session.Messages("one");
+
+        string[] expected = [.. mounted ? ["read_file"] : Array.Empty<string>(), .. offered ? ["view_image"] : Array.Empty<string>()];
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(expected.Append("respond"))), It.IsAny<IPromptToolHooks?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnableImages_GivesTheImageToTheAiAsAnInputOfItsOwnWithTheImageAttachedAndANote()
+    {
+        PromptSession session = Session(Record());
+        Func<string, PromptAttachment, CancellationToken, Task>? give = null;
+        List<PromptInput> framed = [];
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
+        engine.Setup(mock => mock.CreateAttachmentStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("attached"));
+        engine.Setup(mock => mock.Frame(It.IsAny<PromptInput>())).Returns((PromptInput turn) =>
+        {
+            framed.Add(turn);
+            return turn.Text;
+        });
+        libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        Answers();
+        session.Configuration.EnableImages = true;
+        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        await session.Messages("look");
+        PromptAttachment image = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1, 2, 3 } };
+
+        await give!("docs/a.png", image, CancellationToken.None);
+
+        for (int attempt = 0; attempt < 500 && framed.Count < 1; attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        await Idle(session);
+        PromptInput turn = Assert.Single(framed);
+        Assert.Equal("Here is the image docs/a.png you asked to see.", turn.Text);
+        Assert.Equal([image], turn.Attachments);
+        Assert.Contains("view_image", Assert.Single(turn.Notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EnableImages_DuringARequest_SteersTheImageIntoTheWorkOfTheAiInsteadOfRefusingIt()
+    {
+        PromptSession session = Persistent();
+        Func<string, PromptAttachment, CancellationToken, Task>? give = null;
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<PromptInput> steered = [];
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
+        libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => started.TrySetResult()));
+        process.Setup(mock => mock.Steer(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Callback<PromptInput, CancellationToken>((input, _) => steered.Add(input)).ReturnsAsync(true);
+        session.Configuration.EnableImages = true;
+        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        Task<List<string>> running = session.Messages("look");
+        await started.Task;
+        PromptAttachment image = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1, 2, 3 } };
+
+        Assert.Equal(PromptSessionState.Responding, session.State);
+        await give!("docs/a.png", image, CancellationToken.None);
+        release.SetResult();
+        await running;
+
+        PromptInput input = Assert.Single(steered);
+        Assert.Equal([image], input.Attachments);
+        Assert.Contains("view_image", Assert.Single(input.Notes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EnableImages_DuringARequestOfAnEngineThatCannotSteer_WaitsAndIsGivenAsWorkOnceTheRequestIsOver()
+    {
+        PromptSession session = Session(Record());
+        Func<string, PromptAttachment, CancellationToken, Task>? give = null;
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<string> prompts = [];
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
+        engine.Setup(mock => mock.CreateAttachmentStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("attached"));
+        engine.Setup(mock => mock.Frame(It.IsAny<PromptInput>())).Returns((PromptInput turn) =>
+        {
+            prompts.Add(turn.Text);
+            return turn.Text;
+        });
+        libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => started.TrySetResult()));
+        session.Configuration.EnableImages = true;
+        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        Task<List<string>> running = session.Messages("look");
+        await started.Task;
+
+        await give!("docs/a.png", new PromptAttachment { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1 } }, CancellationToken.None);
+        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
+        release.SetResult();
+        await running;
+
+        await Idle(session);
+        Assert.Contains(prompts, prompt => prompt.Contains("docs/a.png", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EnableWeb_OffersTheFetchToolEvenWithoutFilesAndOnlyWhileItIsOn()
+    {
+        PromptSession session = Session(Record());
+        libraryTools.Setup(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>())).Returns(() => Tool("fetch_url"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        Plain();
+        session.Configuration.EnableWeb = true;
+
+        await session.Messages("one");
+        session.Configuration.EnableWeb = false;
+        await session.Messages("two");
+
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "fetch_url", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task WebFilter_IsReadWhenAnAddressIsRequestedSoItCanChangeAndAFailureOfItBlocks()
+    {
+        PromptSession session = Session(Record());
+        Func<Uri, CancellationToken, Task<bool>>? isBlocked = null;
+        libraryTools.Setup(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>())).Callback<Func<Uri, CancellationToken, Task<bool>>>(given => isBlocked = given).Returns(() => Tool("fetch_url"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        Plain();
+        session.Configuration.EnableWeb = true;
+        await session.Messages("one");
+        Uri address = new("https://example.com/");
+
+        Assert.False(await isBlocked!(address, CancellationToken.None));
+        session.Configuration.WebFilter = (given, _) => Task.FromResult(given.Host == "example.com");
+        Assert.True(await isBlocked(address, CancellationToken.None));
+        session.Configuration.WebFilter = (_, _) => throw new InvalidOperationException("broken");
+        Assert.True(await isBlocked(address, CancellationToken.None));
+        session.Configuration.WebFilter = (_, cancellation) => Task.FromCanceled<bool>(new CancellationToken(true));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => isBlocked(address, CancellationToken.None));
+        session.Configuration.WebFilter = null;
+        Assert.False(await isBlocked(address, CancellationToken.None));
+        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TheTimeTheSearchOfToolsAndTheDelegationAreAlwaysOffered()
+    {
+        PromptSession session = Session(Record());
+        Plain();
+
+        await session.Messages("one");
+
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "current_time", "tool_search", "delegate", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnableSearch_OffersTheLibrarysSearchToAnEngineThatHasNoneOfItsOwn()
+    {
+        PromptSession session = Session(Record());
+        Plain();
+        session.Configuration.EnableSearch = true;
+
+        await session.Messages("one");
+
+        Served("search_web");
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => !start.Search)), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnableSearch_WithAnEngineThatSearchesItself_AllowsItsSearchAndOffersNoTool()
+    {
+        engine.SetupGet(mock => mock.NativeSearch).Returns(true);
+        PromptSession session = Session(Record());
+        Plain();
+        session.Configuration.EnableSearch = true;
+
+        await session.Messages("one");
+
+        Served();
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Search)), Times.Once);
+        libraryTools.Verify(mock => mock.CreateSearch(), Times.Never);
+    }
+
+    [Fact]
+    public async Task EnableSearch_OffNeitherAllowsTheEnginesSearchNorOffersTheTool()
+    {
+        engine.SetupGet(mock => mock.NativeSearch).Returns(true);
+        PromptSession session = Session(Record());
+        Plain();
+
+        await session.Messages("one");
+
+        Assert.False(session.Configuration.EnableSearch);
+        Served();
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => !start.Search)), Times.Once);
+        libraryTools.Verify(mock => mock.CreateSearch(), Times.Never);
+    }
+
+    [Fact]
+    public async Task EnableSearch_ChangedBetweenPrompts_RestartsAKeptProcessOfAnEngineWhoseSearchIsAllowedWhenItStarts()
+    {
+        engine.SetupGet(mock => mock.NativeSearch).Returns(true);
+        PromptSession session = Persistent();
+        await session.Messages("one");
+
+        session.Configuration.EnableSearch = true;
+        await session.Messages("two");
+
+        runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
+        process.Verify(mock => mock.Stop(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task Delegate_RunsTheTaskInAFreshHelperOfTheSameModelAndWorkspaceAndReturnsItsAnswer()
+    {
+        Func<string, bool, CancellationToken, Task<string>>? run = null;
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        List<PromptInput> turns = Turns();
+        PromptSession session = Session(Record());
+        PromptSession helper = Session(Record());
+        PromptSessionOptions? created = null;
+        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).Callback<PromptSessionOptions?, CancellationToken>((options, _) => created = options).ReturnsAsync(helper);
+        runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "the helper found it"), Event(PromptEngineEventKind.Finished)));
+        session.Configuration.Instructions = "Be brief.";
+        await session.Messages("start");
+
+        string answer = await run!("look into x", false, CancellationToken.None);
+
+        Assert.Equal("the helper found it", answer);
+        Assert.Equal(("sonnet", null), (created!.Model!.Id, created.WorkspacePath));
+        Assert.Equal("Be brief.", helper.Configuration.Instructions);
+        Assert.Contains("look into x", turns[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("delegated to you", turns[^1].Text, StringComparison.Ordinal);
+        provider.Verify(mock => mock.Delete(helper.Id, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(PromptSessionState.Waiting, helper.State);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => helper.Messages("again"));
+    }
+
+    [Fact]
+    public async Task Delegate_GivesTheHelperNoDelegationOfItsOwn()
+    {
+        Func<string, bool, CancellationToken, Task<string>>? run = null;
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        Plain();
+        PromptSession session = Session(Record());
+        PromptSession helper = Session(Record());
+        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
+        await session.Messages("start");
+
+        await run!("task", false, CancellationToken.None);
+
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "delegate")), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => !started.Any(tool => tool.Name == "delegate")), It.IsAny<IPromptToolHooks?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Delegate_WithTheContextShared_RunsTheTaskInAForkOfTheConversationThatIsThrownAway()
+    {
+        Func<string, bool, CancellationToken, Task<string>>? run = null;
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        List<PromptInput> turns = Turns();
+        PromptSession session = Session(Record());
+        PromptSession fork = Session(Record());
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(fork);
+        runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "forked answer"), Event(PromptEngineEventKind.Finished)));
+        await session.Messages("start");
+
+        string answer = await run!("review the plan", true, CancellationToken.None);
+
+        Assert.Equal("forked answer", answer);
+        Assert.Contains("review the plan", turns[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("The request the other AI is working on now:\nstart", turns[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("continue its conversation", turns[^1].Text, StringComparison.Ordinal);
+        provider.Verify(mock => mock.Delete(fork.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Delegate_WhenTheHelperFails_FailsTheCallWithItsReasonAndStillRemovesTheHelper()
+    {
+        Func<string, bool, CancellationToken, Task<string>>? run = null;
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        Plain();
+        PromptSession session = Session(Record());
+        PromptSession helper = Session(Record());
+        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
+        await session.Messages("start");
+        runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Failed, "the helper broke")));
+
+        PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => run!("task", false, CancellationToken.None));
+
+        Assert.Equal("the helper broke", exception.Message);
+        provider.Verify(mock => mock.Delete(helper.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task EnableShell_WithoutMounts_ServesOnlyTheShellAndSaysSo()
     {
         PromptSession session = Session(Record());
@@ -1107,7 +1444,7 @@ public sealed class PromptSessionTests
         await session.Messages("two");
 
         first.Verify(mock => mock.DisposeAsync(), Times.Once);
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "mine", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "mine", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
     }
 
     [Fact]

@@ -23,6 +23,7 @@ public sealed class PromptSessionModelTests
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
+        libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns([]);
         toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
         store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);

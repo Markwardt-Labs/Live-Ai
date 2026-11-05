@@ -219,6 +219,30 @@ Console.WriteLine(await session.Request("Run the unit tests in /path/to/project 
 
 The `shell` tool runs any command on this machine with the rights of the user your program runs as, so enable it only for an AI and a task you trust that far; mounts and read-only stores do not limit it. It is off by default. Commands start in the workspace when that is a folder on disk, and otherwise in an empty scratch folder, unless the AI gives a working directory, and a command that runs longer than its timeout is stopped.
 
+## Letting the AI look at images and read the web
+
+```csharp
+session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
+session.Configuration.EnableImages = true;
+session.Configuration.EnableWeb = true;
+
+await session.Request("Look at docs/design.png, then read https://example.com/spec and say what differs.");
+```
+
+`EnableImages` gives the AI a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB) of the workspace or a mount. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered only while the session has files to read, the selected model takes images and the engine can be shown images. `EnableWeb` gives the AI a `fetch_url` tool that reads text from an http or https address (HTML reduced to readable text, binary content refused, cut at 40000 characters unless the AI asks for up to 200000), as this machine with its network access, so addresses on the local network and on this machine are reachable too, unless you set `WebFilter`: a function that gets the address of every request the tool makes (the addresses a page redirects to too) and returns `true` to block it, for example `session.Configuration.WebFilter = (address, _) => Task.FromResult(address.IsLoopback || address.Host.EndsWith(".internal"));`. It is `null` by default, which allows every address, and it can be changed while the AI works. Both tools are off by default.
+
+## Searching the web and the tools every session has
+
+```csharp
+session.Configuration.EnableSearch = true;
+
+await session.Request("Find out what changed in the latest stable .NET release and compare notes.md with notes-old.md.");
+```
+
+`EnableSearch` lets the AI search the web, with no key and no other software. When the tool has a web search of its own (Claude Code and Codex do) the AI is simply allowed to use it, and the library does not see or filter what it searches; otherwise (OpenCode, and engines you add) the AI is given a `search_web` tool that reads DuckDuckGo's plain HTML page. That page is not an API, so the tool is best effort: it can change or turn the library away. The library spaces its requests at least two seconds apart, and when DuckDuckGo turns a search away it pauses searching for a minute and tells the AI so. `WebFilter` applies to neither kind of search, only to `fetch_url`. Search is off by default and independent of `EnableWeb`, and changing it ends a kept process of an engine that is told about it when it starts.
+
+Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace or a mount, offered with the file tools) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, mounts, hooks and limits, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
+
 ## Sending images and files with a prompt
 
 ```csharp

@@ -84,6 +84,8 @@ internal static class ToolEndpointExtensions
                 _ => $"You have no shell and no direct access to this machine{(record.WorkspacePath is null ? ", and the folder you run in is empty and is not your workspace" : string.Empty)}. Your only way to work with files is the file tools of the MCP server named {tools.ServerName}. {Paths(tools)}{external}"
             };
 
+            access = record.NativeSearch ? $"{access} You can also search the web with your own web search tool." : access;
+
             return string.IsNullOrWhiteSpace(record.Instructions) ? access : $"{access}\n\nInstructions from the user:\n{record.Instructions}";
         }
     }

@@ -26,7 +26,7 @@ public sealed class PromptSessionSettingsTests
         Assert.Empty(settings.Tools);
         Assert.Null(settings.Limits.Budget);
         Assert.Null(settings.Workspace);
-        Assert.Equal((null, null, null), (settings.BeforeToolCall, settings.AfterToolCall, settings.Asker));
+        Assert.Equal((null, null, null, null), (settings.BeforeToolCall, settings.AfterToolCall, settings.Asker, settings.WebFilter));
         Assert.Equal((null, null, null, null), (settings.Limits.Timeout, settings.Limits.WindowLimit, settings.Limits.Retry, settings.Limits.MaxToolCalls));
     }
 
@@ -99,10 +99,14 @@ public sealed class PromptSessionSettingsTests
         settings.ModelSettings["effort"] = "low";
         settings.IsPersistent = true;
         settings.EnableShell = true;
+        settings.EnableImages = true;
+        settings.EnableWeb = true;
         settings.Workspace = IStore.FromMemory();
         settings.BeforeToolCall = (_, _) => Task.FromResult(PromptToolDecision.Allow);
         settings.AfterToolCall = (_, _, _, _) => Task.CompletedTask;
         settings.Asker = (_, _) => Task.FromResult(string.Empty);
+        settings.WebFilter = (_, _) => Task.FromResult(false);
+        settings.EnableSearch = true;
         settings.Limits = settings.Limits with { Budget = new PromptBudget { MaxTokens = 5 } };
         settings.Limits = settings.Limits with { Timeout = TimeSpan.FromMinutes(1) };
         settings.Limits = settings.Limits with { WindowLimit = new PromptWindowLimit { Reached = _ => false } };
@@ -110,7 +114,35 @@ public sealed class PromptSessionSettingsTests
         settings.Limits = settings.Limits with { MaxToolCalls = 1 };
         settings.Instructions = "y";
 
-        Assert.Equal(14, changes);
+        Assert.Equal(18, changes);
+    }
+
+    [Fact]
+    public void EnableSearchIsOffByDefaultAndIsPartOfTheSnapshotAndCopiedToAnotherConfiguration()
+    {
+        PromptSessionSettings settings = Settings();
+        PromptSessionSettings other = Settings();
+
+        Assert.False(settings.EnableSearch);
+        settings.EnableSearch = true;
+        settings.Snapshot().CopyTo(other);
+
+        Assert.True(settings.Snapshot().EnableSearch);
+        Assert.True(other.EnableSearch);
+    }
+
+    [Fact]
+    public void TheWebFilterIsPartOfTheSnapshotAndIsCopiedToAnotherConfiguration()
+    {
+        PromptSessionSettings settings = Settings();
+        PromptSessionSettings other = Settings();
+        Func<Uri, CancellationToken, Task<bool>> filter = (_, _) => Task.FromResult(true);
+        settings.WebFilter = filter;
+
+        settings.Snapshot().CopyTo(other);
+
+        Assert.Same(filter, settings.Snapshot().WebFilter);
+        Assert.Same(filter, other.WebFilter);
     }
 
     [Fact]

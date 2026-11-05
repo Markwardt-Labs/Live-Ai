@@ -63,6 +63,15 @@ public sealed class PromptMcpServerTests
     }
 
     [Fact]
+    public void SameProcess_NeedsANewProcessWhenTheSearchOfTheToolIsAllowedOrForbidden()
+    {
+        PromptSessionRecord record = new PromptSessionRecordBuilder().Build(new ClaudeEngine());
+
+        Assert.False(record.SameProcess(record with { NativeSearch = true }));
+        Assert.True((record with { NativeSearch = true }).SameProcess(record with { NativeSearch = true }));
+    }
+
+    [Fact]
     public void SameProcess_OfAToolThatStartsWithItsModel_NeedsANewProcessWhenTheModelOrItsSettingsChange()
     {
         PromptSessionRecord record = new PromptSessionRecordBuilder().Build(new OpenCodeEngine());

@@ -21,11 +21,19 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
 
     private bool enableShell;
 
+    private bool enableImages;
+
+    private bool enableWeb;
+
+    private bool enableSearch;
+
     private IStore? workspace;
 
     private Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? beforeToolCall;
 
     private Func<PromptToolCallEvent, PromptToolResultEvent, TimeSpan, CancellationToken, Task>? afterToolCall;
+
+    private Func<Uri, CancellationToken, Task<bool>>? webFilter;
 
     private Func<string, CancellationToken, Task<string>>? asker;
 
@@ -103,6 +111,48 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     }
 
     /// <inheritdoc />
+    public bool EnableImages
+    {
+        get
+        {
+            lock (gate)
+            {
+                return enableImages;
+            }
+        }
+
+        set => Set(() => enableImages = value);
+    }
+
+    /// <inheritdoc />
+    public bool EnableWeb
+    {
+        get
+        {
+            lock (gate)
+            {
+                return enableWeb;
+            }
+        }
+
+        set => Set(() => enableWeb = value);
+    }
+
+    /// <inheritdoc />
+    public bool EnableSearch
+    {
+        get
+        {
+            lock (gate)
+            {
+                return enableSearch;
+            }
+        }
+
+        set => Set(() => enableSearch = value);
+    }
+
+    /// <inheritdoc />
     public IStore? Workspace
     {
         get
@@ -142,6 +192,20 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
         }
 
         set => Set(() => afterToolCall = value);
+    }
+
+    /// <inheritdoc />
+    public Func<Uri, CancellationToken, Task<bool>>? WebFilter
+    {
+        get
+        {
+            lock (gate)
+            {
+                return webFilter;
+            }
+        }
+
+        set => Set(() => webFilter = value);
     }
 
     /// <inheritdoc />
@@ -258,9 +322,13 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
                 ModelSettings = ModelSettings.Copy(),
                 IsPersistent = isPersistent,
                 EnableShell = enableShell,
+                EnableImages = enableImages,
+                EnableWeb = enableWeb,
+                EnableSearch = enableSearch,
                 Workspace = workspace,
                 BeforeToolCall = beforeToolCall,
                 AfterToolCall = afterToolCall,
+                WebFilter = webFilter,
                 Asker = asker,
                 Limits = limits,
                 Instructions = instructions,

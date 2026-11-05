@@ -39,6 +39,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private readonly string respondName = "respond";
 
+    private readonly string delegatedNote = "A task was delegated to you by another AI that is working with the user and cannot see your work. Do it, and answer with the result only: what you found or did, in a form the other AI can use as it is.";
+
+    private readonly string sharedNote = "A task was delegated to you by another AI that is working with the user, and you continue its conversation as it stood before its current request. Do the task, and answer with the result only: what you found or did, in a form the other AI can use as it is.";
+
+    private readonly string imageNote = "This message was sent by the view_image tool you called to look at an image, not typed by the user.";
+
     private PromptSessionState state = PromptSessionState.Waiting;
 
     private Task pumping = Task.CompletedTask;
@@ -46,6 +52,24 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     private PromptTool? respondTool;
 
     private PromptTool? askTool;
+
+    private PromptTool? imageTool;
+
+    private PromptTool? fetchTool;
+
+    private PromptTool? searchTool;
+
+    private PromptTool? timeTool;
+
+    private PromptTool? toolSearchTool;
+
+    private PromptTool? delegateTool;
+
+    private readonly SemaphoreSlim delegating = new(3, 3);
+
+    private bool isHelper;
+
+    private string? turnText;
 
     private PromptSessionRecord current;
 
@@ -132,7 +156,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         this.libraryTools = libraryTools;
         this.opener = opener;
         requester = new PromptRequester(this, log, Time);
-        settings = new PromptSessionSettings(record, [.. libraryTools.Names, libraryTools.ShellName, libraryTools.AskName, respondName]);
+        settings = new PromptSessionSettings(record, [.. libraryTools.Names, libraryTools.ShellName, libraryTools.AskName, libraryTools.ImageName, libraryTools.FetchName, libraryTools.SearchName, libraryTools.TimeName, libraryTools.ToolSearchName, libraryTools.DelegateName, respondName]);
         settings.Changed += OnSettingsChanged;
     }
 
@@ -254,7 +278,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             _ = files.Prepare(text, engine);
         }
 
-        await Deliver(new Queued(text, files, null, options?.Notes ?? []), cancellation);
+        await Deliver(new Queued(text, files, null, options?.Notes ?? []), false, cancellation);
     }
 
     /// <summary>
@@ -281,6 +305,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             turnInterrupt = interruption;
             turnInterrupted = false;
+            turnText = prompt;
         }
 
         try
@@ -654,6 +679,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             lock (gate)
             {
                 Enter(PromptSessionState.Waiting);
+
+                if (queued.Count > 0 && !disposed)
+                {
+                    Enter(PromptSessionState.Working);
+                    pumping = Task.Run(Pump, CancellationToken.None);
+                }
             }
         }
     }
@@ -692,7 +723,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
         try
         {
-            await Deliver(new Queued(text, run.Attachments, id, run.Notes), cancellation);
+            await Deliver(new Queued(text, run.Attachments, id, run.Notes), false, cancellation);
             answer = await waiting.Completion.Task.WaitAsync(cancellation);
         }
         finally
@@ -743,10 +774,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// Gives input to the AI at once: into the work it is doing when its process takes it, and otherwise as input that waits for the next piece of work.
     /// </summary>
     /// <param name="item">The input.</param>
+    /// <param name="fromTool">Whether a tool of the AI gives the input while a request is being answered, which is accepted in the state the session is responding in: it is steered into the work the AI is doing, and otherwise waits until the request is over.</param>
     /// <param name="cancellation">Cancels the delivery.</param>
     /// <returns>A task that completes when the input was written to the running AI process, or was queued for the next work, which is before the AI acts on it.</returns>
-    /// <exception cref="PromptSessionStateException">The session is responding.</exception>
-    private async Task Deliver(Queued item, CancellationToken cancellation = default)
+    /// <exception cref="PromptSessionStateException">The session is responding and the input does not come from a tool.</exception>
+    private async Task Deliver(Queued item, bool fromTool = false, CancellationToken cancellation = default)
     {
         IPromptProcess? target = null;
         PromptModel? model;
@@ -757,14 +789,14 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             ObjectDisposedException.ThrowIf(disposed, this);
 
-            if (state == PromptSessionState.Responding)
+            if (state == PromptSessionState.Responding && !fromTool)
             {
                 throw new PromptSessionStateException(state, "The session is responding to a request and takes no input until it is waiting again.");
             }
 
             notes.AddRange(item.Notes);
 
-            if (state == PromptSessionState.Working && workProcess is { } running && !(engine.NeedsFiles && item.Attachments.Count > 0))
+            if (state is PromptSessionState.Working or PromptSessionState.Responding && workProcess is { } running && !(engine.NeedsFiles && item.Attachments.Count > 0))
             {
                 target = running;
             }
@@ -807,7 +839,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             delivered.Remove(item);
             notes.AddRange(told);
 
-            if (state == PromptSessionState.Responding)
+            if (state == PromptSessionState.Responding && !fromTool)
             {
                 throw new PromptSessionStateException(state, "The session is responding to a request and takes no input until it is waiting again.");
             }
@@ -926,6 +958,120 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <returns>The tool.</returns>
     private PromptTool AskTool()
         => askTool ??= libraryTools.CreateAsk(Ask);
+
+    private Task GiveImage(string path, PromptAttachment image, CancellationToken cancellation = default)
+    {
+        _ = RequireModel();
+        _ = new[] { image }.Prepare(string.Empty, engine);
+        return Deliver(new Queued($"Here is the image {path} you asked to see.", [image], null, [imageNote]), true, cancellation);
+    }
+
+    /// <summary>
+    /// Makes this session the helper of another, which cannot hand tasks on.
+    /// </summary>
+    internal void BecomeHelper()
+    {
+        lock (gate)
+        {
+            isHelper = true;
+        }
+    }
+
+    private async Task<string> Delegate(string task, bool shareContext, CancellationToken cancellation)
+    {
+        await delegating.WaitAsync(cancellation);
+
+        try
+        {
+            PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
+            PromptSession helper;
+
+            if (shareContext)
+            {
+                helper = await Branch(null, cancellation, false) as PromptSession ?? throw new InvalidOperationException("A fork of a session is a session of the same kind.");
+            }
+            else
+            {
+                PromptSessionRecord source;
+
+                lock (gate)
+                {
+                    source = current;
+                }
+
+                helper = await provider.Create(new PromptSessionOptions { ApiKey = apiKey, Model = snapshot.Model, WorkspacePath = source.WorkspacePath, Sandbox = source.Sandbox }, cancellation) as PromptSession ?? throw new InvalidOperationException("A session of the provider is a session of the same kind.");
+
+                try
+                {
+                    snapshot.CopyTo(helper.Configuration);
+                }
+                catch
+                {
+                    await Discard(helper);
+                    throw;
+                }
+            }
+
+            helper.BecomeHelper();
+            string asked;
+
+            lock (gate)
+            {
+                asked = turnText ?? string.Empty;
+            }
+
+            try
+            {
+                helper.Configuration.IsPersistent = false;
+                string answer = await helper.Request(shareContext ? $"{sharedNote}\n\nThe request the other AI is working on now:\n{asked}\n\nYour task:\n{task}" : $"{delegatedNote}\n\n{task}", null, cancellation);
+
+                lock (gate)
+                {
+                    usage = usage.Plus(helper.Usage);
+                }
+
+                return answer.Length > 0 ? answer : "(the helper gave no answer)";
+            }
+            finally
+            {
+                await Discard(helper);
+            }
+        }
+        finally
+        {
+            delegating.Release();
+        }
+    }
+
+    private async Task Discard(PromptSession helper)
+    {
+        await helper.DisposeAsync();
+
+        try
+        {
+            await provider.Delete(helper.Id);
+        }
+        catch (Exception exception) when (exception is PromptSessionException or ArgumentException or IOException)
+        {
+        }
+    }
+
+    private async Task<bool> IsBlocked(Uri address, CancellationToken cancellation)
+    {
+        if (settings.WebFilter is not { } filter)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await filter(address, cancellation);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return true;
+        }
+    }
 
     private async Task<string> Ask(string question, CancellationToken cancellation)
         => settings.Asker is { } asker ? await asker(question, cancellation) : throw new InvalidOperationException("No one is available to answer questions right now.");
@@ -1293,6 +1439,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         bool hasShell;
         bool inWorkspace;
         IStore? workspace;
+        PromptTool? images;
+        PromptTool? fetch;
+        PromptTool? search;
+        PromptTool? delegation;
 
         lock (gate)
         {
@@ -1316,12 +1466,19 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             if (fileToolMounts is null || fileToolWorkspace != workspace || fileToolMounts.Count != snapshot.Mounts.Count || snapshot.Mounts.Any(mount => !fileToolMounts.TryGetValue(mount.Key, out IStore? existing) || existing != mount.Value))
             {
                 fileTools = null;
+                imageTool = null;
                 fileToolMounts = snapshot.Mounts;
                 fileToolWorkspace = workspace;
             }
 
             PromptTool[] files = !hasFiles ? [] : fileTools ??= libraryTools.Create(new MountedStore(workspace, available), available.Keys.ToArray(), workspace is not null).ToArray();
-            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
+            images = hasFiles && snapshot.EnableImages && snapshot.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(new MountedStore(workspace, available), GiveImage) : null;
+            fetch = snapshot.EnableWeb ? fetchTool ??= libraryTools.CreateFetch(IsBlocked) : null;
+            search = snapshot.EnableSearch && !engine.NativeSearch ? searchTool ??= libraryTools.CreateSearch() : null;
+            timeTool ??= libraryTools.CreateTime();
+            toolSearchTool ??= libraryTools.CreateToolSearch(() => servedTools);
+            delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate);
+            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
 
             if (exposed.GroupBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } clash)
             {
@@ -1497,7 +1654,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)
-        => record with { Model = snapshot.Model, ModelSettings = snapshot.ModelSettings, Instructions = snapshot.Instructions, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
+        => record with { Model = snapshot.Model, ModelSettings = snapshot.ModelSettings, Instructions = snapshot.Instructions, NativeSearch = snapshot.EnableSearch && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
 
     private void Update(Func<PromptSessionRecord, PromptSessionRecord> change)
     {

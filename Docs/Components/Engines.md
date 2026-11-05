@@ -8,6 +8,10 @@ A tool is driven either by one process per prompt or through a process that hold
 
 Through a conversation process (Codex, Claude Code and OpenCode, whenever the engine reports `CanPersist`): the provider starts the tool with `CreatePersistentStart`, `TurnRunner.Open` launches it, and the provider's `Attach` wraps it in the object that takes prompts (`Run`), compacts (`Compact`), reports the context (`GetContext`), interrupts and stops, and `Steer` takes input while a prompt is running. A tool with such a process gets one opened for the work and disposed after it unless the session is persistent, so one code path serves both settings, and the model, its settings and the schema of the answer travel with each prompt (`PromptInput`) and are not part of the process (except for a tool that reports `StartsWithModel`, which takes them when it starts and gets a new process when they change).
 
+## The tool's own web search
+
+An engine whose tool can search the web reports `NativeSearch`, and the session passes `Search` to its start when `EnableSearch` is on. Claude Code is started with `--tools WebSearch --allowedTools ...,WebSearch` (permission mode `dontAsk` keeps everything else refused), and Codex with `web_search: "live"` in the config of `thread/start` and `thread/resume`; a Codex `webSearch` item becomes a `web_search` tool call and its result. OpenCode reports no native search (its own is limited to its hosted providers), so a session on it gets the library's `search_web`.
+
 ## The model and its settings
 
 A session runs the model it was given (`Configuration.Model`) and passes the values of that model's settings (`Configuration.ModelSettings`) to the engine as `PromptEngineStart.Model`/`Settings` and `PromptInput.Model`/`Settings`. The library has no vocabulary of its own for them (no tiers, no reasoning levels): each engine says what it offers in `GetModels` and reads the setting identifiers it published, so an application can list a model's settings without knowing the tool.

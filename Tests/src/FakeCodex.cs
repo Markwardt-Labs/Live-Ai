@@ -60,7 +60,9 @@ public sealed class FakeCodex(TempFolder temp)
                 count=$(( $(cat "$PWD/turn-count" 2>/dev/null || echo 0) + 1 ))
                 echo "$count" > "$PWD/turn-count"
                 turn="turn-$count"
+                if [ -f "$PWD/slow-start" ]; then sleep 0.6; fi
                 echo "{\"id\":$id,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
+                : > "$PWD/turn-started"
                 @BEFORE@
                 @TURN@;;
               esac

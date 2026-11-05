@@ -26,6 +26,16 @@ internal sealed record PromptSessionSettingsSnapshot
     public required bool EnableShell { get; init; }
 
     /// <summary>
+    /// Gets a value indicating whether the AI has a tool to look at images.
+    /// </summary>
+    public required bool EnableImages { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the AI has a tool to fetch web pages.
+    /// </summary>
+    public required bool EnableWeb { get; init; }
+
+    /// <summary>
     /// Gets the function that decides which tool calls may run, or <see langword="null" /> for all.
     /// </summary>
     public Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? BeforeToolCall { get; init; }
@@ -38,6 +48,16 @@ internal sealed record PromptSessionSettingsSnapshot
     /// <summary>
     /// Gets the limits of the session's requests.
     /// </summary>
+    /// <summary>
+    /// Gets a value indicating whether the AI can search the web, with the tool's own search or the library's.
+    /// </summary>
+    public required bool EnableSearch { get; init; }
+
+    /// <summary>
+    /// Gets the function that blocks addresses of the fetch tool, or <see langword="null" /> to allow all.
+    /// </summary>
+    public Func<Uri, CancellationToken, Task<bool>>? WebFilter { get; init; }
+
     /// <summary>
     /// Gets the function that answers the questions of the AI, or <see langword="null" /> when the AI is offered no tool to ask.
     /// </summary>
@@ -86,10 +106,14 @@ internal sealed record PromptSessionSettingsSnapshot
 
         target.IsPersistent = IsPersistent;
         target.EnableShell = EnableShell;
+        target.EnableImages = EnableImages;
+        target.EnableWeb = EnableWeb;
+        target.EnableSearch = EnableSearch;
         target.Workspace = Workspace;
         target.Instructions = Instructions;
         target.BeforeToolCall = BeforeToolCall;
         target.AfterToolCall = AfterToolCall;
+        target.WebFilter = WebFilter;
         target.Asker = Asker;
         target.Limits = Limits;
         target.Mounts.Clear();

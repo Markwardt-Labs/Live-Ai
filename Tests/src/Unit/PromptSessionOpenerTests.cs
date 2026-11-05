@@ -14,6 +14,7 @@ public sealed class PromptSessionOpenerTests : IDisposable
         Mock<IPromptLibraryTools> libraryTools = new();
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
+        libraryTools.OfferTheEverydayTools();
         return new PromptSessionOpener(new Mock<IPromptSessionStore>().Object, new Mock<ITurnRunner>().Object, new Mock<IPromptToolHost>().Object, libraryTools.Object).Open(link, new Mock<IPromptProvider>().Object, engine.Object, null);
     }
 

@@ -84,7 +84,7 @@ public sealed class ProviderTests : IDisposable
         Assert.Contains("test-model", arguments);
         Assert.Contains("dontAsk", arguments);
         Assert.DoesNotContain("--resume", arguments);
-        Assert.Equal("mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
+        Assert.Equal("mcp__liveai__current_time,mcp__liveai__tool_search,mcp__liveai__delegate,mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
         Assert.Equal(string.Empty, await File.ReadAllTextAsync(temp.Combine("claude-key.txt")));
     }
 

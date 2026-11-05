@@ -28,6 +28,26 @@ public interface IPromptSessionConfiguration
     bool EnableShell { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the AI gets a tool (<c>view_image</c>) with which it can look at an image file (PNG, JPEG, GIF or WebP, up to 5 MB) of the workspace or a mount. A tool can only answer in text, so the image is given to the AI as an input of its own, with the image attached, which is steered into the turn the AI is working on (and sent as an input after it when none is running); the tool's answer says so, and tells the AI to call it again should the input not arrive. It is <see langword="false" /> by default, and the tool is offered only while the session has files to read, the selected model takes images and the engine can be shown images.
+    /// </summary>
+    bool EnableImages { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the AI gets a tool (<c>fetch_url</c>) with which it can read a web page or other text from an http or https address on the internet, as this machine and with its network access (addresses on the local network and on this machine included). It is <see langword="false" /> by default.
+    /// </summary>
+    bool EnableWeb { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the AI can search the web. When the tool has a web search of its own (Claude Code and Codex do) the AI is allowed to use it, and the library does not see or filter what it searches or reads; otherwise the AI is given a tool, <c>search_web</c>, that asks DuckDuckGo's plain HTML page, which needs no key and no other software but is best effort: the page is read, not an API, so it can change or turn the library away, and the library spaces its requests at least two seconds apart and stops for a minute when it is turned away. <see cref="WebFilter" /> applies to neither. It is <see langword="false" /> by default and not stored with a loaded session, and changing it ends a kept process of a tool that takes it when it starts.
+    /// </summary>
+    bool EnableSearch { get; set; }
+
+    /// <summary>
+    /// Gets or sets the function that decides which addresses <c>fetch_url</c> (see <see cref="EnableWeb" />) may read, <see langword="null" /> by default, which allows every address. It is called with the address of every request the tool makes, the addresses a page redirects to included, and returns <see langword="true" /> to block the request: the AI is told that the address is blocked, and nothing is sent to it. An exception from the function (other than cancellation) blocks the request too. It is read when each request is made, also in a prompt that is running, so it can be changed at any time, it does not restart anything, and it is stored with nothing, so a loaded session has none until it is set.
+    /// </summary>
+    Func<Uri, CancellationToken, Task<bool>>? WebFilter { get; set; }
+
+    /// <summary>
     /// Gets or sets a function that is called before each call of a tool the library offers the AI (the shell, the file tools and the tools in <see cref="Tools" />) and decides whether it runs; it is given the same <see cref="PromptToolCallEvent" /> that <see cref="IPromptSession.Output" /> reports for the call (<see cref="PromptToolCallEvent.Id" /> is the AI tool's own identifier of the call where the tool says it, as Claude Code does, and the identifier of the request to the library's tool server otherwise). When it refuses the call (or throws) the call is not run and the AI is told it was refused, with the reason, so it can react. It is <see langword="null" /> by default, which lets every call run. It is read when each call arrives (also in a prompt that is running), it does not see the tools of external MCP servers, which the AI's tool calls itself, and a loaded session starts without one, like every setting.
     /// </summary>
     Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? BeforeToolCall { get; set; }

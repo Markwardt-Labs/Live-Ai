@@ -152,6 +152,11 @@ public interface IPromptEngine
         => Task.FromResult<IReadOnlyList<PromptModel>>([]);
 
     /// <summary>
+    /// Gets a value indicating whether the tool has a web search of its own that it can be allowed to use (<see cref="PromptEngineStart.Search" />). When it has not, a session that enables search is given the library's own <c>search_web</c> tool instead. The default is <see langword="false" />.
+    /// </summary>
+    bool NativeSearch => false;
+
+    /// <summary>
     /// Gets a value indicating whether the model and its settings are fixed when the process starts, so that a process cannot serve a session after they change. The default is <see langword="false" />: the model and settings travel with every prompt.
     /// </summary>
     bool StartsWithModel => false;

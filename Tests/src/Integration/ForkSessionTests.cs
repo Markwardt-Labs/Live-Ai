@@ -202,6 +202,11 @@ public sealed class ForkSessionTests : IDisposable
         origin.Configuration.ModelSettings["effort"] = "high";
         origin.Configuration.ModelSettings["fast"] = "true";
         origin.Configuration.EnableShell = true;
+        origin.Configuration.EnableImages = true;
+        origin.Configuration.EnableWeb = true;
+        origin.Configuration.EnableSearch = true;
+        Func<Uri, CancellationToken, Task<bool>> filter = (_, _) => Task.FromResult(false);
+        origin.Configuration.WebFilter = filter;
         origin.Configuration.BeforeToolCall = approval;
         origin.Configuration.Workspace = notes;
         origin.Configuration.Instructions = "Be brief.";
@@ -215,6 +220,10 @@ public sealed class ForkSessionTests : IDisposable
         Assert.Equal(origin.Configuration.ModelSettings.OrderBy(entry => entry.Key), fork.Configuration.ModelSettings.OrderBy(entry => entry.Key));
         Assert.Equal("high", fork.Configuration.ModelSettings["effort"]);
         Assert.True(fork.Configuration.EnableShell);
+        Assert.True(fork.Configuration.EnableImages);
+        Assert.True(fork.Configuration.EnableWeb);
+        Assert.True(fork.Configuration.EnableSearch);
+        Assert.Same(filter, fork.Configuration.WebFilter);
         Assert.Same(approval, fork.Configuration.BeforeToolCall);
         Assert.Same(notes, fork.Configuration.Workspace);
         Assert.Equal("Be brief.", fork.Configuration.Instructions);

@@ -20,7 +20,13 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
 
     private string? thread = start.AiSessionId;
 
+    private readonly object starting = new();
+
     private volatile string? turn;
+
+    private bool turnStarting;
+
+    private bool interruptWhenStarted;
 
     private bool initialized;
 
@@ -83,8 +89,43 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
                 parameters["outputSchema"] = JsonNode.Parse(prompt.Schema);
             }
 
-            JsonElement started = await Request("turn/start", parameters, cancellation);
-            turn = started.TryGetProperty("turn", out JsonElement begun) && begun.TryGetProperty("id", out JsonElement id) ? id.GetString() : null;
+            lock (starting)
+            {
+                turnStarting = true;
+                interruptWhenStarted = false;
+            }
+
+            JsonElement started;
+
+            try
+            {
+                started = await Request("turn/start", parameters, cancellation);
+            }
+            catch
+            {
+                lock (starting)
+                {
+                    turnStarting = false;
+                    interruptWhenStarted = false;
+                }
+
+                throw;
+            }
+
+            bool interruptNow;
+
+            lock (starting)
+            {
+                turn = started.TryGetProperty("turn", out JsonElement begun) && begun.TryGetProperty("id", out JsonElement id) ? id.GetString() : null;
+                turnStarting = false;
+                interruptNow = interruptWhenStarted && turn is not null;
+                interruptWhenStarted = false;
+            }
+
+            if (interruptNow)
+            {
+                await Interrupt(cancellation);
+            }
 
             yield return new PromptEngineEvent { Kind = PromptEngineEventKind.Session, Text = thread! };
 
@@ -245,9 +286,20 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
 
     /// <inheritdoc />
     public Task Interrupt(CancellationToken cancellation = default)
-        => turn is { } running && thread is { } id
+    {
+        lock (starting)
+        {
+            if (turn is null && turnStarting)
+            {
+                interruptWhenStarted = true;
+                return Task.CompletedTask;
+            }
+        }
+
+        return turn is { } running && thread is { } id
             ? Write(new JsonObject { ["id"] = Interlocked.Increment(ref requests), ["method"] = "turn/interrupt", ["params"] = new JsonObject { ["threadId"] = id, ["turnId"] = running } }.ToJsonString(), cancellation)
             : Task.CompletedTask;
+    }
 
     /// <inheritdoc />
     public void Stop()
@@ -315,6 +367,11 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
             ["sandbox"] = "read-only",
             ["developerInstructions"] = start.Instructions
         };
+
+        if (start.Search)
+        {
+            parameters["config"] = new JsonObject { ["web_search"] = "live" };
+        }
 
         if (thread is null)
         {

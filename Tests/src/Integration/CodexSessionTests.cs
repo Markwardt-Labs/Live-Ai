@@ -41,7 +41,8 @@ public sealed class CodexSessionTests : IDisposable
         await using IPromptSession session = await Create(fake.Script(turn: ":", steer: Completed()));
 
         await session.Send("first");
-        await WaitFor(() => session.State == PromptSessionState.Working && File.Exists(temp.Combine("turn-count")));
+        await WaitFor(() => session.State == PromptSessionState.Working && File.Exists(temp.Combine("turn-started")));
+        await Task.Delay(300);
         await session.Send("second");
         await WaitFor(() => session.State == PromptSessionState.Waiting);
 
@@ -113,6 +114,40 @@ public sealed class CodexSessionTests : IDisposable
     }
 
     [Fact]
+    public async Task ASearchOfTheCodexItselfIsReportedAsAToolCallAndItsResult()
+    {
+        string turn = string.Join('\n',
+            Emit("""{"method":"item/started","params":{"turnId":"@TURN@","item":{"type":"webSearch","id":"w1","query":"dotnet release"}}}"""),
+            Emit("""{"method":"item/completed","params":{"turnId":"@TURN@","item":{"type":"webSearch","id":"w1","query":"dotnet release"}}}"""),
+            Completed());
+        await using IPromptSession session = await Create(fake.Script(turn: turn));
+
+        List<PromptEvent> events = await session.EventList("go");
+
+        Assert.Equal<PromptEvent>(
+        [
+            new PromptToolCallEvent { Id = "w1", Server = null, Name = "web_search", Input = """{"query":"dotnet release"}""" },
+            new PromptToolResultEvent { Id = "w1", Output = "dotnet release", IsError = false },
+            new PromptUsageEvent { Usage = new PromptUsage() }
+        ], events);
+    }
+
+    [Fact]
+    public async Task TheCodexIsAllowedItsOwnSearchOnlyWhenTheSessionEnablesSearch()
+    {
+        await using IPromptSession without = await Create(fake.Script());
+        await without.Request("hi");
+        await using IPromptSession with = await Create(fake.Script());
+        with.Configuration.EnableSearch = true;
+        await with.Request("hi");
+
+        IReadOnlyList<JsonElement> threads = await fake.Parameters("thread/start");
+
+        Assert.False(threads[0].TryGetProperty("config", out _));
+        Assert.Equal("live", threads[1].GetProperty("config").GetProperty("web_search").GetString());
+    }
+
+    [Fact]
     public async Task ThingsOfAnotherTurnOrThatAreNotTheAgentsAreLeftOut()
     {
         string turn = string.Join('\n',
@@ -164,6 +199,23 @@ public sealed class CodexSessionTests : IDisposable
         Assert.Contains(events, output => output is PromptInterruptedEvent);
         JsonElement interrupt = Assert.Single(await fake.Parameters("turn/interrupt"));
         Assert.Equal(("codex-thread", "turn-1"), (interrupt.GetProperty("threadId").GetString(), interrupt.GetProperty("turnId").GetString()));
+        File.Delete(temp.Combine("interrupted"));
+    }
+
+    [Fact]
+    public async Task Interrupt_BeforeTheAppServerHasAnsweredTheStartOfTheTurn_IsSentAsSoonAsTheTurnIsKnown()
+    {
+        File.WriteAllText(temp.Combine("slow-start"), string.Empty);
+        string turn = "( while [ ! -f \"$PWD/interrupted\" ]; do sleep 0.05; done; " + Completed("interrupted") + " ) &";
+        await using IPromptSession session = await Create(fake.Script(turn: turn));
+        Task<List<PromptEvent>> running = session.EventList("long");
+        await WaitFor(async () => (await fake.Parameters("turn/start")).Count == 1);
+
+        Assert.True(await session.Interrupt());
+        List<PromptEvent> events = await running.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains(events, output => output is PromptInterruptedEvent);
+        Assert.Equal("turn-1", Assert.Single(await fake.Parameters("turn/interrupt")).GetProperty("turnId").GetString());
         File.Delete(temp.Combine("interrupted"));
     }
 

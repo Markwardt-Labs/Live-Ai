@@ -154,6 +154,22 @@ public sealed class CodexEngineTests
     }
 
     [Fact]
+    public void TheEngineHasASearchOfItsOwn()
+        => Assert.True(((IPromptEngine)engine).NativeSearch);
+
+    [Fact]
+    public void Read_TakesASearchOfTheEngineForAToolCallAndItsResult()
+    {
+        JsonElement item = JsonDocument.Parse("""{"item":{"type":"webSearch","id":"w","query":"q"},"turnId":"t"}""").RootElement;
+
+        PromptEngineEvent started = Assert.Single(engine.Read("item/started", item, "t"));
+        PromptEngineEvent finished = Assert.Single(engine.Read("item/completed", item, "t"));
+
+        Assert.Equal(new PromptToolCallEvent { Id = "w", Server = null, Name = "web_search", Input = """{"query":"q"}""" }, started.Event);
+        Assert.Equal(new PromptToolResultEvent { Id = "w", Output = "q", IsError = false }, finished.Event);
+    }
+
+    [Fact]
     public void Flags_TellTheSessionThatTheToolIsDrivenThroughItsAppServer()
         => Assert.Equal((true, true, true), (engine.CanPersist, engine.KeepsInstructions, engine.SchemaPerTurn));
 

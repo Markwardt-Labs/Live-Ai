@@ -16,6 +16,11 @@ public sealed record PromptEngineStart
     public IReadOnlyDictionary<string, string> Settings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// Gets a value indicating whether the tool may use its own web search, which only an engine with <see cref="IPromptEngine.NativeSearch" /> is asked to allow.
+    /// </summary>
+    public bool Search { get; init; }
+
+    /// <summary>
     /// Gets the folder the process runs in, which is empty and made for the session. A tool that keeps its sessions by folder needs it as the working directory.
     /// </summary>
     public required string WorkingFolder { get; init; }

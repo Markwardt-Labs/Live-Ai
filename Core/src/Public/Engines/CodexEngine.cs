@@ -43,6 +43,9 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
     public bool NeedsFiles => true;
 
     /// <inheritdoc />
+    public bool NativeSearch => true;
+
+    /// <inheritdoc />
     public bool HasSession(string aiSessionId)
         => Directory.Exists(sessions) && Directory.EnumerateFiles(sessions, $"rollout-*-{aiSessionId}.jsonl", SearchOption.AllDirectories).Any();
 
@@ -355,6 +358,10 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
                     return [Event(new PromptDeltaEvent { Text = text })];
                 case "item/completed" when values.TryGetProperty("item", out JsonElement finished) && ItemKind(finished) == "agentMessage" && finished.TryGetProperty("text", out JsonElement reply) && !string.IsNullOrWhiteSpace(reply.GetString()):
                     return [new PromptEngineEvent { Kind = PromptEngineEventKind.Reply, Text = reply.GetString()! }];
+                case "item/started" when values.TryGetProperty("item", out JsonElement searching) && ItemKind(searching) == "webSearch":
+                    return [Event(Searched(searching))];
+                case "item/completed" when values.TryGetProperty("item", out JsonElement searched) && ItemKind(searched) == "webSearch":
+                    return [Event(new PromptToolResultEvent { Id = searched.GetProperty("id").GetString() ?? string.Empty, Output = searched.TryGetProperty("query", out JsonElement asked) ? asked.GetString() ?? string.Empty : string.Empty, IsError = false })];
                 case "item/started" when values.TryGetProperty("item", out JsonElement started) && ItemKind(started) == "mcpToolCall":
                     return [Event(Call(started))];
                 case "item/completed" when values.TryGetProperty("item", out JsonElement done) && ItemKind(done) == "mcpToolCall":
@@ -382,6 +389,15 @@ public sealed class CodexEngine(string command = "codex", string? configFolder =
             Server = item.TryGetProperty("server", out JsonElement server) ? server.GetString() : null,
             Name = item.TryGetProperty("tool", out JsonElement tool) ? tool.GetString() ?? string.Empty : string.Empty,
             Input = item.TryGetProperty("arguments", out JsonElement arguments) && arguments.ValueKind != JsonValueKind.Null ? arguments.GetRawText() : "{}"
+        };
+
+    private PromptToolCallEvent Searched(JsonElement item)
+        => new()
+        {
+            Id = item.GetProperty("id").GetString() ?? string.Empty,
+            Server = null,
+            Name = "web_search",
+            Input = new JsonObject { ["query"] = item.TryGetProperty("query", out JsonElement query) ? query.GetString() : string.Empty }.ToJsonString()
         };
 
     private PromptToolResultEvent Result(JsonElement item)

@@ -25,6 +25,7 @@ public sealed class PromptSessionModesTests
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
+        libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns([]);
         toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
     }
@@ -403,7 +404,7 @@ public sealed class PromptSessionModesTests
         Assert.Contains("rate it", seen);
         Assert.Matches("Request r[0-9a-f]{12}:", seen);
         Assert.Contains("respond", seen);
-        Assert.Equal(["respond"], offered!.Select(tool => tool.Name));
+        Assert.Equal(["respond"], offered!.Select(tool => tool.Name).Where(name => name is not ("current_time" or "tool_search" or "delegate")));
         Assert.Equal(PromptSessionState.Waiting, session.State);
     }
 
@@ -435,7 +436,7 @@ public sealed class PromptSessionModesTests
         await Assert.ThrowsAnyAsync<Exception>(() => asking);
 
         Assert.Contains("missing the property", first.Message);
-        PromptTool respond = Assert.Single(offered!);
+        PromptTool respond = Assert.Single(offered!, tool => tool.Name == "respond");
         ArgumentException unknown = await Assert.ThrowsAsync<ArgumentException>(() => respond.Handler(JsonDocument.Parse("""{"request_id":"rnone","answer":{}}""").RootElement, CancellationToken.None));
         Assert.Contains("rnone", unknown.Message);
         Assert.NotNull(identifier);

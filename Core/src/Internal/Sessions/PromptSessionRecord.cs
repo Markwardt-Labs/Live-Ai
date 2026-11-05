@@ -26,6 +26,11 @@ internal sealed record PromptSessionRecord
     public IReadOnlyDictionary<string, string> ModelSettings { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// Gets a value indicating whether the tool may use its own web search, which is when the session enables search and the engine has one.
+    /// </summary>
+    public bool NativeSearch { get; init; }
+
+    /// <summary>
     /// Gets the custom instructions for the AI, or <see langword="null" /> for none.
     /// </summary>
     public string? Instructions { get; init; }
@@ -76,7 +81,7 @@ internal sealed record PromptSessionRecord
     /// <param name="other">The record to compare with.</param>
     /// <returns>Whether the process can be kept.</returns>
     public bool SameProcess(PromptSessionRecord other)
-        => Instructions == other.Instructions && McpServers.Count == other.McpServers.Count && McpServers.All(server => other.McpServers.TryGetValue(server.Key, out PromptMcpServer? same) && same.Equals(server.Value)) && (!Engine.StartsWithModel || SameModel(other));
+        => Instructions == other.Instructions && NativeSearch == other.NativeSearch && McpServers.Count == other.McpServers.Count && McpServers.All(server => other.McpServers.TryGetValue(server.Key, out PromptMcpServer? same) && same.Equals(server.Value)) && (!Engine.StartsWithModel || SameModel(other));
 
     /// <summary>
     /// Tells whether the other record runs the same model with the same settings.

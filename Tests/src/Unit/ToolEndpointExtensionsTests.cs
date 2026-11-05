@@ -23,6 +23,14 @@ public sealed class ToolEndpointExtensionsTests
     }
 
     [Fact]
+    public void Guidance_WhenTheToolMaySearchTheWeb_SaysSoOtherwiseNot()
+    {
+        Assert.Contains("search the web with your own web search tool", Endpoint(true).Guidance(Record() with { NativeSearch = true }));
+        Assert.Contains("search the web with your own web search tool", ((ToolEndpoint?)null).Guidance(Record() with { NativeSearch = true }));
+        Assert.DoesNotContain("search the web", Endpoint(true).Guidance(Record()));
+    }
+
+    [Fact]
     public void Guidance_WithoutToolsSaysThereAreNone()
         => Assert.Contains("You have no tools", ((ToolEndpoint?)null).Guidance(Record()));
 
