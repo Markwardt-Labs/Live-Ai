@@ -17,21 +17,18 @@ internal static class PromptImageOptionsExtensions
             {
                 case OpenAiImageOptions openAi:
                     ArgumentException.ThrowIfNullOrWhiteSpace(openAi.ApiKey, nameof(options));
-
-                    if (!Enum.IsDefined(openAi.Capability))
-                    {
-                        throw new ArgumentOutOfRangeException(nameof(options), openAi.Capability, "The capability is not a defined value.");
-                    }
-
                     break;
                 case StableDiffusionImageOptions stable:
                     ArgumentNullException.ThrowIfNull(stable.Server);
-                    ArgumentOutOfRangeException.ThrowIfLessThan(stable.Width, 1);
-                    ArgumentOutOfRangeException.ThrowIfLessThan(stable.Height, 1);
-                    ArgumentOutOfRangeException.ThrowIfLessThan(stable.DraftSteps, 1);
-                    ArgumentOutOfRangeException.ThrowIfLessThan(stable.StandardSteps, 1);
-                    ArgumentOutOfRangeException.ThrowIfLessThan(stable.HighSteps, 1);
-                    ArgumentOutOfRangeException.ThrowIfNegative(stable.Guidance);
+
+                    PromptCapabilityModels? models = stable.Models;
+                    ArgumentNullException.ThrowIfNull(models, nameof(options));
+
+                    if (new[] { models.Fast, models.Balanced, models.Strong, models.Max }.Any(string.IsNullOrWhiteSpace))
+                    {
+                        throw new ArgumentException("Every capability needs the title of a checkpoint to load.", nameof(options));
+                    }
+
                     break;
                 default:
                     throw new ArgumentException($"{options.GetType().Name} is not a kind of image options the library knows.", nameof(options));
@@ -46,8 +43,8 @@ internal static class PromptImageOptionsExtensions
         public IPromptImageGenerator CreateGenerator()
             => options switch
             {
-                OpenAiImageOptions openAi => new OpenAiCapabilityImageGenerator(openAi.ApiKey ?? string.Empty, openAi.Capability),
-                StableDiffusionImageOptions stable => new StableDiffusionImageGenerator(stable.Server, stable.Model, stable.Width, stable.Height, [stable.DraftSteps, stable.StandardSteps, stable.HighSteps], stable.Guidance, stable.PromptGuide, new HttpClient(new SocketsHttpHandler()) { Timeout = TimeSpan.FromMinutes(10) }),
+                OpenAiImageOptions openAi => new OpenAiCapabilityImageGenerator(openAi.ApiKey),
+                StableDiffusionImageOptions stable => new StableDiffusionImageGenerator(stable.Server, stable.Models, 1024, 1024, [8, 20, 35], 7, null, new HttpClient(new SocketsHttpHandler()) { Timeout = TimeSpan.FromMinutes(10) }),
                 _ => throw new ArgumentException($"{options.GetType().Name} is not a kind of image options the library knows.", nameof(options))
             };
     }

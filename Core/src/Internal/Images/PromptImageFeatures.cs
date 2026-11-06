@@ -24,5 +24,10 @@ internal enum PromptImageFeatures
     /// <summary>
     /// It takes a seed that makes an image repeatable (<see cref="PromptImageRequest.Seed" />) and reports the seed it used.
     /// </summary>
-    Seed = 4
+    Seed = 4,
+
+    /// <summary>
+    /// The generator has models of different capability and can make an image with the one a request asks for.
+    /// </summary>
+    Capability = 8
 }

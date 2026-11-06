@@ -17,7 +17,7 @@ public sealed class PromptSessionSettingsTests
     [Fact]
     public void ItStartsWithWhatIsStored()
     {
-        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { Capability = PromptCapability.Strong, Effort = PromptEffort.High, ImageGeneration = new StableDiffusionImageOptions() };
+        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { Capability = PromptCapability.Strong, Effort = PromptEffort.High, ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") } };
 
         PromptSessionSettings settings = Settings(record);
 
@@ -25,7 +25,7 @@ public sealed class PromptSessionSettingsTests
         Assert.Equal(["db"], settings.McpServers.Keys);
         Assert.Empty(settings.Tools);
         Assert.Null(settings.Asker);
-        Assert.Equal(new StableDiffusionImageOptions(), settings.ImageGeneration);
+        Assert.Equal(new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") }, settings.ImageGeneration);
     }
 
     [Fact]
@@ -39,7 +39,7 @@ public sealed class PromptSessionSettingsTests
         settings.IsSandboxed = false;
         settings.IsWebAllowed = true;
         settings.Asker = (_, _) => Task.FromResult(string.Empty);
-        settings.ImageGeneration = new StableDiffusionImageOptions();
+        settings.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
         settings.Instructions = "y";
 
         Assert.Equal(8, changes);
@@ -50,7 +50,7 @@ public sealed class PromptSessionSettingsTests
     {
         PromptSessionSettings settings = Settings();
         PromptSessionSettings other = Settings();
-        PromptImageOptions options = new StableDiffusionImageOptions { Width = 640 };
+        PromptImageOptions options = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
         settings.ImageGeneration = options;
 
         settings.Snapshot().CopyTo(other);

@@ -37,7 +37,7 @@ public sealed class PromptSessionOptionsJsonTests
     [Fact]
     public void ThePolymorphicOptionsOfALinkComeBackAsTheSameKind()
     {
-        PromptSessionLink link = new() { Id = Guid.NewGuid(), Provider = "Codex", WorkingFolder = "/w", Options = new CodexSessionOptions(), ImageGeneration = new OpenAiImageOptions { ApiKey = "secret", Capability = PromptCapability.Max }, Capability = PromptCapability.Strong, Effort = PromptEffort.High, IsWebAllowed = true, Instructions = "Be brief." };
+        PromptSessionLink link = new() { Id = Guid.NewGuid(), Provider = "Codex", WorkingFolder = "/w", Options = new CodexSessionOptions(), ImageGeneration = new OpenAiImageOptions { ApiKey = "secret" }, Capability = PromptCapability.Strong, Effort = PromptEffort.High, IsWebAllowed = true, Instructions = "Be brief." };
 
         string json = JsonSerializer.Serialize(link);
         PromptSessionLink? back = JsonSerializer.Deserialize<PromptSessionLink>(json);

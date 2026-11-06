@@ -44,4 +44,9 @@ internal sealed record PromptImageRequest
     /// Gets the seed that makes the image repeatable, or <see langword="null" /> for a random one. Only a generator with <see cref="PromptImageFeatures.Seed" /> is given this.
     /// </summary>
     public long? Seed { get; init; }
+
+    /// <summary>
+    /// Gets how capable the model that makes the image should be, or <see langword="null" /> for the generator's usual one. Only a generator with <see cref="PromptImageFeatures.Capability" /> takes it.
+    /// </summary>
+    public PromptCapability? Capability { get; init; }
 }

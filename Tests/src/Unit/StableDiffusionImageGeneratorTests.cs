@@ -8,8 +8,8 @@ public sealed class StableDiffusionImageGeneratorTests
 
     private Func<HttpRequestMessage, HttpResponseMessage> answer = _ => new HttpResponseMessage(HttpStatusCode.NotFound);
 
-    private IPromptImageGenerator Generator(string? model = null, int width = 1024, int height = 1024, string? guide = null)
-        => new StableDiffusionImageGenerator(new Uri("http://localhost:7860"), model, width, height, [6, 20, 40], 3.5, guide, new HttpClient(new Answering(request =>
+    private IPromptImageGenerator Generator(PromptCapabilityModels? models = null, int width = 1024, int height = 1024, string? guide = null)
+        => new StableDiffusionImageGenerator(new Uri("http://localhost:7860"), models ?? PromptCapabilityModels.All("default.safetensors"), width, height, [6, 20, 40], 3.5, guide, new HttpClient(new Answering(request =>
         {
             sent.Add(request);
             bodies.Add(JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult()).RootElement.Clone());
@@ -60,7 +60,6 @@ public sealed class StableDiffusionImageGeneratorTests
         JsonElement body = bodies.Single();
         Assert.Equal((512, 768, -1L), (body.GetProperty("width").GetInt32(), body.GetProperty("height").GetInt32(), body.GetProperty("seed").GetInt64()));
         Assert.False(body.TryGetProperty("negative_prompt", out _));
-        Assert.False(body.TryGetProperty("override_settings", out _));
         Assert.Null(Assert.Single(images).Seed);
     }
 
@@ -83,19 +82,9 @@ public sealed class StableDiffusionImageGeneratorTests
     {
         answer = _ => Json(Answer());
 
-        await Generator("sdxl_turbo.safetensors").Generate(new PromptImageRequest { Prompt = "x" });
+        await Generator(PromptCapabilityModels.All("sdxl_turbo.safetensors")).Generate(new PromptImageRequest { Prompt = "x" });
 
         Assert.Equal(("sdxl_turbo.safetensors", false), (bodies.Single().GetProperty("override_settings").GetProperty("sd_model_checkpoint").GetString(), bodies.Single().GetProperty("override_settings_restore_afterwards").GetBoolean()));
-    }
-
-    [Fact]
-    public async Task Generate_LeavesTheSettingsOfTheServerAloneWhenNoCheckpointIsGiven()
-    {
-        answer = _ => Json(Answer());
-
-        await Generator().Generate(new PromptImageRequest { Prompt = "x" });
-
-        Assert.False(bodies.Single().TryGetProperty("override_settings", out _) || bodies.Single().TryGetProperty("override_settings_restore_afterwards", out _));
     }
 
     [Fact]
@@ -142,5 +131,37 @@ public sealed class StableDiffusionImageGeneratorTests
 
         Assert.Contains("http://localhost:7860", exception.Message, StringComparison.Ordinal);
         Assert.Contains("API turned on", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(PromptCapability.Fast, "fast.safetensors")]
+    [InlineData(PromptCapability.Balanced, "balanced.safetensors")]
+    [InlineData(PromptCapability.Strong, "strong.safetensors")]
+    [InlineData(PromptCapability.Max, "max.safetensors")]
+    public async Task Generate_LoadsTheCheckpointOfTheCapabilityTheRequestAsksFor(PromptCapability capability, string checkpoint)
+    {
+        answer = _ => Json($$"""{"images":["{{Convert.ToBase64String(FakeImageGenerator.Png)}}"]}""");
+        PromptCapabilityModels models = new() { Fast = "fast.safetensors", Balanced = "balanced.safetensors", Strong = "strong.safetensors", Max = "max.safetensors" };
+
+        await Generator(models).Generate(new PromptImageRequest { Prompt = "x", Capability = capability });
+
+        Assert.Equal(checkpoint, bodies.Single().GetProperty("override_settings").GetProperty("sd_model_checkpoint").GetString());
+    }
+
+    [Fact]
+    public async Task Generate_WithoutACapability_LoadsTheBalancedCheckpoint()
+    {
+        answer = _ => Json($$"""{"images":["{{Convert.ToBase64String(FakeImageGenerator.Png)}}"]}""");
+
+        await Generator(new PromptCapabilityModels { Fast = "a", Balanced = "b", Strong = "c", Max = "d" }).Generate(new PromptImageRequest { Prompt = "x" });
+
+        Assert.Equal("b", bodies.Single().GetProperty("override_settings").GetProperty("sd_model_checkpoint").GetString());
+    }
+
+    [Fact]
+    public void Features_OfferTheCapabilityOnlyWhenTheCheckpointsDiffer()
+    {
+        Assert.False(Generator(PromptCapabilityModels.All("one")).Features.HasFlag(PromptImageFeatures.Capability));
+        Assert.True(Generator(new PromptCapabilityModels { Fast = "a", Balanced = "b", Strong = "b", Max = "b" }).Features.HasFlag(PromptImageFeatures.Capability));
     }
 }

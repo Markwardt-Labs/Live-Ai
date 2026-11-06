@@ -11,8 +11,8 @@ public sealed class OpenAiCapabilityImageGeneratorTests
     public OpenAiCapabilityImageGeneratorTests()
         => list = _ => Json("""{"data":[]}""");
 
-    private OpenAiCapabilityImageGenerator Generator(PromptCapability capability)
-        => new("sk-test", capability, new Answering(request =>
+    private OpenAiCapabilityImageGenerator Generator()
+        => new("sk-test", new Answering(request =>
         {
             sent.Add(request);
 
@@ -29,11 +29,11 @@ public sealed class OpenAiCapabilityImageGeneratorTests
         => new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
     [Fact]
-    public void TheGenerator_OffersTransparencyAndNeedsNoAdvice()
+    public void TheGenerator_OffersTransparencyAndACapabilityChoiceAndNeedsNoAdvice()
     {
-        IPromptImageGenerator generator = Generator(PromptCapability.Balanced);
+        IPromptImageGenerator generator = Generator();
 
-        Assert.Equal((PromptImageFeatures.Transparency, null), (generator.Features, generator.PromptGuide));
+        Assert.Equal((PromptImageFeatures.Transparency | PromptImageFeatures.Capability, null), (generator.Features, generator.PromptGuide));
     }
 
     [Theory]
@@ -45,7 +45,7 @@ public sealed class OpenAiCapabilityImageGeneratorTests
     {
         list = _ => Json("""{"error":{"message":"nope"}}""", HttpStatusCode.InternalServerError);
 
-        await Generator(capability).Generate(new PromptImageRequest { Prompt = "x" });
+        await Generator().Generate(new PromptImageRequest { Prompt = "x", Capability = capability });
 
         Assert.Equal([expected], models);
     }
@@ -58,16 +58,16 @@ public sealed class OpenAiCapabilityImageGeneratorTests
     {
         list = _ => Json("""{"data":[{"id":"gpt-image-2.6-flare","created":100},{"id":"gpt-image-3-flare","created":300},{"id":"gpt-image-3-mini","created":300},{"id":"gpt-image-1-mini","created":50},{"id":"gpt-image-3-sunburst","created":300},{"id":"gpt-image-2","created":900}]}""");
 
-        await Generator(capability).Generate(new PromptImageRequest { Prompt = "x" });
+        await Generator().Generate(new PromptImageRequest { Prompt = "x", Capability = capability });
 
         Assert.Equal([expected], models);
     }
 
     [Fact]
-    public async Task Generate_ListsTheModelsOnceAndKeepsTheChoiceForEveryImage()
+    public async Task Generate_ListsTheModelsOnceAndKeepsTheChoiceForEveryImageOfACapability()
     {
         list = _ => Json("""{"data":[{"id":"gpt-image-2.6-flare","created":100}]}""");
-        OpenAiCapabilityImageGenerator generator = Generator(PromptCapability.Balanced);
+        OpenAiCapabilityImageGenerator generator = Generator();
 
         await generator.Generate(new PromptImageRequest { Prompt = "one" });
         await generator.Generate(new PromptImageRequest { Prompt = "two" });
@@ -79,9 +79,24 @@ public sealed class OpenAiCapabilityImageGeneratorTests
     [Fact]
     public async Task Generate_SendsTheListingAndTheImagesTheKey()
     {
-        await Generator(PromptCapability.Balanced).Generate(new PromptImageRequest { Prompt = "x" });
+        await Generator().Generate(new PromptImageRequest { Prompt = "x" });
 
         Assert.All(sent, request => Assert.Equal("Bearer sk-test", request.Headers.Authorization!.ToString()));
         Assert.Equal(["https://api.openai.com/v1/models", "https://api.openai.com/v1/images/generations"], sent.Select(request => request.RequestUri!.ToString()));
+    }
+
+    [Fact]
+    public async Task Generate_MakesEachRequestWithTheModelOfItsOwnCapabilityFromOneListing()
+    {
+        list = _ => Json("""{"data":[{"id":"gpt-image-1-mini","created":50},{"id":"gpt-image-2.6-flare","created":100},{"id":"gpt-image-2.6-sunburst","created":100}]}""");
+        OpenAiCapabilityImageGenerator generator = Generator();
+
+        await generator.Generate(new PromptImageRequest { Prompt = "sketch", Capability = PromptCapability.Fast });
+        await generator.Generate(new PromptImageRequest { Prompt = "usual" });
+        await generator.Generate(new PromptImageRequest { Prompt = "final", Capability = PromptCapability.Max });
+        await generator.Generate(new PromptImageRequest { Prompt = "sketch again", Capability = PromptCapability.Fast });
+
+        Assert.Equal(["gpt-image-1-mini", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "gpt-image-1-mini"], models);
+        Assert.Single(sent, request => request.Method == HttpMethod.Get);
     }
 }

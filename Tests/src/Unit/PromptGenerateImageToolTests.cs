@@ -39,6 +39,7 @@ public sealed class PromptGenerateImageToolTests
     [InlineData((int)(PromptImageFeatures.None), new[] { "prompt", "path", "width", "height", "quality", "count" })]
     [InlineData((int)(PromptImageFeatures.Transparency), new[] { "prompt", "path", "width", "height", "quality", "count", "transparent" })]
     [InlineData((int)(PromptImageFeatures.NegativePrompt | PromptImageFeatures.Seed), new[] { "prompt", "path", "width", "height", "quality", "count", "negative_prompt", "seed" })]
+    [InlineData((int)(PromptImageFeatures.Capability | PromptImageFeatures.Transparency), new[] { "prompt", "path", "width", "height", "quality", "count", "capability", "transparent" })]
     public void Create_OffersOnlyWhatTheGeneratorCanDo(int features, string[] expected)
     {
         generator.Features = (PromptImageFeatures)features;
@@ -97,6 +98,50 @@ public sealed class PromptGenerateImageToolTests
 
         PromptImageRequest request = generator.Requests.Single();
         Assert.Equal((640, 480, PromptImageQuality.High, true, null, 9L), (request.Width, request.Height, request.Quality, request.Transparent, request.NegativePrompt, request.Seed));
+    }
+
+    [Theory]
+    [InlineData("fast", PromptCapability.Fast)]
+    [InlineData("balanced", PromptCapability.Balanced)]
+    [InlineData("STRONG", PromptCapability.Strong)]
+    [InlineData("max", PromptCapability.Max)]
+    public async Task Run_PassesTheCapabilityTheAiChoseForTheTask(string asked, PromptCapability expected)
+    {
+        generator.Features = PromptImageFeatures.Capability;
+
+        await Run($$"""{"prompt":"x","path":"a.png","capability":"{{asked}}"}""");
+
+        Assert.Equal(expected, generator.Requests.Single().Capability);
+    }
+
+    [Fact]
+    public async Task Run_WithoutACapabilityOrWithAnUnknownOneLeavesTheChoiceToTheGenerator()
+    {
+        generator.Features = PromptImageFeatures.Capability;
+
+        await Run("""{"prompt":"x","path":"a.png"}""");
+        await Run("""{"prompt":"x","path":"b.png","capability":"ultra"}""");
+
+        Assert.All(generator.Requests, request => Assert.Null(request.Capability));
+    }
+
+    [Fact]
+    public async Task Run_IgnoresACapabilityWhenTheGeneratorHasOnlyOneModel()
+    {
+        await Run("""{"prompt":"x","path":"a.png","capability":"max"}""");
+
+        Assert.Null(generator.Requests.Single().Capability);
+    }
+
+    [Fact]
+    public void Create_ExplainsTheCapabilityChoiceToTheAi()
+    {
+        generator.Features = PromptImageFeatures.Capability;
+
+        JsonElement capability = Tool().InputSchema.GetProperty("properties").GetProperty("capability");
+
+        Assert.Equal(["fast", "balanced", "strong", "max"], capability.GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("final image", capability.GetProperty("description").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]

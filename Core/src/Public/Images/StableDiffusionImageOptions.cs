@@ -1,52 +1,30 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Image generation with a Stable Diffusion server on this machine or the network that has the AUTOMATIC1111 API (AUTOMATIC1111 itself or Forge, started with its API on, or another server with that API such as the server of stable-diffusion.cpp). It takes a negative prompt and a seed, and reports the seed. The quality the AI asks for becomes a number of steps, which depends on the model the server loads (a turbo model needs few, a full one many), so give the numbers that suit it.
+/// Image generation with a Stable Diffusion server on this machine or the network that has the AUTOMATIC1111 API (AUTOMATIC1111 itself or Forge, started with its API on, or another server with that API such as the server of stable-diffusion.cpp). Only how to reach the server is set here: what to draw, the size, the quality, a negative prompt and a seed are for the AI to ask for through its tool.
 /// </summary>
 public sealed record StableDiffusionImageOptions : PromptImageOptions
 {
+    /// <summary>
+    /// Lists the checkpoints of a Stable Diffusion server that can be used for <see cref="Models" />, by the title the server lists them with.
+    /// </summary>
+    /// <param name="server">The address of the server, or <see langword="null" /> for <c>http://localhost:7860</c>.</param>
+    /// <param name="cancellation">Cancels the listing.</param>
+    /// <returns>The titles of the checkpoints.</returns>
+    /// <exception cref="InvalidOperationException">The server could not be asked for its checkpoints, with the reason (it is not running with its API on, say).</exception>
+    public static async Task<IReadOnlyList<string>> ListModels(Uri? server = null, CancellationToken cancellation = default)
+    {
+        using HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
+        return [.. (await new StableDiffusionImageCatalog(server ?? new Uri("http://localhost:7860"), http).List(cancellation)).Select(model => model.Id)];
+    }
+
     /// <summary>
     /// Gets the address of the server. It is <c>http://localhost:7860</c> by default.
     /// </summary>
     public Uri Server { get; init; } = new("http://localhost:7860");
 
     /// <summary>
-    /// Gets the title of the checkpoint to load for each image, as the server lists it, or <see langword="null" /> for the one the server has loaded.
+    /// Gets the checkpoint to load for each capability the AI asks for when it makes an image, by the title the server lists (see <see cref="ListModels" />): one checkpoint for all of them (<see cref="PromptCapabilityModels.All" />) or a different one for each, so the AI can use a fast checkpoint for sketches and a strong one for a final image. It has no default, because which checkpoint draws the images is not something the library can know about a server.
     /// </summary>
-    public string? Model { get; init; }
-
-    /// <summary>
-    /// Gets the width in pixels when the AI gives none: what the model was trained at (512 for Stable Diffusion 1.5, 1024 for SDXL).
-    /// </summary>
-    public int Width { get; init; } = 1024;
-
-    /// <summary>
-    /// Gets the height in pixels when the AI gives none.
-    /// </summary>
-    public int Height { get; init; } = 1024;
-
-    /// <summary>
-    /// Gets the sampling steps of a draft.
-    /// </summary>
-    public int DraftSteps { get; init; } = 8;
-
-    /// <summary>
-    /// Gets the sampling steps of a standard image.
-    /// </summary>
-    public int StandardSteps { get; init; } = 20;
-
-    /// <summary>
-    /// Gets the sampling steps of a high quality image.
-    /// </summary>
-    public int HighSteps { get; init; } = 35;
-
-    /// <summary>
-    /// Gets the classifier-free guidance scale (<c>cfg_scale</c>); turbo models want a low one, around 1 to 2.
-    /// </summary>
-    public double Guidance { get; init; } = 7;
-
-    /// <summary>
-    /// Gets advice on how to describe an image to the model, or <see langword="null" /> for the usual advice for Stable Diffusion (comma separated phrases). Give plain sentences for a model that follows them, such as the FLUX family.
-    /// </summary>
-    public string? PromptGuide { get; init; }
+    public required PromptCapabilityModels Models { get; init; }
 }

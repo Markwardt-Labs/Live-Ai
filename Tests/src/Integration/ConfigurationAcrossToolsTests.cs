@@ -46,7 +46,7 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         configuration.IsWebAllowed = variant == 0;
         configuration.IsSandboxed = variant != 0;
         configuration.Instructions = variant == 0 ? "Be brief." : "Be thorough.";
-        configuration.ImageGeneration = variant == 0 ? new OpenAiImageOptions { ApiKey = "sk-test", Capability = PromptCapability.Max } : new StableDiffusionImageOptions { Width = 640, Model = "m" };
+        configuration.ImageGeneration = variant == 0 ? new OpenAiImageOptions { ApiKey = "sk-test" } : new StableDiffusionImageOptions { Server = new Uri("http://sd:7860/"), Models = new PromptCapabilityModels { Fast = "a", Balanced = "b", Strong = "c", Max = "d" } };
     }
 
     private (PromptCapability, PromptEffort, bool, bool, bool, string?, PromptImageOptions?) Read(IPromptSessionConfiguration configuration)

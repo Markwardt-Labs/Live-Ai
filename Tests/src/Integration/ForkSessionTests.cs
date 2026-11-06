@@ -204,7 +204,7 @@ public sealed class ForkSessionTests : IDisposable
         origin.Configuration.IsShellAllowed = true;
         origin.Configuration.IsSandboxed = false;
         origin.Configuration.IsWebAllowed = true;
-        PromptImageOptions images = new StableDiffusionImageOptions { Width = 640 };
+        PromptImageOptions images = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
         origin.Configuration.ImageGeneration = images;
         origin.Configuration.Instructions = "Be brief.";
         origin.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");

@@ -332,13 +332,13 @@ public sealed class ProviderTests : IDisposable
         created.Configuration.IsSandboxed = false;
         created.Configuration.IsWebAllowed = true;
         created.Configuration.Instructions = "Be brief.";
-        created.Configuration.ImageGeneration = new StableDiffusionImageOptions { Width = 640 };
+        created.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
         await created.DisposeAsync();
 
         IPromptSession loaded = temp.Track(await prompter.Load(created.Id));
 
         Assert.Equal((PromptCapability.Strong, PromptEffort.High, true, false, true, "Be brief."), (loaded.Configuration.Capability, loaded.Configuration.Effort, loaded.Configuration.IsShellAllowed, loaded.Configuration.IsSandboxed, loaded.Configuration.IsWebAllowed, loaded.Configuration.Instructions));
-        Assert.Equal(new StableDiffusionImageOptions { Width = 640 }, loaded.Configuration.ImageGeneration);
+        Assert.Equal(new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") }, loaded.Configuration.ImageGeneration);
         Assert.Contains("very-secret", await Stored(), StringComparison.Ordinal);
         await loaded.Request("again");
         Assert.Equal("very-secret", await File.ReadAllTextAsync(temp.Combine("claude-key.txt")));

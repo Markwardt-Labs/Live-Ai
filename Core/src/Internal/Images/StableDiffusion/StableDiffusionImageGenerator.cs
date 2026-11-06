@@ -4,21 +4,21 @@ namespace Markwardt.LiveAi;
 /// Makes images with a server that has the AUTOMATIC1111 API.
 /// </summary>
 /// <param name="baseUrl">The address of the server.</param>
-/// <param name="model">The checkpoint to load for each image, or <see langword="null" /> for the one that is loaded.</param>
+/// <param name="models">The checkpoint to load for each capability a request asks for.</param>
 /// <param name="width">The width when none is asked for.</param>
 /// <param name="height">The height when none is asked for.</param>
 /// <param name="steps">The sampling steps of a draft, a standard image and a high quality image, in that order.</param>
 /// <param name="guidance">The guidance scale.</param>
 /// <param name="promptGuide">Advice on how to describe an image, or <see langword="null" /> for the usual advice.</param>
 /// <param name="http">Sends the requests, and is not disposed by the generator.</param>
-internal sealed class StableDiffusionImageGenerator(Uri baseUrl, string? model, int width, int height, int[] steps, double guidance, string? promptGuide, HttpClient http) : IPromptImageGenerator
+internal sealed class StableDiffusionImageGenerator(Uri baseUrl, PromptCapabilityModels models, int width, int height, int[] steps, double guidance, string? promptGuide, HttpClient http) : IPromptImageGenerator
 {
     private readonly IStableDiffusionImageCatalog catalog = new StableDiffusionImageCatalog(baseUrl, http);
 
     private readonly string endpoint = baseUrl.ToString().TrimEnd('/') + "/sdapi/v1/txt2img";
 
     /// <inheritdoc />
-    public PromptImageFeatures Features => catalog.GetFeatures();
+    public PromptImageFeatures Features => catalog.GetFeatures() | (new[] { models.Fast, models.Balanced, models.Strong, models.Max }.Distinct().Count() > 1 ? PromptImageFeatures.Capability : PromptImageFeatures.None);
 
     /// <inheritdoc />
     public string? PromptGuide { get; } = promptGuide ?? "Describe the image as comma separated phrases (the subject, the setting, the style, the lighting, the camera) rather than long sentences, and name what to avoid in negative_prompt.";
@@ -45,11 +45,8 @@ internal sealed class StableDiffusionImageGenerator(Uri baseUrl, string? model, 
             body["negative_prompt"] = request.NegativePrompt;
         }
 
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            body["override_settings"] = new JsonObject { ["sd_model_checkpoint"] = model };
-            body["override_settings_restore_afterwards"] = false;
-        }
+        body["override_settings"] = new JsonObject { ["sd_model_checkpoint"] = models.For(request.Capability ?? PromptCapability.Balanced) };
+        body["override_settings_restore_afterwards"] = false;
 
         try
         {

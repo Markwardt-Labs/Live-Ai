@@ -25,11 +25,10 @@ public sealed class ApiKeyRedactionTests
     [Fact]
     public void TheImageOptions_HideTheKeyWhenPrinted()
     {
-        string text = new OpenAiImageOptions { ApiKey = key, Capability = PromptCapability.Max }.ToString();
+        string text = new OpenAiImageOptions { ApiKey = key }.ToString();
 
         Assert.DoesNotContain(key, text, StringComparison.Ordinal);
         Assert.Contains("ApiKey = ***", text, StringComparison.Ordinal);
-        Assert.Contains("Capability = Max", text, StringComparison.Ordinal);
     }
 
     [Fact]

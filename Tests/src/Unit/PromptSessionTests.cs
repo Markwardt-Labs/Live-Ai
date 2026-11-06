@@ -1255,7 +1255,7 @@ public sealed class PromptSessionTests
         Library(Tool("read_file"));
         Plain();
         PromptSession session = Session(Record(), generators: _ => generator);
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions();
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
 
         await session.Messages("one");
 
@@ -1271,11 +1271,11 @@ public sealed class PromptSessionTests
         libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
         Library(Tool("read_file"));
         Plain();
-        PromptSession session = Session(Record(), generators: options => options is StableDiffusionImageOptions { Width: 512 } ? first : second);
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Width = 512 };
+        PromptSession session = Session(Record(), generators: options => options is StableDiffusionImageOptions { Models.Fast: "a" } ? first : second);
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("a") };
         await session.Messages("one");
 
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Width = 640 };
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("b") };
         await session.Messages("two");
         session.Configuration.ImageGeneration = null;
         await session.Messages("three");

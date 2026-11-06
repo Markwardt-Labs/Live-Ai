@@ -418,6 +418,11 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
             ["count"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = generateMaxCount, ["description"] = "How many images to make; each is a different version." }
         };
 
+        if (features.HasFlag(PromptImageFeatures.Capability))
+        {
+            properties["capability"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("fast", "balanced", "strong", "max"), ["description"] = "How capable the image model should be, chosen for the task: fast is cheapest and quickest, for sketches and many variants; balanced is the usual choice; strong and max are the best quality and cost the most, for a final image or hard detail such as text. Default balanced." };
+        }
+
         if (features.HasFlag(PromptImageFeatures.Transparency))
         {
             properties["transparent"] = new JsonObject { ["type"] = "boolean", ["description"] = "Make the background transparent, for an icon or a sprite." };
@@ -482,7 +487,8 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
             Quality = Text(arguments, "quality")?.ToLowerInvariant() switch { "draft" => PromptImageQuality.Draft, "high" => PromptImageQuality.High, _ => PromptImageQuality.Standard },
             Transparent = features.HasFlag(PromptImageFeatures.Transparency) && arguments.TryGetProperty("transparent", out JsonElement transparent) && transparent.ValueKind == JsonValueKind.True,
             NegativePrompt = features.HasFlag(PromptImageFeatures.NegativePrompt) ? Text(arguments, "negative_prompt") : null,
-            Seed = features.HasFlag(PromptImageFeatures.Seed) ? Number(arguments, "seed") : null
+            Seed = features.HasFlag(PromptImageFeatures.Seed) ? Number(arguments, "seed") : null,
+            Capability = features.HasFlag(PromptImageFeatures.Capability) ? Text(arguments, "capability")?.ToLowerInvariant() switch { "fast" => PromptCapability.Fast, "strong" => PromptCapability.Strong, "max" => PromptCapability.Max, "balanced" => PromptCapability.Balanced, _ => null } : null
         };
 
         string stem = Path.GetExtension(path) is { Length: > 0 } known && known.ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".webp" or ".gif" ? path[..^Path.GetExtension(path).Length] : path;
