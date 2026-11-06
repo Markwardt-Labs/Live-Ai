@@ -37,6 +37,27 @@ internal static class PromptMediaTypes
         [".yml"] = "application/yaml"
     };
 
+    extension(ReadOnlyMemory<byte> content)
+    {
+        /// <summary>
+        /// Tells which image type encoded bytes are by their first bytes.
+        /// </summary>
+        /// <returns>The media type of a PNG, JPEG, GIF or WebP image, and <c>application/octet-stream</c> for anything else.</returns>
+        public string ToImageMediaType()
+        {
+            ReadOnlySpan<byte> bytes = content.Span;
+
+            return bytes switch
+            {
+                [0x89, 0x50, 0x4E, 0x47, ..] => "image/png",
+                [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+                [0x47, 0x49, 0x46, 0x38, ..] => "image/gif",
+                [0x52, 0x49, 0x46, 0x46, _, _, _, _, 0x57, 0x45, 0x42, 0x50, ..] => "image/webp",
+                _ => "application/octet-stream"
+            };
+        }
+    }
+
     extension(string name)
     {
         /// <summary>

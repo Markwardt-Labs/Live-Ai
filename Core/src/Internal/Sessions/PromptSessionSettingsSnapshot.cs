@@ -54,6 +54,11 @@ internal sealed record PromptSessionSettingsSnapshot
     public required bool EnableSearch { get; init; }
 
     /// <summary>
+    /// Gets the generator that makes the images the AI asks for, or <see langword="null" /> when the AI has no tool for it.
+    /// </summary>
+    public IPromptImageGenerator? ImageGenerator { get; init; }
+
+    /// <summary>
     /// Gets the function that blocks addresses of the fetch tool, or <see langword="null" /> to allow all.
     /// </summary>
     public Func<Uri, CancellationToken, Task<bool>>? WebFilter { get; init; }
@@ -114,6 +119,7 @@ internal sealed record PromptSessionSettingsSnapshot
         target.BeforeToolCall = BeforeToolCall;
         target.AfterToolCall = AfterToolCall;
         target.WebFilter = WebFilter;
+        target.ImageGenerator = ImageGenerator;
         target.Asker = Asker;
         target.Limits = Limits;
         target.Mounts.Clear();

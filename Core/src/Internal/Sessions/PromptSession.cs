@@ -59,6 +59,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptTool? searchTool;
 
+    private PromptTool? generateTool;
+
+    private IPromptImageGenerator? generateWith;
+
     private PromptTool? timeTool;
 
     private PromptTool? toolSearchTool;
@@ -156,7 +160,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         this.libraryTools = libraryTools;
         this.opener = opener;
         requester = new PromptRequester(this, log, Time);
-        settings = new PromptSessionSettings(record, [.. libraryTools.Names, libraryTools.ShellName, libraryTools.AskName, libraryTools.ImageName, libraryTools.FetchName, libraryTools.SearchName, libraryTools.TimeName, libraryTools.ToolSearchName, libraryTools.DelegateName, respondName]);
+        settings = new PromptSessionSettings(record, [.. libraryTools.GetReservedNames(), respondName]);
         settings.Changed += OnSettingsChanged;
     }
 
@@ -1442,6 +1446,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         PromptTool? images;
         PromptTool? fetch;
         PromptTool? search;
+        PromptTool? generate;
         PromptTool? delegation;
 
         lock (gate)
@@ -1467,6 +1472,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             {
                 fileTools = null;
                 imageTool = null;
+                generateTool = null;
                 fileToolMounts = snapshot.Mounts;
                 fileToolWorkspace = workspace;
             }
@@ -1474,11 +1480,18 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             PromptTool[] files = !hasFiles ? [] : fileTools ??= libraryTools.Create(new MountedStore(workspace, available), available.Keys.ToArray(), workspace is not null).ToArray();
             images = hasFiles && snapshot.EnableImages && snapshot.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(new MountedStore(workspace, available), GiveImage) : null;
             fetch = snapshot.EnableWeb ? fetchTool ??= libraryTools.CreateFetch(IsBlocked) : null;
+            if (generateWith != snapshot.ImageGenerator)
+            {
+                generateTool = null;
+                generateWith = snapshot.ImageGenerator;
+            }
+
+            generate = hasFiles && snapshot.ImageGenerator is { } generator ? generateTool ??= libraryTools.CreateGenerateImage(new MountedStore(workspace, available), generator) : null;
             search = snapshot.EnableSearch && !engine.NativeSearch ? searchTool ??= libraryTools.CreateSearch() : null;
             timeTool ??= libraryTools.CreateTime();
             toolSearchTool ??= libraryTools.CreateToolSearch(() => servedTools);
             delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate);
-            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
+            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat(generate is null ? [] : [generate]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
 
             if (exposed.GroupBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } clash)
             {

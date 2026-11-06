@@ -86,7 +86,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         Id = Guid.NewGuid().ToString("N");
         PromptLibraryTools library = new();
         PromptModel start = model ?? new FakePromptProvider().Models[0];
-        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Model = start, ModelSettings = start.Reconcile(new Dictionary<string, string>()).Settings, WorkingFolder = string.Empty }, [.. library.Names, library.ShellName, library.AskName, library.ImageName, library.FetchName, library.SearchName, "respond"]);
+        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Model = start, ModelSettings = start.Reconcile(new Dictionary<string, string>()).Settings, WorkingFolder = string.Empty }, [.. library.GetReservedNames(), "respond"]);
     }
 
     /// <inheritdoc />

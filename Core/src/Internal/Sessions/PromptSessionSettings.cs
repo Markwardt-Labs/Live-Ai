@@ -33,6 +33,8 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
 
     private Func<PromptToolCallEvent, PromptToolResultEvent, TimeSpan, CancellationToken, Task>? afterToolCall;
 
+    private IPromptImageGenerator? imageGenerator;
+
     private Func<Uri, CancellationToken, Task<bool>>? webFilter;
 
     private Func<string, CancellationToken, Task<string>>? asker;
@@ -195,6 +197,20 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     }
 
     /// <inheritdoc />
+    public IPromptImageGenerator? ImageGenerator
+    {
+        get
+        {
+            lock (gate)
+            {
+                return imageGenerator;
+            }
+        }
+
+        set => Set(() => imageGenerator = value);
+    }
+
+    /// <inheritdoc />
     public Func<Uri, CancellationToken, Task<bool>>? WebFilter
     {
         get
@@ -328,6 +344,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
                 Workspace = workspace,
                 BeforeToolCall = beforeToolCall,
                 AfterToolCall = afterToolCall,
+                ImageGenerator = imageGenerator,
                 WebFilter = webFilter,
                 Asker = asker,
                 Limits = limits,

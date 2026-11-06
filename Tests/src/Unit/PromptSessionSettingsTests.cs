@@ -26,7 +26,7 @@ public sealed class PromptSessionSettingsTests
         Assert.Empty(settings.Tools);
         Assert.Null(settings.Limits.Budget);
         Assert.Null(settings.Workspace);
-        Assert.Equal((null, null, null, null), (settings.BeforeToolCall, settings.AfterToolCall, settings.Asker, settings.WebFilter));
+        Assert.Equal((null, null, null, null, null), (settings.BeforeToolCall, settings.AfterToolCall, settings.Asker, settings.WebFilter, settings.ImageGenerator));
         Assert.Equal((null, null, null, null), (settings.Limits.Timeout, settings.Limits.WindowLimit, settings.Limits.Retry, settings.Limits.MaxToolCalls));
     }
 
@@ -107,6 +107,7 @@ public sealed class PromptSessionSettingsTests
         settings.Asker = (_, _) => Task.FromResult(string.Empty);
         settings.WebFilter = (_, _) => Task.FromResult(false);
         settings.EnableSearch = true;
+        settings.ImageGenerator = new FakeImageGenerator();
         settings.Limits = settings.Limits with { Budget = new PromptBudget { MaxTokens = 5 } };
         settings.Limits = settings.Limits with { Timeout = TimeSpan.FromMinutes(1) };
         settings.Limits = settings.Limits with { WindowLimit = new PromptWindowLimit { Reached = _ => false } };
@@ -114,7 +115,21 @@ public sealed class PromptSessionSettingsTests
         settings.Limits = settings.Limits with { MaxToolCalls = 1 };
         settings.Instructions = "y";
 
-        Assert.Equal(18, changes);
+        Assert.Equal(19, changes);
+    }
+
+    [Fact]
+    public void TheImageGeneratorIsPartOfTheSnapshotAndCopiedToAnotherConfiguration()
+    {
+        PromptSessionSettings settings = Settings();
+        PromptSessionSettings other = Settings();
+        FakeImageGenerator generator = new();
+        settings.ImageGenerator = generator;
+
+        settings.Snapshot().CopyTo(other);
+
+        Assert.Same(generator, settings.Snapshot().ImageGenerator);
+        Assert.Same(generator, other.ImageGenerator);
     }
 
     [Fact]

@@ -13,6 +13,7 @@ internal static class LibraryToolMocks
         public void OfferTheEverydayTools()
         {
             tools.SetupGet(mock => mock.SearchName).Returns("search_web");
+            tools.SetupGet(mock => mock.GenerateImageName).Returns("generate_image");
             tools.SetupGet(mock => mock.TimeName).Returns("current_time");
             tools.SetupGet(mock => mock.ToolSearchName).Returns("tool_search");
             tools.SetupGet(mock => mock.DelegateName).Returns("delegate");

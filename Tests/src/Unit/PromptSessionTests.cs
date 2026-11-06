@@ -639,6 +639,12 @@ public sealed class PromptSessionTests
     }
 
     [Theory]
+    [InlineData("generate_image")]
+    [InlineData("Generate_Image")]
+    public void Tools_RejectTheNameOfTheImageTool(string name)
+        => Assert.Throws<ArgumentException>(() => Session(Record()).Configuration.Tools.Add(Tool(name)));
+
+    [Theory]
     [InlineData("")]
     [InlineData("has space")]
     [InlineData("dot.ted")]
@@ -1188,6 +1194,50 @@ public sealed class PromptSessionTests
         await session.Messages("one");
 
         toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "current_time", "tool_search", "delegate", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ImageGenerator_OffersTheImageToolOnlyWithFilesToSaveThemIn()
+    {
+        FakeImageGenerator generator = new();
+        libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), generator)).Returns(() => Tool("generate_image"));
+        Library(Tool("read_file"));
+        Plain();
+        PromptSession without = Session(Record());
+        without.Configuration.ImageGenerator = generator;
+        await without.Messages("one");
+        PromptSession with = Session(Record());
+        with.Configuration.ImageGenerator = generator;
+        with.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        await with.Messages("one");
+
+        Served("read_file", "generate_image");
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), generator), Times.Once);
+    }
+
+    [Fact]
+    public async Task ImageGenerator_ChangedOrClearedBetweenPrompts_ReplacesOrRemovesTheTool()
+    {
+        FakeImageGenerator first = new();
+        FakeImageGenerator second = new();
+        libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
+        Library(Tool("read_file"));
+        Plain();
+        PromptSession session = Session(Record());
+        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
+        session.Configuration.ImageGenerator = first;
+        await session.Messages("one");
+
+        session.Configuration.ImageGenerator = second;
+        await session.Messages("two");
+        session.Configuration.ImageGenerator = null;
+        await session.Messages("three");
+
+        libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), first), Times.Once);
+        libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), second), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "generate_image")), It.IsAny<IPromptToolHooks?>()), Times.Exactly(2));
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "read_file") && !started.Any(tool => tool.Name == "generate_image")), It.IsAny<IPromptToolHooks?>()), Times.Once);
     }
 
     [Fact]

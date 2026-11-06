@@ -205,6 +205,8 @@ public sealed class ForkSessionTests : IDisposable
         origin.Configuration.EnableImages = true;
         origin.Configuration.EnableWeb = true;
         origin.Configuration.EnableSearch = true;
+        FakeImageGenerator generator = new();
+        origin.Configuration.ImageGenerator = generator;
         Func<Uri, CancellationToken, Task<bool>> filter = (_, _) => Task.FromResult(false);
         origin.Configuration.WebFilter = filter;
         origin.Configuration.BeforeToolCall = approval;
@@ -223,6 +225,7 @@ public sealed class ForkSessionTests : IDisposable
         Assert.True(fork.Configuration.EnableImages);
         Assert.True(fork.Configuration.EnableWeb);
         Assert.True(fork.Configuration.EnableSearch);
+        Assert.Same(generator, fork.Configuration.ImageGenerator);
         Assert.Same(filter, fork.Configuration.WebFilter);
         Assert.Same(approval, fork.Configuration.BeforeToolCall);
         Assert.Same(notes, fork.Configuration.Workspace);

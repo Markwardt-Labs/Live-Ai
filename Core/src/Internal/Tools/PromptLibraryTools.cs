@@ -36,6 +36,11 @@ internal interface IPromptLibraryTools
     string SearchName { get; }
 
     /// <summary>
+    /// Gets the name of the tool that makes images, which a caller's own tools cannot use either.
+    /// </summary>
+    string GenerateImageName { get; }
+
+    /// <summary>
     /// Gets the name of the tool that tells the time, which a caller's own tools cannot use either.
     /// </summary>
     string TimeName { get; }
@@ -101,6 +106,14 @@ internal interface IPromptLibraryTools
     PromptTool CreateTime();
 
     /// <summary>
+    /// Builds the tool that makes an image with a generator and saves it in a store.
+    /// </summary>
+    /// <param name="store">Where the images are saved, with the mounted folders at its top level.</param>
+    /// <param name="generator">Makes the images, and decides what the tool offers.</param>
+    /// <returns>The tool.</returns>
+    PromptTool CreateGenerateImage(IStore store, IPromptImageGenerator generator);
+
+    /// <summary>
     /// Builds the tool that finds out which tools the AI has.
     /// </summary>
     /// <param name="tools">Gives the tools the AI is offered at the moment the tool is called.</param>
@@ -131,6 +144,10 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     private readonly int searchDefaultResults = 5;
 
     private readonly int searchMaxResults = 10;
+
+    private readonly int generateMaxCount = 4;
+
+    private readonly string[] imageExtensions = [".png", ".jpg", ".webp", ".gif"];
 
     private readonly int toolSearchDefaultResults = 5;
 
@@ -206,6 +223,9 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
     /// <inheritdoc />
     public string SearchName => "search_web";
+
+    /// <inheritdoc />
+    public string GenerateImageName => "generate_image";
 
     /// <inheritdoc />
     public string TimeName => "current_time";
@@ -385,6 +405,41 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         => PromptTool.Create<WebSearchInput, string>(SearchName, $"Searches the web and returns the title, address and a snippet of each result. Use it to find pages and current information; the snippets are short, so open a result to read more where you can. It is slow (searches are spaced a few seconds apart) and may be turned away for a while, so search once with good words instead of many times. Returns at most max_results results (default {searchDefaultResults}, at most {searchMaxResults}).", SearchWeb);
 
     /// <inheritdoc />
+    public PromptTool CreateGenerateImage(IStore store, IPromptImageGenerator generator)
+    {
+        PromptImageFeatures features = generator.Features;
+        JsonObject properties = new()
+        {
+            ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "What the image is to show." },
+            ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Where to save the image, as with the file tools. The file type is added or corrected from what is made, a number is added when count is more than 1, and an existing file is never replaced." },
+            ["width"] = new JsonObject { ["type"] = "integer", ["description"] = "The width in pixels; it is rounded to what the generator can make. Leave it out for the generator's own size." },
+            ["height"] = new JsonObject { ["type"] = "integer", ["description"] = "The height in pixels, like width." },
+            ["quality"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("draft", "standard", "high"), ["description"] = "draft is fast and cheap, for a first look; high takes longest and costs most. Default standard." },
+            ["count"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = generateMaxCount, ["description"] = "How many images to make; each is a different version." }
+        };
+
+        if (features.HasFlag(PromptImageFeatures.Transparency))
+        {
+            properties["transparent"] = new JsonObject { ["type"] = "boolean", ["description"] = "Make the background transparent, for an icon or a sprite." };
+        }
+
+        if (features.HasFlag(PromptImageFeatures.NegativePrompt))
+        {
+            properties["negative_prompt"] = new JsonObject { ["type"] = "string", ["description"] = "What to keep out of the image." };
+        }
+
+        if (features.HasFlag(PromptImageFeatures.Seed))
+        {
+            properties["seed"] = new JsonObject { ["type"] = "integer", ["description"] = "A number that makes the image repeatable: the same prompt and seed give the same image. The seed used is reported." };
+        }
+
+        JsonObject schema = new() { ["type"] = "object", ["properties"] = properties, ["required"] = new JsonArray("prompt", "path") };
+        string description = $"Makes an image from a description and saves it as a file (PNG, JPEG, GIF or WebP, as the generator makes it). It can take from seconds to minutes and may cost money, so ask for what you need and no more; use quality draft to try an idea first. It does not show you the image: use view_image where it is offered to look at the result.{(generator.PromptGuide is { Length: > 0 } guide ? " " + guide : string.Empty)}";
+
+        return new PromptTool { Name = GenerateImageName, Description = description, InputSchema = JsonSerializer.SerializeToElement(schema), Handler = (arguments, cancellation) => GenerateImage(store, generator, arguments, cancellation) };
+    }
+
+    /// <inheritdoc />
     public PromptTool CreateTime()
         => PromptTool.Create<TimeInput, string>(TimeName, "Tells the current date and time, which you cannot know otherwise. Without time_zone it answers in UTC and in this machine's time zone; give time_zone (such as 'America/Chicago' or 'Europe/Paris') to get the time somewhere else.", (input, _) => Task.FromResult(CurrentTime(input)));
 
@@ -405,6 +460,107 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
         return await run(input.Task.Trim(), input.ShareContext ?? false, cancellation);
     }
+
+    private async Task<string> GenerateImage(IStore store, IPromptImageGenerator generator, JsonElement arguments, CancellationToken cancellation)
+    {
+        string prompt = Text(arguments, "prompt")?.Trim() ?? string.Empty;
+        string path = Normalize(Text(arguments, "path") ?? string.Empty);
+
+        if (prompt.Length == 0 || path.Length == 0)
+        {
+            throw new InvalidOperationException("Give a description (prompt) and a path to save the image at.");
+        }
+
+        PromptImageFeatures features = generator.Features;
+        int count = Number(arguments, "count") is { } asked ? (int)Math.Clamp(asked, 1, generateMaxCount) : 1;
+        PromptImageRequest request = new()
+        {
+            Prompt = prompt,
+            Width = Number(arguments, "width") is { } width ? (int)Math.Clamp(width, 64, 4096) : null,
+            Height = Number(arguments, "height") is { } height ? (int)Math.Clamp(height, 64, 4096) : null,
+            Count = count,
+            Quality = Text(arguments, "quality")?.ToLowerInvariant() switch { "draft" => PromptImageQuality.Draft, "high" => PromptImageQuality.High, _ => PromptImageQuality.Standard },
+            Transparent = features.HasFlag(PromptImageFeatures.Transparency) && arguments.TryGetProperty("transparent", out JsonElement transparent) && transparent.ValueKind == JsonValueKind.True,
+            NegativePrompt = features.HasFlag(PromptImageFeatures.NegativePrompt) ? Text(arguments, "negative_prompt") : null,
+            Seed = features.HasFlag(PromptImageFeatures.Seed) ? Number(arguments, "seed") : null
+        };
+
+        string stem = Path.GetExtension(path) is { Length: > 0 } known && known.ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".webp" or ".gif" ? path[..^Path.GetExtension(path).Length] : path;
+
+        foreach (string candidate in Candidates(stem, count))
+        {
+            if (await Exists(store, candidate, cancellation))
+            {
+                throw new InvalidOperationException($"'{candidate}' is already there; give a path that is not taken.");
+            }
+        }
+
+        IReadOnlyList<PromptImageResult> images = await generator.Generate(request, cancellation);
+
+        if (images.Count == 0)
+        {
+            throw new InvalidOperationException("The generator made no image.");
+        }
+
+        string[] types = [.. images.Select(image => image.Content.ToImageMediaType())];
+
+        if (types.Any(type => !type.IsImage()))
+        {
+            throw new InvalidOperationException("The generator made something that is not a PNG, JPEG, GIF or WebP image.");
+        }
+
+        StringBuilder text = new();
+
+        for (int index = 0; index < images.Count; index++)
+        {
+            PromptImageResult image = images[index];
+            string target = (images.Count > 1 ? $"{stem}-{index + 1}" : stem) + types[index].ToExtension();
+
+            try
+            {
+                if (Path.GetDirectoryName(target.Replace('\\', '/'))?.Replace('\\', '/') is { Length: > 0 } folder)
+                {
+                    await store.CreateFolder(folder, cancellation);
+                }
+
+                await using Stream stream = await store.Open(target, StoreOpenMode.Create, cancellation);
+                await stream.WriteAsync(image.Content, cancellation);
+            }
+            catch (IOException exception)
+            {
+                throw new InvalidOperationException($"The image could not be saved as '{target}': {exception.Message}{(text.Length > 0 ? $"\n{text.ToString().TrimEnd()}" : string.Empty)}");
+            }
+
+            text.Append(CultureInfo.InvariantCulture, $"Saved {target} ({Size(image.Content.Length)}{(image.Seed is { } seed ? $", seed {seed}" : string.Empty)}).\n");
+        }
+
+        return text.ToString().TrimEnd();
+    }
+
+    private IEnumerable<string> Candidates(string stem, int count)
+        => imageExtensions.Select(extension => stem + extension).Concat(Enumerable.Range(1, count > 1 ? count : 0).SelectMany(number => imageExtensions.Select(extension => $"{stem}-{number}{extension}")));
+
+    private string Size(int bytes)
+        => bytes < 1024 ? $"{bytes} bytes" : bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes / 1024.0 / 1024.0:0.#} MB";
+
+    private async Task<bool> Exists(IStore store, string path, CancellationToken cancellation)
+    {
+        try
+        {
+            _ = await store.GetSize(path, cancellation);
+            return true;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private string? Text(JsonElement arguments, string name)
+        => arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private long? Number(JsonElement arguments, string name)
+        => arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long number) ? number : null;
 
     private string CurrentTime(TimeInput input)
     {
@@ -1160,5 +1316,21 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
                 return text.ToString();
             }
         }
+    }
+}
+
+/// <summary>
+/// Extends <see cref="IPromptLibraryTools" /> with what is derived from its names.
+/// </summary>
+internal static class PromptLibraryToolsExtensions
+{
+    extension(IPromptLibraryTools tools)
+    {
+        /// <summary>
+        /// Lists every name the library's own tools take, which a caller's tool cannot use. Respond, which the session offers itself, is not among them.
+        /// </summary>
+        /// <returns>The names.</returns>
+        public IReadOnlyList<string> GetReservedNames()
+            => [.. tools.Names, tools.ShellName, tools.AskName, tools.ImageName, tools.FetchName, tools.SearchName, tools.GenerateImageName, tools.TimeName, tools.ToolSearchName, tools.DelegateName];
     }
 }

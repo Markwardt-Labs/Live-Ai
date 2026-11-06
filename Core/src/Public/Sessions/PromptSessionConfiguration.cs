@@ -43,6 +43,11 @@ public interface IPromptSessionConfiguration
     bool EnableSearch { get; set; }
 
     /// <summary>
+    /// Gets or sets the generator that makes the images the AI asks for, <see langword="null" /> by default, in which case the AI has no tool to make images. While one is set, and the session has files to save them in (a workspace or a mount), the AI is offered <c>generate_image</c>, which saves each image as a file where the AI says and never replaces a file; the AI is only offered what the generator supports (<see cref="IPromptImageGenerator.Features" />). Make one with <c>IPromptImageGenerator.OpenAi</c> or <c>IPromptImageGenerator.StableDiffusion</c>. Images can cost money or take a graphics card for minutes, so the call goes through <see cref="BeforeToolCall" /> like the other tools, where it can be approved or refused. It is read when a prompt starts, is stored with nothing, so a loaded session has none until it is set, and the name <c>generate_image</c> is taken.
+    /// </summary>
+    IPromptImageGenerator? ImageGenerator { get; set; }
+
+    /// <summary>
     /// Gets or sets the function that decides which addresses <c>fetch_url</c> (see <see cref="EnableWeb" />) may read, <see langword="null" /> by default, which allows every address. It is called with the address of every request the tool makes, the addresses a page redirects to included, and returns <see langword="true" /> to block the request: the AI is told that the address is blocked, and nothing is sent to it. An exception from the function (other than cancellation) blocks the request too. It is read when each request is made, also in a prompt that is running, so it can be changed at any time, it does not restart anything, and it is stored with nothing, so a loaded session has none until it is set.
     /// </summary>
     Func<Uri, CancellationToken, Task<bool>>? WebFilter { get; set; }

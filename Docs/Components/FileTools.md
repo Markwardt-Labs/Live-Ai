@@ -1,6 +1,6 @@
 # File tools
 
-`IStore`, `DiskStore`, `MemoryStore`, `MountedStore`, `ReadOnlyStore`, `StorePaths` and `PromptLibraryTools` give the AI the library's own way of working on files: a small store interface, the disk implementation, and the tools built over any implementation. They are served to the AI like a caller's tools (see the Tools component); this component is what is behind them.
+`IStore`, `DiskStore`, `MemoryStore`, `MountedStore`, `ReadOnlyStore`, `StorePaths` and `PromptLibraryTools` give the AI the library's own way of working on files: a small store interface, the disk implementation, and the tools built over any implementation. They are served to the AI like a caller's tools; this component is what is behind them.
 
 ## The store interface
 
@@ -23,7 +23,7 @@ One resolver cleans every relative path (`StorePaths`): redundant slashes and `.
 - **`write_file`** creates or replaces a whole file.
 - **`edit_file`** replaces exact text. `old_string` must match once, or `replace_all` must be set; an empty or unchanged `old_string` is refused. It reads and rewrites the whole file, so line endings elsewhere are kept.
 - **`delete_file`**, **`move_file`** and **`copy_file`** are what a shell would otherwise be needed for. Copy and move never replace their destination.
-- **`diff_files`** compares two text files line by line and returns a unified diff, or says they are identical (line endings are ignored; see the Tools component for its limits).
+- **`diff_files`** compares two text files line by line and returns a unified diff, or says they are identical (line endings are ignored; files that differ in more than 2000 lines are refused as too many for a diff).
 
 Argument names are snake_case (`old_string`, `replace_all`), which is the form models are used to; the input records name them with `JsonPropertyName` attributes, so the tools use the same serializer options as everything else. `.git` is skipped when walking but not hidden from `list_directory` or `read_file`, so the AI can still look at it when it asks directly.
 

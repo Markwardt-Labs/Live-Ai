@@ -243,6 +243,26 @@ await session.Request("Find out what changed in the latest stable .NET release a
 
 Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace or a mount, offered with the file tools) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, mounts, hooks and limits, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
 
+## Making images
+
+```csharp
+session.Configuration.Mounts["art"] = IStore.FromDisk("/path/to/assets");
+string key = Environment.GetEnvironmentVariable("OPENAI_API_KEY")!;
+foreach (PromptImageModel model in await IPromptImageGenerator.OpenAiModels(key)) { Console.WriteLine($"{model.Id} {model.Features}"); }
+session.Configuration.ImageGenerator = IPromptImageGenerator.OpenAi(key);   // or OpenAi(key, "gpt-image-1.5") for another model
+// or a Stable Diffusion server on this machine (AUTOMATIC1111 or Forge, started with its API on):
+// foreach (PromptImageModel checkpoint in await IPromptImageGenerator.StableDiffusionModels(new Uri("http://localhost:7860"))) { Console.WriteLine(checkpoint.Id); }
+// session.Configuration.ImageGenerator = IPromptImageGenerator.StableDiffusion(new Uri("http://localhost:7860"), width: 1024, height: 1024, draftSteps: 6, standardSteps: 20, highSteps: 35);
+
+await session.Request("Make three draft icons of a lighthouse, 256x256, save them as art/icons/lighthouse, then tell me which one is best after you look at them.");
+```
+
+While `ImageGenerator` is set and the session has files to save in (a workspace or a mount), the AI has a `generate_image` tool. It gives a description and a path, and optionally a size, a quality (`draft`, `standard` or `high`) and a count of 1 to 4; the image is saved as a file where the AI says, with the extension of what was made, numbered when there are several, and a file that is there is never replaced. What else the AI can ask for depends on the generator: `OpenAi` can make a transparent background (not with `gpt-image-2`, which the API refuses it for, so the tool does not offer it there) and works with a server that copies the OpenAI image endpoint, through its `baseUrl`; `StableDiffusion` takes a negative prompt and a seed and reports the seed it used. The tool does not show the AI the image: with `EnableImages` on, the AI can look at it with `view_image`.
+
+`OpenAi` uses `gpt-image-2.6-flare` unless another model is given (models differ in price and in what they can do, and their names change). `OpenAiModels` asks the service for its models, keeps the GPT Image ones (the ones the generator can use) and gives each its features, so a UI can show which ones can make a transparent background; a key the service refuses, or a service that cannot be reached, is an `InvalidOperationException` with the service's message, unlike the model list of a provider, which gives an empty list. `StableDiffusionModels` does the same for a server's checkpoints (`/sdapi/v1/sd-models`): the `Id` of each is its title, which `StableDiffusion` takes as `model` to have the server load it for each image, and every checkpoint has the same features since the server does not tell the steps or guidance that suit one.
+
+An image costs money or a graphics card for a while, so the call goes through `BeforeToolCall`, where a host can approve or refuse it. The key is passed to the factory by your code (read it from where you keep secrets) and is never stored or logged. For Stable Diffusion the quality is a number of steps, which depends on the model (a turbo model needs few steps and a low `guidance`, a full model many), so give the values that suit the one the server has loaded; `promptGuide` replaces the advice the AI is given for describing images (comma separated phrases by default, plain sentences for a model like FLUX). Another backend is a class that implements `IPromptImageGenerator`.
+
 ## Sending images and files with a prompt
 
 ```csharp
