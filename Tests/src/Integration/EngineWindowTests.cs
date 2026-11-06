@@ -9,7 +9,7 @@ public sealed class EngineWindowTests : IDisposable
         => temp.Dispose();
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private ClaudeEngine Claude(string? script = null)
         => new ClaudeEngine(script is null ? temp.Combine("missing-claude") : temp.Script("claude", script), temp.Combine("claude-state"));
@@ -223,16 +223,4 @@ public sealed class EngineWindowTests : IDisposable
         await Assert.ThrowsAsync<PromptToolStartException>(() => codex.GetWindows());
     }
 
-    [Fact]
-    public async Task ASessionsWindowLimit_ReadsThroughItsProvider()
-    {
-        string usage = Usage("Current session: 95% used · resets 11pm (UTC)");
-        ClaudeEngine claude = Claude("case \"$*\" in *'/usage'*) ;; *) cat > /dev/null; sleep 20;; esac\n" + usage);
-        await using IPromptSession session = temp.Track(await Provider(claude).Create(TestModels.Options));
-        session.Configuration.Limits = session.Configuration.Limits with { WindowLimit = new PromptWindowLimit { Reached = windows => windows.Any(window => window.Used > 0.9) } };
-
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("go"));
-
-        Assert.Equal(PromptLimit.Window, exception.Limit);
-    }
 }

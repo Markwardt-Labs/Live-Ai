@@ -9,10 +9,10 @@ public sealed class ProviderTestTests : IDisposable
         => temp.Dispose();
 
     private IPromptProvider Claude(string? script = null)
-        => new PromptProvider(new ClaudeEngine(script is null ? temp.Combine("missing-claude") : temp.Script("claude", script), temp.Combine("claude-state")), temp.Combine("data"));
+        => TestProviders.Make(new ClaudeEngine(script is null ? temp.Combine("missing-claude") : temp.Script("claude", "case \" $* \" in *\" /usage \"*) exit 0 ;; esac\n" + script), temp.Combine("claude-state")), temp.Combine("data"));
 
     private IPromptProvider Codex(string? script = null)
-        => new PromptProvider(new CodexEngine(script is null ? temp.Combine("missing-codex") : temp.Script("codex", script), temp.Combine("codex-state")), temp.Combine("data"));
+        => TestProviders.Make(new CodexEngine(script is null ? temp.Combine("missing-codex") : temp.Script("codex", "if [ \"$1\" = \"app-server\" ]; then exit 0; fi\n" + script), temp.Combine("codex-state")), temp.Combine("data"));
 
     private string Record(string name)
         => $"printf '%s\\n' \"$@\" > \"$PWD/{name}-args.txt\"\nprintf '%s' \"$ANTHROPIC_API_KEY|$CODEX_API_KEY\" > \"$PWD/{name}-key.txt\"\ncat > \"$PWD/{name}-stdin.txt\"\n";

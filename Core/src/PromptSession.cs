@@ -1,19 +1,27 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// A conversation with an AI that keeps its context from one prompt to the next, with a state (<see cref="State" />) and one output of everything it does (<see cref="Output" />), that takes input at any time (<see cref="Send" />) and answers requests (<see cref="Request" />), and that <see cref="IPromptProvider" /> can resume later from its <see cref="Id" />. Its settings (<see cref="Configuration" />) can be changed at any time and are taken when the next prompt starts. <see cref="IAsyncDisposable.DisposeAsync" /> ends the session gracefully: a prompt that is running is allowed to finish, input still waiting is dropped, and then the AI's process is asked to exit (its input is closed and it gets a few seconds before it is ended) and the tool server is stopped. <see cref="IDisposable.Dispose" /> ends it at once: the prompt that is running is cancelled and the input waiting is dropped, the process is ended without waiting, and the rest is cleaned up in the background. Calling <see cref="IDisposable.Dispose" /> while a graceful disposal is waiting hurries it up the same way. Both are safe to call more than once, and prompts sent afterwards throw <see cref="ObjectDisposedException" />.
+/// A conversation with an AI that keeps its context from one prompt to the next, with a state (<see cref="State" />) and one output of everything it does (the session itself is an <see cref="IObservable{T}" /> of <see cref="PromptEvent" />), that takes input at any time (<see cref="Send" />) and answers requests (<see cref="Request" />), and that <see cref="IPrompter" /> can resume later from its <see cref="Id" />. Its settings (<see cref="Configuration" />) can be changed at any time and are taken when the next prompt starts. <see cref="IAsyncDisposable.DisposeAsync" /> ends the session gracefully: a prompt that is running is allowed to finish, input still waiting is dropped, and then the AI's process is asked to exit (its input is closed and it gets a few seconds before it is ended) and the tool server is stopped. <see cref="IDisposable.Dispose" /> ends it at once: the prompt that is running is cancelled and the input waiting is dropped, the process is ended without waiting, and the rest is cleaned up in the background. Calling <see cref="IDisposable.Dispose" /> while a graceful disposal is waiting hurries it up the same way. Both are safe to call more than once, and prompts sent afterwards throw <see cref="ObjectDisposedException" />.
 /// </summary>
-public interface IPromptSession : IDisposable, IAsyncDisposable
+/// <remarks>
+/// Subscribing reports everything the AI outputs as it happens, from the main conversation: its messages and their deltas, tool calls and results, usage, subscription windows, interruptions and failures, together with a <see cref="PromptStateEvent" /> whenever <see cref="State" /> changes and a <see cref="PromptDescriptorsEvent" /> whenever <see cref="Descriptors" /> change. It is a hot sequence: a watcher gets what happens after it subscribes and nothing is replayed (<see cref="State" /> is the current state and <see cref="GetHistory" /> reads what was said before), and it completes when the session is disposed. Work that fails is reported as a <see cref="PromptFailureEvent" /> and does not end it. Work done in a fork (<see cref="PromptRequestMode.Fork" />) is not part of it. Watchers are called as the events happen, so they should not block.
+/// </remarks>
+public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncDisposable
 {
     /// <summary>
-    /// Gets the identifier the library gave the session (a GUID in text form, without hyphens), which <see cref="IPromptProvider" /> resumes it from.
+    /// Gets the identifier the library gave the session (a GUID in text form, without hyphens), which <see cref="IPrompter" /> loads it from.
     /// </summary>
     string Id { get; }
 
     /// <summary>
-    /// Gets the provider that made or loaded the session, whose tool the session runs on.
+    /// Gets the full path of the workspace: the folder the session works in, which is never absent. It is the one given when the session was created or last moved (see <see cref="Move" />), or, when none was given, a folder the library made for the session in its data folder, named after the session, so the files the AI writes there are kept. It is stored with the session and comes back with it. The tool runs in this folder, so it finds the instruction files of the project (such as <c>CLAUDE.md</c> and <c>AGENTS.md</c>) the way it does when you start it there yourself, and the AI's file tools take relative paths relative to it.
     /// </summary>
-    IPromptProvider Provider { get; }
+    string WorkspacePath { get; }
+
+    /// <summary>
+    /// Gets the session's cache: temporary storage for this object of the session, which starts empty and is lost when the session is disposed. Nothing in it is stored with the session, so a loaded session has a new, empty one. The AI's file tools reach it with paths that start with <c>CACHE:</c>, such as <c>CACHE:/folder/file.txt</c>, so it is where to put data for the AI and where to find what the AI makes (images, say) without touching the workspace. A helper the AI starts with <c>delegate</c> shares it, and a branch gets one of its own.
+    /// </summary>
+    IStore Cache { get; }
 
     /// <summary>
     /// Gets what the session has used since this object was made, added up from the usage the tool reported for each prompt. A session loaded in another process starts at zero, and so does a branch.
@@ -26,33 +34,37 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
     PromptSessionState State { get; }
 
     /// <summary>
-    /// Gets everything the AI outputs as it happens, from the main conversation: its messages and their deltas, tool calls and results, usage, subscription windows, interruptions and failures, together with a <see cref="PromptStateEvent" /> whenever <see cref="State" /> changes. It is a hot sequence: a watcher gets what happens after it subscribes and nothing is replayed (<see cref="State" /> is the current state and <see cref="GetHistory" /> reads what was said before), and it completes when the session is disposed. Work that fails is reported as a <see cref="PromptFailureEvent" /> and does not end it. Work done in a fork (<see cref="PromptRequestMode.Fork" />) is not part of it. Watchers are called as the events happen, so they should not block.
-    /// </summary>
-    IObservable<PromptEvent> Output { get; }
-
-    /// <summary>
-    /// Gets the settings of the session: the model and its settings, whether its process stays alive, the shell, instructions, the tools and stores it can use, and what every request starts with. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
+    /// Gets the settings of the session that are stored with it: the capability and effort, the shell, image and web switches, the image generation options and the instructions. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
     /// </summary>
     IPromptSessionConfiguration Configuration { get; }
 
     /// <summary>
-    /// Sends a prompt, waits for the AI to finish it and returns its answer. A string is the prompt text, and any other object is written as JSON with its own runtime type (it should then carry its own instruction, a <c>Task</c> property for example). Where and when it runs depends on <see cref="PromptRequestOptions.Mode" />: by default it needs the session to be waiting and throws a <see cref="PromptSessionStateException" /> otherwise. Prompts asked of a session wait until it is free, because a provider's session cannot take two at once. What the AI does while it works (its messages, tool calls, usage) is on <see cref="Output" /> for a request in the main conversation. The extension methods <c>Request&lt;T&gt;</c>, which reads the answer into a type, and <c>Loop</c> are built on this.
+    /// Gets what the application plugs into this session object: its tools, the external MCP servers and the function that answers the AI's questions. None of it is stored, so a loaded session starts with none and the application sets them again (see <see cref="IPromptSessionTransientConfiguration" />).
+    /// </summary>
+    IPromptSessionTransientConfiguration Transient { get; }
+
+    /// <summary>
+    /// Gets what the session knows about how it is run, as plain text written for a person to read: <c>Provider</c> (the tool, such as <c>Claude Code</c>) and, once a prompt has chosen the model, <c>Model</c> (its display name), <c>Model ID</c> (its identifier, when that differs) and one entry for each setting the model runs with, named as the tool names it (<c>Effort</c> with a value such as <c>High</c>, <c>Context window</c> with <c>16,384</c>, a switch with <c>On</c> or <c>Off</c>). The names present depend on the tool, so look a name up instead of expecting it. It is a snapshot, a new one is made when something changes, and a <see cref="PromptDescriptorsEvent" /> reports the change.
+    /// </summary>
+    IReadOnlyDictionary<string, string> Descriptors { get; }
+
+    /// <summary>
+    /// Sends a prompt, waits for the AI to finish it and returns its answer. A string is the prompt text, and any other object is written as JSON with its own runtime type (it should then carry its own instruction, a <c>Task</c> property for example). Where and when it runs depends on <see cref="PromptRequestOptions.Mode" />: by default it needs the session to be waiting and throws a <see cref="PromptSessionStateException" /> otherwise. Prompts asked of a session wait until it is free, because a provider's session cannot take two at once. What the AI does while it works (its messages, tool calls, usage) is on <see cref="IPromptSession" /> for a request in the main conversation. The extension methods <c>Request&lt;T&gt;</c>, which reads the answer into a type, is built on this.
     /// </summary>
     /// <param name="input">The prompt: a string, or an object to write as JSON.</param>
     /// <param name="options">How to run it, or <see langword="null" /> for the session's defaults.</param>
     /// <param name="cancellation">Ends the work in progress.</param>
     /// <returns>Without a schema (<see cref="PromptRequestOptions.Schema" />) everything the AI wrote, one message after another; with one the answer alone, the last message, as JSON text.</returns>
-    /// <exception cref="ArgumentException">The schema is not one whose root is an object, there are too many or too large files, a text file is too large or not valid UTF-8, or a tool or a mount added to the request has a name that is not allowed or is taken.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A value of <paramref name="options" /> is not allowed (a timeout that is not positive or is longer than 24 days, a retry that is not valid, a limit on tool calls that is negative, or an undefined enum value).</exception>
+    /// <exception cref="ArgumentException">The schema is not one whose root is an object, there are too many or too large files, a text file is too large or not valid UTF-8, or a tool added to the request has a name that is not allowed or is taken.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A value of <paramref name="options" /> is not allowed (an undefined enum value).</exception>
     /// <exception cref="NotSupportedException">A file is of a type that the provider cannot be shown and that is not text.</exception>
-    /// <exception cref="PromptLimitException">The timeout, the window limit or the limit on tool calls was reached.</exception>
     /// <exception cref="PromptSessionException">The tool could not be started or the AI failed.</exception>
     /// <exception cref="PromptSessionStateException">The mode needs a state the session is not in.</exception>
     /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
     Task<string> Request(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Gives the AI input without waiting for an answer, at any time except while the session is responding to a direct request. What the AI does with it shows on <see cref="Output" />. The input reaches the AI immediately and is taken into the work it is doing, when its engine can take input in the middle of work (the Claude and Codex engines can); otherwise it waits and the AI gets it when the work ends. To get an answer back for a particular input use <see cref="Request" />, in one of the modes of <see cref="PromptRequestMode" />.
+    /// Gives the AI input without waiting for an answer, at any time except while the session is responding to a direct request. What the AI does with it shows in the events of the session. The input reaches the AI immediately and is taken into the work it is doing, when its tool can take input in the middle of work (Claude Code, Codex and OpenCode all can); otherwise it waits and the AI gets it when the work ends. To get an answer back for a particular input use <see cref="Request" />, in one of the modes of <see cref="PromptRequestMode" />.
     /// </summary>
     /// <param name="input">The input: a string, or an object to write as JSON.</param>
     /// <param name="options">The files and the note that go with the input, or <see langword="null" /> for none. A <see cref="PromptRequestOptions" /> is accepted, but only the attachments and the note of it are used.</param>
@@ -61,10 +73,10 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
     /// <exception cref="PromptSessionStateException">The session is responding to a direct request.</exception>
     /// <exception cref="ArgumentException">The note is blank, there are too many or too large files, a text file is too large or not valid UTF-8, or the schema of a file is not allowed.</exception>
     /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
-    Task Send(object input, PromptOptions? options = null, CancellationToken cancellation = default);
+    Task Send(object input, PromptSendOptions? options = null, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Stops the prompt that is running without cancelling it: the AI stops where it is, the prompt ends normally with what was written until then and a <see cref="PromptInterruptedEvent" />, and the conversation goes on with the next prompt, so the AI can be corrected. A kept Claude Code process is asked to stop and stays alive; otherwise the process is ended, and the next prompt resumes the conversation as the tool stored it (a first prompt that is interrupted before the tool has reported its session leaves nothing to resume). To change course without stopping the AI, give it more input with <see cref="Send" />.
+    /// Stops the prompt that is running without cancelling it: the AI stops where it is, the prompt ends normally with what was written until then and a <see cref="PromptInterruptedEvent" />, and the conversation goes on with the next prompt, so the AI can be corrected. The kept process is asked to stop and stays alive, and the next prompt goes on in the same conversation. To change course without stopping the AI, give it more input with <see cref="Send" />.
     /// </summary>
     /// <param name="cancellation">Cancels the request to stop.</param>
     /// <returns><see langword="true" /> if a prompt was running, and <see langword="false" /> if the session was idle.</returns>
@@ -72,7 +84,7 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
     Task<bool> Interrupt(CancellationToken cancellation = default);
 
     /// <summary>
-    /// Branches the conversation: makes a new session, with an identifier of its own, that starts with the conversation of this one and then goes its own way, so two approaches can be tried from the same point. It waits for the prompt that is running, if any, so the branch starts after it. The branch has the configuration this session has now (including the tools, the mounts and the shell approval, which are shared with it) and the same API key, but a scratch folder of its own. A session that has had no prompt yet has nothing to branch from, and the branch is simply a new session with the same configuration. This session is not changed.
+    /// Branches the conversation: makes a new session, with an identifier of its own, that starts with the conversation of this one and then goes its own way, so two approaches can be tried from the same point. It waits for the prompt that is running, if any, so the branch starts after it. The branch has the configuration this session has now (including the tools and the shell approval, which are shared with it), the same API key and the same workspace (or, when the workspace was made by the library, an empty one of its own), and an empty cache of its own. A session that has had no prompt yet has nothing to branch from, and the branch is simply a new session with the same configuration. This session is not changed.
     /// </summary>
     /// <param name="at">An entry of the history, as <see cref="GetHistory" /> returned it, to branch at the end of the exchange it belongs to (a prompt and everything the AI did to answer it, the finest point both providers branch at), or <see langword="null" /> for the whole conversation so far.</param>
     /// <param name="cancellation">Cancels the branching.</param>
@@ -95,20 +107,18 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
     Task Rewind(PromptHistoryPoint to, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Moves the session to another provider session, another workspace folder, or both. The session keeps its identifier and its other settings; what it was attached to before is left alone: the conversation stays in the tool's storage and the old workspace folder is not touched. It waits for the prompt that is running and ends a kept process.
+    /// Moves the session to another workspace folder and keeps its conversation, doing whatever the tool needs for that (Claude Code keeps a conversation with the folder it ran in, so its conversation is copied to the new folder). The session keeps its identifier and its other settings, a folder the caller gave is never touched, and the next prompt runs in the new folder. The folder the library made for the session is deleted when the session moves to another one, and made again (empty) when the session is moved back with <see langword="null" />. It waits for the prompt that is running and ends a kept process.
     /// </summary>
-    /// <param name="aiSessionId">The identifier of the provider's own session to continue, as its tool reports it (the session identifier of Claude Code, the thread identifier of Codex), or <see langword="null" /> for a new conversation that starts with the next prompt.</param>
-    /// <param name="options">The workspace to move to (<see cref="PromptSessionOptions.WorkspacePath" /> and <see cref="PromptSessionOptions.Sandbox" />): the folder on disk that becomes the session's workspace, which <see cref="IPromptSessionConfiguration.Workspace" /> is set to and the tool runs in, or no path for no workspace, which sets the workspace to nothing and runs the tool in an empty folder of the session's own. The session keeps its API key, so giving one is refused.</param>
+    /// <param name="workspacePath">The existing folder on disk that becomes the session's workspace (see <see cref="WorkspacePath" />) and that the tool runs in, or <see langword="null" /> for the folder the library makes for the session in its data folder.</param>
     /// <param name="cancellation">Cancels the move.</param>
-    /// <returns>A task that completes once the session is attached.</returns>
-    /// <exception cref="ArgumentException"><paramref name="aiSessionId" /> is empty or blank, or an API key is given.</exception>
+    /// <returns>A task that completes once the session is moved.</returns>
     /// <exception cref="DirectoryNotFoundException">The workspace path is not an existing folder.</exception>
-    /// <exception cref="PromptSessionNotFoundException">The provider has no session with that identifier.</exception>
+    /// <exception cref="PromptSessionException">The tool could not bring the conversation along.</exception>
     /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
-    Task AttachTo(string? aiSessionId = null, PromptSessionOptions? options = null, CancellationToken cancellation = default);
+    Task Move(string? workspacePath, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Makes the tool shorten the conversation to a summary, which frees room in the context window of a long one. It waits for the prompt that is running, and a persistent process is used when there is one. The compacted conversation is the one the session continues with.
+    /// Makes the tool shorten the conversation to a summary, which frees room in the context window of a long one. It waits for the prompt that is running, and the process the session keeps is used. The compacted conversation is the one the session continues with.
     /// </summary>
     /// <param name="cancellation">Cancels the compaction.</param>
     /// <returns>A task that completes once the conversation is compacted.</returns>
@@ -137,7 +147,7 @@ public interface IPromptSession : IDisposable, IAsyncDisposable
 }
 
 /// <summary>
-/// Conveniences for <see cref="IPromptSession" /> built on <see cref="IPromptSession.Request(object, PromptRequestOptions?, CancellationToken)" />: an answer read into a type, loops, and forking and rewinding at an entry instead of a point.
+/// Conveniences for <see cref="IPromptSession" /> built on <see cref="IPromptSession.Request(object, PromptRequestOptions?, CancellationToken)" />: an answer read into a type, and forking and rewinding at an entry instead of a point.
 /// </summary>
 public static class PromptSessionExtensions
 {
@@ -181,33 +191,5 @@ public static class PromptSessionExtensions
         /// <exception cref="ArgumentNullException"><paramref name="to" /> is <see langword="null" />.</exception>
         public Task Rewind(PromptHistoryEntry to, CancellationToken cancellation = default)
             => session.Rewind((to ?? throw new ArgumentNullException(nameof(to))).Point, cancellation);
-
-        /// <summary>
-        /// Starts sending a prompt over and over: once now, and then again as the schedule says (see <see cref="PromptLoopSchedule" />), or when <see cref="IPromptLoop{TReply}.Trigger" /> is called. Each reply is the text the AI wrote.
-        /// </summary>
-        /// <param name="input">The prompt: a string, or an object to write as JSON.</param>
-        /// <param name="schedule">When the prompt is sent again (<see cref="PromptLoopSchedule.Every(TimeSpan)" /> for an interval), or <see langword="null" /> for as soon as each send is done (<see cref="PromptLoopSchedule.Continuous" />).</param>
-        /// <param name="options">How to run each send, or <see langword="null" /> for the session's defaults.</param>
-        /// <param name="limits">When the loop stops by itself, or <see langword="null" /> for never.</param>
-        /// <returns>The loop, which the caller disposes to stop it.</returns>
-        public IPromptLoop<string> Loop(object input, PromptLoopSchedule? schedule = null, PromptRequestOptions? options = null, PromptLoopLimits<string>? limits = null)
-            => new PromptLoop<string>(session, input, schedule ?? PromptLoopSchedule.Continuous, options, text => text, limits, null, (session as IPromptCollector)?.Time);
-
-        /// <summary>
-        /// Starts a loop like the plain loop whose replies are structured: the AI is made to answer in the shape of <typeparamref name="TOutput" /> every time, and each answer is read into one.
-        /// </summary>
-        /// <typeparam name="TOutput">The type of the answer. A type that is not written as a JSON object (a string, a number, a list, an enumeration) is asked for in an object with one property and unwrapped again, because the AI tools require an object.</typeparam>
-        /// <param name="input">The prompt: a string, or an object to write as JSON.</param>
-        /// <param name="schedule">When the prompt is sent again (<see cref="PromptLoopSchedule.Every(TimeSpan)" /> for an interval), or <see langword="null" /> for as soon as each send is done (<see cref="PromptLoopSchedule.Continuous" />).</param>
-        /// <param name="options">How to run each send, or <see langword="null" /> for the session's defaults.</param>
-        /// <param name="limits">When the loop stops by itself, or <see langword="null" /> for never.</param>
-        /// <returns>The loop, which the caller disposes to stop it. When an answer is not a <typeparamref name="TOutput" /> the loop fails with a <see cref="PromptSessionOutputException" />.</returns>
-        [RequiresUnreferencedCode("The type is read and written by reflection, which trimming can remove members of. Keep the members of the type, or use the plain overload with your own schema.")]
-        [RequiresDynamicCode("The type is turned into a JSON schema and read by runtime code generation, which native AOT does not support.")]
-        public IPromptLoop<TOutput> Loop<TOutput>(object input, PromptLoopSchedule? schedule = null, PromptRequestOptions? options = null, PromptLoopLimits<TOutput>? limits = null)
-        {
-            (JsonElement schema, bool wrapped) = PromptJson.Output(typeof(TOutput));
-            return new PromptLoop<TOutput>(session, input, schedule ?? PromptLoopSchedule.Continuous, (options ?? new()) with { Schema = schema }, text => PromptJson.Deserialize<TOutput>(text.Length > 0 ? [text] : [], wrapped), limits, null, (session as IPromptCollector)?.Time);
-        }
     }
 }

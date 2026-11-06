@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi.Testing;
 
 /// <summary>
-/// An <see cref="IPromptSession" /> for tests that answers from a script instead of running a command line tool. Prompts go through the real request pipeline, so everything built on <see cref="IPromptSession.Request" /> works as it does in production: files, structured answers, options, timeouts, retries, limits, loops and events. Script the answers with <see cref="Reply(object)" />, <see cref="Fail(Exception)" />, <see cref="Hang" /> and <see cref="ReplyWith" />, and look at what was asked in <see cref="Prompts" />. Nothing is stored and no process, port or file is made.
+/// An <see cref="IPromptSession" /> for tests that answers from a script instead of running a command line tool. Prompts go through the real request pipeline, so everything built on <see cref="IPromptSession.Request" /> works as it does in production: files, structured answers, options and events. Script the answers with <see cref="Reply(object)" />, <see cref="Fail(Exception)" />, <see cref="Hang" /> and <see cref="ReplyWith" />, and look at what was asked in <see cref="Prompts" />. Nothing is stored and no process, port or file is made.
 /// </summary>
 public sealed class FakePromptSession : IPromptSession, IPromptCollector
 {
@@ -19,13 +19,11 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private readonly List<string> notes = [];
 
-    private readonly Func<IReadOnlyList<PromptWindow>?>? sharedWindows;
-
     private readonly IPromptRequester requester;
 
     private readonly TimeProvider time;
 
-    private readonly Broadcast<PromptEvent> output = new(false);
+    private readonly Broadcast<PromptEvent> output = new();
 
     private readonly List<Queued> queued = [];
 
@@ -45,9 +43,6 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private int compactions;
 
-    private string? attachedTo;
-
-    private IReadOnlyList<PromptWindow>? windows;
 
     private FakePrompt? workingOn;
 
@@ -55,45 +50,36 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private PromptSessionState state = PromptSessionState.Waiting;
 
+    private bool givenWorkspace;
+
+    private IReadOnlyDictionary<string, string> descriptors = new Dictionary<string, string> { ["Provider"] = "Fake" };
+
     private Task pumping = Task.CompletedTask;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FakePromptSession" /> class.
     /// </summary>
-    /// <param name="provider">The provider the session says it runs on, Claude Code by default. The session starts with the first model of a <see cref="FakePromptProvider" />, and with the model of a fake one when the provider is not.</param>
     /// <param name="apiKey">The API key the session was made with, which is only kept for a test to look at.</param>
-    /// <param name="time">The clock the session's timeouts, retries and loops run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that the test controls to test code that waits without waiting.</param>
-    public FakePromptSession(IPromptProvider? provider = null, string? apiKey = null, TimeProvider? time = null)
-        : this(provider ?? new PromptProvider(new ClaudeEngine()), apiKey, null, time, (provider as FakePromptProvider)?.Models.FirstOrDefault())
-    {
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="FakePromptSession" /> class.
-    /// </summary>
-    /// <param name="provider">The provider the session reports.</param>
-    /// <param name="apiKey">The API key the session reports.</param>
-    /// <param name="sharedWindows">Gives the windows of the provider the session belongs to, or <see langword="null" /> for none.</param>
-    /// <param name="time">The clock the session runs on, or <see langword="null" /> for the system's.</param>
-    /// <param name="model">The model the session starts with, or <see langword="null" /> for a fake one.</param>
-    internal FakePromptSession(IPromptProvider provider, string? apiKey, Func<IReadOnlyList<PromptWindow>?>? sharedWindows, TimeProvider? time = null, PromptModel? model = null)
+    /// <param name="time">The clock the session's prompt times run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that the test controls to test code that waits without waiting.</param>
+    public FakePromptSession(string? apiKey = null, TimeProvider? time = null)
     {
         this.time = time ?? TimeProvider.System;
-        Provider = provider;
         ApiKey = apiKey;
-        this.sharedWindows = sharedWindows;
-        requester = new PromptRequester(new Executor(this), null, this.time);
+        requester = new PromptRequester(new Executor(this));
         Id = Guid.NewGuid().ToString("N");
+        WorkspacePath = DefaultWorkspace();
         PromptLibraryTools library = new();
-        PromptModel start = model ?? new FakePromptProvider().Models[0];
-        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Model = start, ModelSettings = start.Reconcile(new Dictionary<string, string>()).Settings, WorkingFolder = string.Empty }, [.. library.GetReservedNames(), "respond"]);
+        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = string.Empty }, [.. library.GetReservedNames(), "respond"]);
     }
 
     /// <inheritdoc />
     public string Id { get; private set; }
 
     /// <inheritdoc />
-    public IPromptProvider Provider { get; }
+    public string WorkspacePath { get; private set; }
+
+    /// <inheritdoc />
+    public IStore Cache { get; } = new MemoryStore();
 
     /// <inheritdoc />
     public PromptUsage Usage
@@ -111,6 +97,22 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public IPromptSessionConfiguration Configuration => settings;
 
     /// <inheritdoc />
+    public IPromptSessionTransientConfiguration Transient => settings;
+
+    /// <inheritdoc />
+    /// <remarks>The fake runs a model of its own, <c>Fake</c> and the capability (<c>Fake Max</c>), with the effort as <c>Effort</c>, from the first prompt on.</remarks>
+    public IReadOnlyDictionary<string, string> Descriptors
+    {
+        get
+        {
+            lock (gate)
+            {
+                return descriptors;
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public PromptSessionState State
     {
         get
@@ -122,49 +124,10 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         }
     }
 
-    /// <inheritdoc />
-    public IObservable<PromptEvent> Output => output;
-
     /// <summary>
     /// Gets the API key the session was made with, or <see langword="null" /> for none.
     /// </summary>
     public string? ApiKey { get; }
-
-    /// <summary>
-    /// Gets or sets the limit windows that a window limit reads, which is the one of the provider that made the session until a test sets one for this session. With none, reading the status fails the way a login without limits does.
-    /// </summary>
-    public IReadOnlyList<PromptWindow>? Windows
-    {
-        get
-        {
-            lock (gate)
-            {
-                return windows ?? sharedWindows?.Invoke();
-            }
-        }
-
-        set
-        {
-            lock (gate)
-            {
-                windows = value;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Gets the identifier of the provider session the session was last attached to, or <see langword="null" /> if it never was or was attached to a new conversation.
-    /// </summary>
-    public string? AttachedTo
-    {
-        get
-        {
-            lock (gate)
-            {
-                return attachedTo;
-            }
-        }
-    }
 
     /// <summary>
     /// Gets how many times the session was compacted.
@@ -252,7 +215,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         => Enqueue((_, _) => events.ToAsyncEnumerable());
 
     /// <summary>
-    /// Scripts a failure for the next prompt that has none scripted yet, thrown before it reports anything, which is what a retry can recover from.
+    /// Scripts a failure for the next prompt that has none scripted yet, thrown before it reports anything.
     /// </summary>
     /// <param name="failure">The error.</param>
     /// <returns>This session, for chaining.</returns>
@@ -268,7 +231,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         => Fail(new PromptSessionException(message));
 
     /// <summary>
-    /// Scripts a prompt that never finishes by itself, to try timeouts, cancellation, limits and interruptions: it ends when it is cancelled, interrupted or the session is disposed.
+    /// Scripts a prompt that never finishes by itself, to try cancellation and interruptions: it ends when it is cancelled, interrupted or the session is disposed.
     /// </summary>
     /// <returns>This session, for chaining.</returns>
     public FakePromptSession Hang()
@@ -290,23 +253,23 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     }
 
     /// <inheritdoc />
+    public IDisposable Subscribe(IObserver<PromptEvent> observer)
+        => output.Subscribe(observer);
+
+    /// <inheritdoc />
     public async Task<string> Request(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        RequireModel();
-        return (await ((IPromptCollector)this).Collect(input, options, null, cancellation)).Text;
+        return (await ((IPromptCollector)this).Collect(input, options, cancellation)).Text;
     }
 
-    TimeProvider IPromptCollector.Time => time;
-
-    Task<PromptResult> IPromptCollector.Collect(object input, PromptRequestOptions? options, PromptRequestLimits? limits, CancellationToken cancellation)
-        => requester.Collect(input, options ?? new(), settings.RequestLimits(limits), cancellation);
+    Task<PromptResult> IPromptCollector.Collect(object input, PromptRequestOptions? options, CancellationToken cancellation)
+        => requester.Collect(input, options ?? new(), cancellation);
 
     /// <inheritdoc />
-    public Task Send(object input, PromptOptions? options = null, CancellationToken cancellation = default)
+    public Task Send(object input, PromptSendOptions? options = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(input);
-        RequireModel();
 
         foreach (string note in options?.Notes ?? [])
         {
@@ -353,7 +316,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            FakePromptSession fork = Copy(new FakePromptSession(Provider, ApiKey, sharedWindows, time));
+            FakePromptSession fork = Copy(new FakePromptSession(ApiKey, time));
 
             if (at is { } point)
             {
@@ -384,34 +347,27 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     }
 
     /// <inheritdoc />
-    /// <remarks>The conversation the fake recorded is dropped, since the session is now in another one. The provider session is not looked up.</remarks>
-    public async Task AttachTo(string? aiSessionId = null, PromptSessionOptions? options = null, CancellationToken cancellation = default)
+    /// <remarks>The conversation the fake recorded is kept. A workspace path is only checked to exist.</remarks>
+    public async Task Move(string? workspacePath, CancellationToken cancellation = default)
     {
-        if (options?.ApiKey is not null)
-        {
-            throw new ArgumentException("A session keeps its API key; it cannot be changed by attaching it elsewhere.", nameof(options));
-        }
-
-        string? workspacePath = options?.WorkspacePath;
-        bool sandbox = options?.Sandbox ?? true;
-        if (aiSessionId is not null)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(aiSessionId);
-        }
-
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        IStore? workspace = workspacePath is null ? null : IStore.FromDisk(workspacePath, sandbox);
+
+        string? workspace = workspacePath is null ? null : Path.GetFullPath(workspacePath);
+
+        if (workspace is not null && !Directory.Exists(workspace))
+        {
+            throw new DirectoryNotFoundException($"The workspace folder '{workspacePath}' does not exist.");
+        }
+
         await turn.WaitAsync(cancellation);
 
         try
         {
             lock (gate)
             {
-                attachedTo = aiSessionId;
-                Truncate(0);
+                WorkspacePath = workspace ?? DefaultWorkspace();
+                givenWorkspace = workspace is not null;
             }
-
-            Configuration.Workspace = workspace;
         }
         finally
         {
@@ -423,7 +379,6 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public async Task Compact(CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        RequireModel();
         await turn.WaitAsync(cancellation);
 
         try
@@ -443,7 +398,6 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public async Task<PromptContext> GetContext(CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        RequireModel();
         await turn.WaitAsync(cancellation);
 
         try
@@ -492,6 +446,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         Close();
         closing.Cancel();
         output.Complete();
+        _ = ClearCache();
     }
 
     /// <inheritdoc />
@@ -502,21 +457,43 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         turn.Release();
         await pumping.ContinueWith(static _ => { }, CancellationToken.None);
         output.Complete();
+        await ClearCache();
     }
 
     internal FakePromptSession Resume()
     {
         lock (gate)
         {
-            FakePromptSession resumed = new(Provider, ApiKey, sharedWindows, time) { Id = Id };
+            FakePromptSession resumed = new(ApiKey, time) { Id = Id };
             return Copy(resumed);
         }
     }
+
+    private async Task ClearCache()
+    {
+        foreach (StoreEntry entry in await Cache.List(string.Empty).ToListAsync())
+        {
+            await Cache.Delete(entry.Path);
+        }
+    }
+
+    internal void UseWorkspace(string? workspace)
+    {
+        lock (gate)
+        {
+            WorkspacePath = workspace ?? DefaultWorkspace();
+            givenWorkspace = workspace is not null;
+        }
+    }
+
+    private string DefaultWorkspace()
+        => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-fake-{Id}");
 
     private FakePromptSession Copy(FakePromptSession copy)
     {
         PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
         copy.responder = responder;
+        copy.UseWorkspace(givenWorkspace ? WorkspacePath : null);
         snapshot.CopyTo(copy.settings);
 
         foreach (Script script in scripts)
@@ -601,15 +578,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private sealed class Executor(FakePromptSession session) : IPromptExecutor
     {
-        public Task<IReadOnlyList<PromptWindow>> GetWindows(CancellationToken cancellation = default)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            return session.Windows is { } windows ? Task.FromResult(windows) : Task.FromException<IReadOnlyList<PromptWindow>>(new PromptSessionException("The fake provider reported no subscription limits."));
-        }
-
         public IAsyncEnumerable<PromptEvent> Execute(PromptRun run, CancellationToken cancellation = default)
         {
-            session.RequireModel();
 
             return run.Mode switch
             {
@@ -709,7 +679,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
         lock (gate)
         {
-            fork = Copy(new FakePromptSession(Provider, ApiKey, sharedWindows, time));
+            fork = Copy(new FakePromptSession(ApiKey, time));
         }
 
         try
@@ -851,7 +821,6 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         try
         {
             ObjectDisposedException.ThrowIf(IsDisposed, this);
-            CheckBudget();
             using CancellationTokenSource running = CancellationTokenSource.CreateLinkedTokenSource(cancellation, interruption.Token, closing.Token);
             prompt = Start(run);
 
@@ -927,34 +896,34 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     }
 
-    private void CheckBudget()
-    {
-        PromptBudget? limit = settings.Limits.Budget;
-        PromptUsage used;
-
-        lock (gate)
-        {
-            used = usage;
-        }
-
-        if (limit is not null && limit.IsReached(used))
-        {
-            throw new PromptLimitException(PromptLimit.Budget, "The session has used what its budget allows.");
-        }
-    }
-
-    private string NoModel
-        => "No model is selected: set Configuration.Model first.";
-
-    private void RequireModel()
-    {
-        if (settings.Model is null)
-        {
-            throw new PromptSessionModelException(NoModel);
-        }
-    }
-
     private FakePrompt Start(PromptRun run)
+    {
+        IReadOnlyDictionary<string, string>? changed = null;
+
+        try
+        {
+            lock (gate)
+            {
+                Dictionary<string, string> found = new(StringComparer.Ordinal) { ["Provider"] = "Fake", ["Model"] = $"Fake {settings.Capability}", ["Effort"] = settings.Effort.ToString() };
+
+                if (!found.OrderBy(entry => entry.Key, StringComparer.Ordinal).SequenceEqual(descriptors.OrderBy(entry => entry.Key, StringComparer.Ordinal)))
+                {
+                    descriptors = changed = found;
+                }
+            }
+
+            return Record(run);
+        }
+        finally
+        {
+            if (changed is not null)
+            {
+                output.Publish(new PromptDescriptorsEvent { Descriptors = changed });
+            }
+        }
+    }
+
+    private FakePrompt Record(PromptRun run)
     {
         lock (gate)
         {
@@ -964,8 +933,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
                 Text = run.Text,
                 Attachments = run.Attachments,
                 Schema = run.Schema,
-                Model = settings.Model ?? throw new PromptSessionModelException(NoModel),
-                ModelSettings = settings.ModelSettings.Copy(),
+                Capability = settings.Capability,
+                Effort = settings.Effort,
                 Notes = [.. notes]
             };
 

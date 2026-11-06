@@ -41,6 +41,11 @@ internal interface IPromptLibraryTools
     string GenerateImageName { get; }
 
     /// <summary>
+    /// Gets the first part of a path that is in the session's cache (the <c>CACHE:</c> of <c>CACHE:/notes.txt</c>), which the file tools and the descriptions of the tools use.
+    /// </summary>
+    string CacheName { get; }
+
+    /// <summary>
     /// Gets the name of the tool that tells the time, which a caller's own tools cannot use either.
     /// </summary>
     string TimeName { get; }
@@ -58,18 +63,16 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tools for a store.
     /// </summary>
-    /// <param name="store">The files the tools work on, with the mounted folders at its top level.</param>
-    /// <param name="mounts">The paths of the mounted folders, which the descriptions point out.</param>
-    /// <param name="hasWorkspace">Whether relative paths outside the mounts are in a workspace, which the descriptions say.</param>
+    /// <param name="store">The files the tools work on, with the cache at <see cref="CacheName" /> in its top level.</param>
     /// <returns>The tools.</returns>
-    IReadOnlyList<PromptTool> Create(IStore store, IReadOnlyList<string> mounts, bool hasWorkspace);
+    IReadOnlyList<PromptTool> Create(IStore store);
 
     /// <summary>
     /// Builds the tool that puts a question to the user.
     /// </summary>
     /// <param name="ask">Gets the user's reply to a question.</param>
     /// <returns>The tool.</returns>
-    PromptTool CreateAsk(Func<string, CancellationToken, Task<string>> ask);
+    PromptTool CreateAsk(PromptAsker ask);
 
     /// <summary>
     /// Builds the tool that runs shell commands on this machine.
@@ -81,7 +84,7 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tool that shows the AI an image of a store.
     /// </summary>
-    /// <param name="store">The files the image is read from, with the mounted folders at its top level.</param>
+    /// <param name="store">The files the image is read from, with the cache at <c>CACHE:</c> in its top level.</param>
     /// <param name="give">Gives the AI the image, by the path it was read from, as an input of its own.</param>
     /// <returns>The tool.</returns>
     PromptTool CreateImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give);
@@ -89,9 +92,8 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tool that fetches a web page.
     /// </summary>
-    /// <param name="isBlocked">Decides for every address the tool is about to request, a redirect's included, whether it is blocked.</param>
     /// <returns>The tool.</returns>
-    PromptTool CreateFetch(Func<Uri, CancellationToken, Task<bool>> isBlocked);
+    PromptTool CreateFetch();
 
     /// <summary>
     /// Builds the tool that searches the web by reading the HTML page of DuckDuckGo, for an engine that has no web search of its own. It spaces its requests, stops for a while when it is turned away, and is not subject to the web filter.
@@ -108,7 +110,7 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tool that makes an image with a generator and saves it in a store.
     /// </summary>
-    /// <param name="store">Where the images are saved, with the mounted folders at its top level.</param>
+    /// <param name="store">Where the images are saved, with the cache at <c>CACHE:</c> in its top level.</param>
     /// <param name="generator">Makes the images, and decides what the tool offers.</param>
     /// <returns>The tool.</returns>
     PromptTool CreateGenerateImage(IStore store, IPromptImageGenerator generator);
@@ -237,22 +239,25 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     public string DelegateName => "delegate";
 
     /// <inheritdoc />
-    public IReadOnlyList<PromptTool> Create(IStore store, IReadOnlyList<string> mounts, bool hasWorkspace)
+    public string CacheName => "CACHE:";
+
+    /// <inheritdoc />
+    public IReadOnlyList<PromptTool> Create(IStore store)
         => [
-            PromptTool.Create<DirectoryInput, string>("list_directory", "Lists the files and folders directly in a folder (folders end with /). " + Where(mounts, hasWorkspace) + " Leave path out to list " + (hasWorkspace ? "the workspace." : "the mounted folders themselves."), (input, cancellation) => ListDirectory(store, input, cancellation)),
+            PromptTool.Create<DirectoryInput, string>("list_directory", "Lists the files and folders directly in a folder (folders end with /). " + Where() + $" Leave path out to list the workspace and {CacheName}.", (input, cancellation) => ListDirectory(store, input, cancellation)),
             PromptTool.Create<FindInput, string>("find_files", "Finds files by glob pattern, as paths you can give the other tools. A pattern without / (like *.cs) matches file names at any depth; with / (like src/**/*.md) it matches the whole path. * matches within a folder name, ** across folders, ? one character.", (input, cancellation) => FindFiles(store, input, cancellation)),
-            PromptTool.Create<SearchInput, string>("search_files", "Searches file contents with a regular expression and returns path:line:text for each match (at most 200). Optionally limit it to a folder (path) or to files matching a glob (glob)." + Where(mounts, hasWorkspace), (input, cancellation) => SearchFiles(store, input, cancellation)),
+            PromptTool.Create<SearchInput, string>("search_files", "Searches file contents with a regular expression and returns path:line:text for each match (at most 200). Optionally limit it to a folder (path) or to files matching a glob (glob)." + Where(), (input, cancellation) => SearchFiles(store, input, cancellation)),
             PromptTool.Create<ReadInput, string>("read_file", "Reads a text file and returns its lines numbered (line number, tab, text). Reads up to 2000 lines; use offset (first line, starting at 1) and limit to read more or a part.", (input, cancellation) => ReadFile(store, input, cancellation)),
             PromptTool.Create<WriteInput, string>("write_file", "Creates a file, or replaces the whole content of an existing one, with the given text. Missing folders are created. To change part of a file, use edit_file.", (input, cancellation) => WriteFile(store, input, cancellation)),
             PromptTool.Create<EditInput, string>("edit_file", "Replaces text in a file. old_string must match the file exactly (including whitespace) and, unless replace_all is true, exactly once: include enough surrounding text to make it unique. replace_all replaces every occurrence, for example to rename something.", (input, cancellation) => EditFile(store, input, cancellation)),
             PromptTool.Create<PathInput, string>("delete_file", "Deletes a file, or a folder with everything in it.", (input, cancellation) => DeleteFile(store, input, cancellation)),
-            PromptTool.Create<MoveInput, string>("move_file", "Moves or renames a file, or a folder with everything in it. The destination must not exist." + Where(mounts, hasWorkspace), (input, cancellation) => MoveFile(store, input, cancellation)),
-            PromptTool.Create<MoveInput, string>("copy_file", "Copies a file, or a folder with everything in it, to a new place. The destination must not exist." + Where(mounts, hasWorkspace), (input, cancellation) => CopyFile(store, input, cancellation)),
+            PromptTool.Create<MoveInput, string>("move_file", "Moves or renames a file, or a folder with everything in it. The destination must not exist." + Where(), (input, cancellation) => MoveFile(store, input, cancellation)),
+            PromptTool.Create<MoveInput, string>("copy_file", "Copies a file, or a folder with everything in it, to a new place. The destination must not exist." + Where(), (input, cancellation) => CopyFile(store, input, cancellation)),
             PromptTool.Create<DiffInput, string>("diff_files", "Compares two text files line by line and returns the differences as a unified diff (lines starting with - are only in the first file, lines starting with + only in the second), or says that they are identical. Use it to review what changed between two versions, or to check two copies.", (input, cancellation) => DiffFiles(store, input, cancellation))
         ];
 
     /// <inheritdoc />
-    public PromptTool CreateAsk(Func<string, CancellationToken, Task<string>> ask)
+    public PromptTool CreateAsk(PromptAsker ask)
         => PromptTool.Create<AskInput, string>(AskName, "Asks the user a question and returns their reply. Use it when you need information, a choice or a confirmation that only the user can give and you cannot find out yourself. Ask one clear, self-contained question at a time; the user cannot see your other messages. The call waits until the user has answered.", async (input, cancellation) =>
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(input.Question, nameof(input));
@@ -261,15 +266,15 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
     /// <inheritdoc />
     public PromptTool CreateShell(string workingFolder)
-        => PromptTool.Create<ShellInput, string>(ShellName, $"Runs a shell command on the local machine, with the full rights of the user this program runs as, and returns its output (standard output and standard error together) followed by its exit code. The command runs with /bin/sh -c (cmd /c on Windows). It starts in an empty scratch folder unless working_directory is given, so use absolute paths or working_directory. Standard input is empty, so a command that waits for input ends at once. A command is stopped after timeout_seconds (default {shellDefaultSeconds}, at most {shellMaxSeconds}), and very long output is cut.", (input, cancellation) => RunShell(workingFolder, input, cancellation));
+        => PromptTool.Create<ShellInput, string>(ShellName, $"Runs a shell command on the local machine, with the full rights of the user this program runs as, and returns its output (standard output and standard error together) followed by its exit code. The command runs with /bin/sh -c (cmd /c on Windows). It starts in the workspace unless working_directory is given, so use absolute paths or working_directory. Standard input is empty, so a command that waits for input ends at once. A command is stopped after timeout_seconds (default {shellDefaultSeconds}, at most {shellMaxSeconds}), and very long output is cut.", (input, cancellation) => RunShell(workingFolder, input, cancellation));
 
     /// <inheritdoc />
     public PromptTool CreateImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give)
-        => PromptTool.Create<ImageInput, string>(ImageName, "Shows you an image file (PNG, JPEG, GIF or WebP, up to 5 MB) that you can read with the file tools, such as a screenshot or a picture in the project. The file tools only read text, so they cannot show you an image. The image is not returned by this call: it is sent to you as a message from the user, which arrives while you work, or right after your turn if it could not reach you sooner. Carry on, and describe or use the image once the message with it has arrived. If it has not arrived when you need it, call this tool again.", (input, cancellation) => ViewImage(store, give, input, cancellation));
+        => PromptTool.Create<ImageInput, string>(ImageName, $"Shows you an image file (PNG, JPEG, GIF or WebP, up to 5 MB) that you can read with the file tools, such as a screenshot or a picture in the project, with the same paths as the file tools (relative to the workspace, or starting with {CacheName} for the cache). The file tools only read text, so they cannot show you an image. The image is not returned by this call: it is sent to you as a message from the user, which arrives while you work, or right after your turn if it could not reach you sooner. Carry on, and describe or use the image once the message with it has arrived. If it has not arrived when you need it, call this tool again.", (input, cancellation) => ViewImage(store, give, input, cancellation));
 
     /// <inheritdoc />
-    public PromptTool CreateFetch(Func<Uri, CancellationToken, Task<bool>> isBlocked)
-        => PromptTool.Create<FetchInput, string>(FetchName, $"Fetches a web page or other text from an http or https address and returns it as text (HTML is reduced to its readable text). Use it to read documentation, an issue, an API response or a text file on the web. Binary content is refused, and long content is cut at max_chars (default {fetchDefaultChars}, at most {fetchMaxChars}). Some addresses may be blocked.", (input, cancellation) => Fetch(isBlocked, input, cancellation));
+    public PromptTool CreateFetch()
+        => PromptTool.Create<FetchInput, string>(FetchName, $"Fetches a web page or other text from an http or https address and returns it as text (HTML is reduced to its readable text). Use it to read documentation, an issue, an API response or a text file on the web. Binary content is refused, and long content is cut at max_chars (default {fetchDefaultChars}, at most {fetchMaxChars}).", (input, cancellation) => Fetch(input, cancellation));
 
     private async Task<string> ViewImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give, ImageInput input, CancellationToken cancellation = default)
     {
@@ -305,7 +310,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         return $"The image {path} is on its way to you as a message from the user. Carry on and look at it once that message arrives; it does not come back in this result. If it has not arrived when you need it, call {ImageName} again.";
     }
 
-    private async Task<string> Fetch(Func<Uri, CancellationToken, Task<bool>> isBlocked, FetchInput input, CancellationToken cancellation = default)
+    private async Task<string> Fetch(FetchInput input, CancellationToken cancellation = default)
     {
         if (!Uri.TryCreate(input.Url, UriKind.Absolute, out Uri? address) || address.Scheme is not ("http" or "https"))
         {
@@ -316,7 +321,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
         try
         {
-            using HttpResponseMessage response = await Get(isBlocked, address, cancellation);
+            using HttpResponseMessage response = await Get(address, cancellation);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -366,15 +371,10 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         }
     }
 
-    private async Task<HttpResponseMessage> Get(Func<Uri, CancellationToken, Task<bool>> isBlocked, Uri address, CancellationToken cancellation)
+    private async Task<HttpResponseMessage> Get(Uri address, CancellationToken cancellation)
     {
         for (int redirects = 0; ; redirects++)
         {
-            if (await isBlocked(address, cancellation))
-            {
-                throw new InvalidOperationException($"The address {address} is blocked, so it cannot be read.");
-            }
-
             using HttpRequestMessage request = new(HttpMethod.Get, address);
             request.Headers.UserAgent.ParseAdd("LiveAi");
             HttpResponseMessage response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation);
@@ -541,7 +541,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         => imageExtensions.Select(extension => stem + extension).Concat(Enumerable.Range(1, count > 1 ? count : 0).SelectMany(number => imageExtensions.Select(extension => $"{stem}-{number}{extension}")));
 
     private string Size(int bytes)
-        => bytes < 1024 ? $"{bytes} bytes" : bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes / 1024.0 / 1024.0:0.#} MB";
+        => bytes < 1024 ? $"{bytes} bytes" : bytes < 1024 * 1024 ? $"{(bytes / 1024.0).ToString("0.#", CultureInfo.InvariantCulture)} KB" : $"{(bytes / 1024.0 / 1024.0).ToString("0.#", CultureInfo.InvariantCulture)} MB";
 
     private async Task<bool> Exists(IStore store, string path, CancellationToken cancellation)
     {
@@ -1036,7 +1036,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
         if (path.Length == 0)
         {
-            throw new InvalidOperationException("A mounted folder itself cannot be deleted.");
+            throw new InvalidOperationException("The top folder itself cannot be deleted.");
         }
 
         await store.Delete(path, cancellation);
@@ -1087,10 +1087,8 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         return $"Copied {from} to {to}.";
     }
 
-    private string Where(IReadOnlyList<string> mounts, bool hasWorkspace)
-        => hasWorkspace
-            ? $" A path is relative to the workspace, your working directory{(mounts.Count == 0 ? string.Empty : $", except that one starting with the path of a mounted folder is inside that folder (the mounted folders are: {string.Join(", ", mounts)})")}. An absolute path is a path on this machine, which only works if the workspace allows it."
-            : mounts.Count == 0 ? string.Empty : $" Paths start with the path of a mounted folder. The mounted folders are: {string.Join(", ", mounts)}.";
+    private string Where()
+        => $" A path is relative to the workspace, your working directory, except that one starting with {CacheName} is in the cache, temporary storage that is lost when the session ends (for example {CacheName}/notes.txt). An absolute path is a path on this machine, which only works if the workspace allows it.";
 
     private async IAsyncEnumerable<string> Walk(IStore store, string directory, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
@@ -1172,21 +1170,21 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// <summary>
     /// The arguments of the tool that lists a folder.
     /// </summary>
-    /// <param name="Path">The folder, or <see langword="null" /> for the mounted folders.</param>
+    /// <param name="Path">The folder, or <see langword="null" /> for the top, the workspace and the cache.</param>
     internal sealed record DirectoryInput(string? Path = null);
 
     /// <summary>
     /// The arguments of the tool that finds files by name.
     /// </summary>
     /// <param name="Pattern">The glob pattern.</param>
-    /// <param name="Path">The folder to search, or <see langword="null" /> for all mounted folders.</param>
+    /// <param name="Path">The folder to search, or <see langword="null" /> for everything.</param>
     internal sealed record FindInput(string Pattern, string? Path = null);
 
     /// <summary>
     /// The arguments of the tool that searches file contents.
     /// </summary>
     /// <param name="Pattern">The regular expression.</param>
-    /// <param name="Path">The folder to search, or <see langword="null" /> for all mounted folders.</param>
+    /// <param name="Path">The folder to search, or <see langword="null" /> for everything.</param>
     /// <param name="Glob">A glob pattern the files must match, or <see langword="null" /> for any.</param>
     /// <param name="IgnoreCase">Whether case is ignored.</param>
     internal sealed record SearchInput(string Pattern, string? Path = null, string? Glob = null, [property: JsonPropertyName("ignore_case")] bool? IgnoreCase = null);
@@ -1226,7 +1224,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// The arguments of the tool that runs a shell command.
     /// </summary>
     /// <param name="Command">The command line.</param>
-    /// <param name="WorkingDirectory">The folder to run in, or <see langword="null" /> for the session's scratch folder.</param>
+    /// <param name="WorkingDirectory">The folder to run in, or <see langword="null" /> for the workspace.</param>
     /// <param name="TimeoutSeconds">How long the command may run, or <see langword="null" /> for the default.</param>
     internal sealed record ShellInput(string Command, [property: JsonPropertyName("working_directory")] string? WorkingDirectory = null, [property: JsonPropertyName("timeout_seconds")] int? TimeoutSeconds = null);
 

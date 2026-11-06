@@ -9,7 +9,7 @@ public sealed class FakeOpenCode(TempFolder temp)
     /// <summary>
     /// Writes the script.
     /// </summary>
-    /// <param name="server">The server to report, or <see langword="null" /> for a script that has none.</param>
+    /// <param name="server">The server to report, or <see langword="null" /> for a script that has none. A script with a server also lists the models <c>fake/model</c> and <c>fake/big</c>.</param>
     /// <param name="name">The file name of the script.</param>
     /// <param name="export">What <c>session export</c> prints, or <see langword="null" /> for a session that is not found.</param>
     /// <param name="fork">What <c>api</c> prints, or <see langword="null" /> for nothing.</param>
@@ -19,6 +19,7 @@ public sealed class FakeOpenCode(TempFolder temp)
         if (server is not null)
         {
             File.WriteAllText(temp.Combine("server-url.txt"), server.Url);
+            File.WriteAllText(temp.Combine("default-models.json"), """{"data":[{"providerID":"fake","modelID":"model","id":"model","limit":{"context":32000,"output":4000},"variants":[{"id":"low"},{"id":"medium"},{"id":"high"}]},{"providerID":"fake","modelID":"big","id":"big","limit":{"context":64000,"output":8000},"variants":[{"id":"low"},{"id":"high"},{"id":"max"}]}]}""");
         }
 
         if (export is not null)
@@ -32,14 +33,14 @@ public sealed class FakeOpenCode(TempFolder temp)
         }
 
         return temp.Script(name, """
-            echo $$ >> "@TEMP@/pids.txt"
-            printf '%s\n' "$@" > "@TEMP@/opencode-args-$1.txt"
+            if [ "$4" != "/api/model" ]; then printf '%s\n' "$@" > "@TEMP@/opencode-args-$1.txt"; fi
             printf '%s' "$OPENCODE_CONFIG_CONTENT" > "@TEMP@/opencode-config.txt"
             printf '%s' "$PWD" > "@TEMP@/opencode-folder.txt"
             if [ -n "$LIVEAI_TOOLS_TOKEN" ]; then printf '%s' "$LIVEAI_TOOLS_TOKEN" > "@TEMP@/opencode-token.txt"; fi
             if [ -n "$OPENCODE_SERVER_PASSWORD" ]; then printf '%s' "$OPENCODE_SERVER_PASSWORD" > "@TEMP@/opencode-password.txt"; fi
             case "$1" in
             serve)
+              echo $$ >> "@TEMP@/pids.txt"
               printf '{"url":"%s"}\n' "$(cat "@TEMP@/server-url.txt")"
               cat > /dev/null
               exit 0;;
@@ -50,7 +51,8 @@ public sealed class FakeOpenCode(TempFolder temp)
               esac
               exit 0;;
             api)
-              if [ -f "@TEMP@/api-response.json" ]; then cat "@TEMP@/api-response.json"; fi
+              if [ "$4" = "/api/model" ] && [ -f "@TEMP@/default-models.json" ]; then cat "@TEMP@/default-models.json"
+              elif [ -f "@TEMP@/api-response.json" ]; then cat "@TEMP@/api-response.json"; fi
               exit 0;;
             run)
               cat > "@TEMP@/opencode-run-prompt.txt"

@@ -59,7 +59,7 @@ public sealed class PromptAttachmentsTests
 
         Assert.Contains("Claude Code cannot be given the attachment 'a.zip'", exception.Message);
         Assert.Contains("and so are PDF documents", exception.Message);
-        Assert.Contains("mount anything else", exception.Message);
+        Assert.Contains("put anything else in the session's cache", exception.Message);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class PromptAttachmentsTests
         Assert.Throws<ArgumentException>(() => new[] { Attachment("bad.txt", "text/plain", [0xFF, 0xFE, 0xFD]) }.AsReadOnly().Prepare("go", claude));
         ArgumentException large = Assert.Throws<ArgumentException>(() => new[] { Attachment("big.txt", "text/plain", new byte[300 * 1024]) }.AsReadOnly().Prepare("go", claude));
 
-        Assert.Contains("Mount it instead", large.Message);
+        Assert.Contains("Put it in the session's cache instead", large.Message);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class PromptAttachmentsTests
     [Fact]
     public async Task ReadAttachment_ReadsAFileOfAStoreNamedAfterItsLastPart()
     {
-        IStore store = IStore.FromMemory();
+        IStore store = new MemoryStore();
         await store.WriteBytes("images/deep/photo.jpg", [1, 2]);
 
         PromptAttachment attachment = await store.ReadAttachment("images/deep/photo.jpg");

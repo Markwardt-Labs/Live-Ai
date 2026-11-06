@@ -31,24 +31,39 @@ public sealed class PromptSessionStoreTests : IDisposable
     public async Task TheWorkspaceAndItsSandboxAreStoredWithTheLink()
     {
         PromptSessionStore store = new(temp.Path);
-        PromptSessionLink link = Link("abc") with { WorkspacePath = "/project", Sandbox = false };
+        PromptSessionLink link = Link("abc") with { WorkspacePath = "/project", IsSandboxed = false };
 
         await store.Save(link, CancellationToken.None);
 
         PromptSessionLink found = (await new PromptSessionStore(temp.Path).Find(link.Id, CancellationToken.None))!;
-        Assert.Equal(("/project", false), (found.WorkspacePath, found.Sandbox));
+        Assert.Equal(("/project", false), (found.WorkspacePath, found.IsSandboxed));
     }
 
     [Fact]
-    public async Task OnlyTheLinkAndTheModelWithItsSettingsAreWritten()
+    public async Task TheLinkAndTheConfigurationOfTheSessionAreWritten()
     {
         PromptSessionLink link = Link("abc");
 
         await new PromptSessionStore(temp.Path).Save(link, CancellationToken.None);
 
         JsonElement written = JsonDocument.Parse(await File.ReadAllTextAsync(Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single())).RootElement;
-        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "sandbox", "forkedFrom", "forkedAt", "model", "modelSettings"], written.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "isSandboxed", "forkedFrom", "forkedAt", "options", "isShellAllowed", "isWebAllowed", "instructions", "imageGeneration", "capability", "effort"], written.EnumerateObject().Select(property => property.Name));
         Assert.Equal("Codex", written.GetProperty("provider").GetString());
+    }
+
+    [Fact]
+    public async Task ASavedLink_CanBeReadByTheCurrentUserOnlyOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await new PromptSessionStore(temp.Path).Save(Link("abc") with { Options = new ClaudeSessionOptions { ApiKey = "key" } }, CancellationToken.None);
+
+        string file = Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single();
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+        Assert.Contains("\"apiKey\": \"key\"", await File.ReadAllTextAsync(file));
     }
 
     [Fact]
@@ -56,11 +71,11 @@ public sealed class PromptSessionStoreTests : IDisposable
     {
         Guid id = Guid.NewGuid();
         Directory.CreateDirectory(temp.Combine("Sessions"));
-        await File.WriteAllTextAsync(temp.Combine($"Sessions/{id:N}.json"), $$$"""{"id":"{{{id:N}}}","provider":"Claude Code","capability":"Max","reasoning":"High","isPersistent":true,"enableShell":true,"mounts":{"a":{"path":"/x"}},"label":"old","workingFolder":"/work","aiSessionId":"abc"}""");
+        await File.WriteAllTextAsync(temp.Combine($"Sessions/{id:N}.json"), $$$"""{"id":"{{{id:N}}}","provider":"Claude Code","capability":"Max","reasoning":"High","isPersistent":true,"isShellAllowed":true,"mounts":{"a":{"path":"/x"}},"label":"old","workingFolder":"/work","aiSessionId":"abc"}""");
 
         PromptSessionLink? found = await new PromptSessionStore(temp.Path).Find(id, CancellationToken.None);
 
-        Assert.Equal(new PromptSessionLink { Id = id, Provider = "Claude Code", WorkingFolder = "/work", AiSessionId = "abc" }, found);
+        Assert.Equal(new PromptSessionLink { Id = id, Provider = "Claude Code", WorkingFolder = "/work", AiSessionId = "abc", Capability = PromptCapability.Max, IsShellAllowed = true }, found);
     }
 
     [Fact]

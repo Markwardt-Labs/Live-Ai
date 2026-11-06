@@ -38,14 +38,14 @@ public sealed class StableDiffusionImageGeneratorTests
     }
 
     [Theory]
-    [InlineData(PromptImageQuality.Draft, 6)]
-    [InlineData(PromptImageQuality.Standard, 20)]
-    [InlineData(PromptImageQuality.High, 40)]
-    public async Task Generate_TurnsTheQualityIntoTheStepsItWasGiven(PromptImageQuality quality, int steps)
+    [InlineData((int)PromptImageQuality.Draft, 6)]
+    [InlineData((int)PromptImageQuality.Standard, 20)]
+    [InlineData((int)PromptImageQuality.High, 40)]
+    public async Task Generate_TurnsTheQualityIntoTheStepsItWasGiven(int quality, int steps)
     {
         answer = _ => Json(Answer());
 
-        await Generator().Generate(new PromptImageRequest { Prompt = "x", Quality = quality });
+        await Generator().Generate(new PromptImageRequest { Prompt = "x", Quality = (PromptImageQuality)quality });
 
         Assert.Equal(steps, bodies.Single().GetProperty("steps").GetInt32());
     }
@@ -142,27 +142,5 @@ public sealed class StableDiffusionImageGeneratorTests
 
         Assert.Contains("http://localhost:7860", exception.Message, StringComparison.Ordinal);
         Assert.Contains("API turned on", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void TheFactoryRefusesSizesAndStepsBelowOneAndNegativeGuidance()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(width: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(height: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(draftSteps: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(standardSteps: -1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(highSteps: 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => IPromptImageGenerator.StableDiffusion(guidance: -0.5));
-    }
-
-    [Fact]
-    public void TheFactoryMakesAGeneratorWithANegativePromptASeedAndTheUsualAdviceOrYours()
-    {
-        IPromptImageGenerator usual = IPromptImageGenerator.StableDiffusion();
-        IPromptImageGenerator plain = IPromptImageGenerator.StableDiffusion(promptGuide: "Write sentences.");
-
-        Assert.Equal(PromptImageFeatures.NegativePrompt | PromptImageFeatures.Seed, usual.Features);
-        Assert.Contains("comma separated", usual.PromptGuide, StringComparison.Ordinal);
-        Assert.Equal("Write sentences.", plain.PromptGuide);
     }
 }

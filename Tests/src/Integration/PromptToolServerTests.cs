@@ -31,7 +31,7 @@ public sealed class PromptToolServerTests : IAsyncLifetime
             return "never";
         }
         };
-        server = new PromptToolHost().Start([echo, fail, slow], null);
+        server = new PromptToolHost().Start([echo, fail, slow]);
         return Task.CompletedTask;
     }
 
@@ -218,7 +218,7 @@ public sealed class PromptToolServerTests : IAsyncLifetime
     [Fact]
     public async Task Servers_ListenOnDifferentPortsWithDifferentSecrets()
     {
-        await using IPromptToolServer other = new PromptToolHost().Start([], null);
+        await using IPromptToolServer other = new PromptToolHost().Start([]);
 
         Assert.NotEqual(server.Endpoint.Url, other.Endpoint.Url);
         Assert.NotEqual(server.Endpoint.Token, other.Endpoint.Token);

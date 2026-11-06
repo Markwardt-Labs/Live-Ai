@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Sends values to everyone who is watching, as an <see cref="IObservable{T}" /> does: values, then at most one end, which is either a completion or an error. A new watcher is first given the most recent value, if there is one, so that one who arrives a moment late does not miss it. Every watcher has a queue and a task of its own, so the watchers are called in order but never by the thread that publishes and never under a lock: a watcher that is slow, blocks or calls back into the publisher cannot stall or deadlock it.
+/// Sends values to everyone who is watching, as an <see cref="IObservable{T}" /> does: values, then at most one end, which is either a completion or an error. Every watcher has a queue and a task of its own, so the watchers are called in order but never by the thread that publishes and never under a lock: a watcher that is slow, blocks or calls back into the publisher cannot stall or deadlock it.
 /// </summary>
 /// <typeparam name="T">The type of the values.</typeparam>
 internal interface IBroadcast<T> : IObservable<T>
@@ -31,16 +31,11 @@ internal interface IBroadcast<T> : IObservable<T>
 }
 
 /// <inheritdoc />
-/// <param name="replay">Whether a new watcher is first given the most recent value.</param>
-internal sealed class Broadcast<T>(bool replay = true) : IBroadcast<T>
+internal sealed class Broadcast<T> : IBroadcast<T>
 {
     private readonly object gate = new();
 
     private readonly List<Watcher> watchers = [];
-
-    private T? latest;
-
-    private bool hasLatest;
 
     private bool ended;
 
@@ -53,11 +48,6 @@ internal sealed class Broadcast<T>(bool replay = true) : IBroadcast<T>
 
         lock (gate)
         {
-            if (replay && hasLatest)
-            {
-                watcher.Post(Delivery.Of(latest!));
-            }
-
             if (ended)
             {
                 watcher.Post(Delivery.End(failure));
@@ -81,8 +71,6 @@ internal sealed class Broadcast<T>(bool replay = true) : IBroadcast<T>
                 return;
             }
 
-            latest = value;
-            hasLatest = true;
 
             foreach (Watcher watcher in watchers)
             {

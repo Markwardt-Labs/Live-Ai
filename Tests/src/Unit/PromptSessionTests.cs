@@ -23,20 +23,25 @@ public sealed class PromptSessionTests
 
     public PromptSessionTests()
     {
+        store.Setup(mock => mock.GetWorkspaceFolder(It.IsAny<Guid>())).Returns((Guid id) => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}"));
         engine.SetupGet(mock => mock.Identifier).Returns("Fake");
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns([]);
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
+        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns([]);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(() => Server().Object);
+        provider.Setup(mock => mock.Select(It.IsAny<PromptCapability>(), It.IsAny<PromptEffort>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PromptCapability capability, PromptEffort effort, string? _, CancellationToken _) => (
+                new PromptModel { Id = capability switch { PromptCapability.Fast => "haiku", PromptCapability.Balanced => "sonnet", PromptCapability.Strong => "opus", _ => "fable" }, Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high", "max"])] },
+                new Dictionary<string, string> { ["effort"] = effort.ToString().ToLowerInvariant() }));
     }
 
-    private PromptSession Session(PromptSessionRecord record, string? apiKey = null)
+    private PromptSession Session(PromptSessionRecord record, string? apiKey = null, Func<PromptImageOptions, IPromptImageGenerator>? generators = null)
     {
         engine.Setup(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == apiKey))).Returns(new ProcessStartInfo("tool"));
-        return new PromptSession(record, apiKey, store.Object, provider.Object, engine.Object, runner.Object, toolHost.Object, libraryTools.Object, opener.Object);
+        return new PromptSession(record, apiKey, store.Object, provider.Object, engine.Object, runner.Object, toolHost.Object, libraryTools.Object, opener.Object, generators: generators);
     }
 
     private async IAsyncEnumerable<PromptEngineEvent> Events(params PromptEngineEvent[] events)
@@ -58,9 +63,7 @@ public sealed class PromptSessionTests
         PromptSession session = Session(record, "key");
 
         Assert.Equal(record.Id.ToString("N"), session.Id);
-        Assert.Same(provider.Object, session.Provider);
-        Assert.Equal("sonnet", session.Configuration.Model!.Id);
-        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
+        Assert.Equal((PromptCapability.Balanced, PromptEffort.Medium), (session.Configuration.Capability, session.Configuration.Effort));
     }
 
     [Fact]
@@ -104,6 +107,35 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
+    public void Descriptors_StartWithTheProviderAndTheModelOfTheRecord()
+    {
+        PromptSession session = Session(Record());
+
+        Assert.Equal(new Dictionary<string, string> { ["Provider"] = "Fake", ["Model"] = "sonnet", ["Effort"] = "Medium" }, session.Descriptors);
+    }
+
+    [Fact]
+    public async Task Descriptors_ChangeWhenAPromptChoosesAnotherModelAndAnEventSaysSo()
+    {
+        PromptSession session = Session(Record());
+        Plain();
+        Recorder<PromptEvent> recorder = new();
+        session.Subscribe(recorder);
+
+        await session.Messages("one");
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.High;
+        await session.Messages("two");
+        await session.Messages("three");
+        await recorder.Until(values => values.OfType<PromptDescriptorsEvent>().Any());
+
+        Dictionary<string, string> expected = new() { ["Provider"] = "Fake", ["Model"] = "opus", ["Effort"] = "High" };
+        Assert.Equal(expected, session.Descriptors);
+        PromptDescriptorsEvent changed = Assert.Single(recorder.Values.OfType<PromptDescriptorsEvent>());
+        Assert.Equal(expected, changed.Descriptors);
+    }
+
+    [Fact]
     public async Task Send_ThrowsWhenTheAiFails()
     {
         PromptSession session = Session(Record());
@@ -111,7 +143,7 @@ public sealed class PromptSessionTests
             .Returns(Events(Event(PromptEngineEventKind.Reply, "partial"), Event(PromptEngineEventKind.Failed, "broken")));
 
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("hi"));
         await recorder.Until(values => values.OfType<PromptFailureEvent>().Any());
         List<string> replies = [.. recorder.Values.OfType<PromptMessageEvent>().Select(message => message.Text)];
@@ -150,22 +182,21 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(Record());
 
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium"])] };
-        session.Configuration.ModelSettings["effort"] = "low";
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.Low;
 
-        Assert.Equal("opus", session.Configuration.Model!.Id);
-        Assert.Equal("low", session.Configuration.ModelSettings["effort"]);
+        Assert.Equal((PromptCapability.Strong, PromptEffort.Low), (session.Configuration.Capability, session.Configuration.Effort));
         store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public void Settings_RejectValuesTheModelDoesNotAccept()
+    public void Settings_RejectValuesThatAreNotDefined()
     {
         PromptSession session = Session(Record());
 
-        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["effort"] = "extreme");
-        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["unknown"] = "x");
-        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Capability = (PromptCapability)99);
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Effort = (PromptEffort)99);
+        Assert.Equal((PromptCapability.Balanced, PromptEffort.Medium), (session.Configuration.Capability, session.Configuration.Effort));
     }
 
     [Fact]
@@ -177,7 +208,7 @@ public sealed class PromptSessionTests
         Task<List<string>> first = session.Messages("one");
         await Task.Delay(100);
 
-        session.Configuration.ModelSettings["effort"] = "max";
+        session.Configuration.Effort = PromptEffort.Max;
         release.SetResult();
         await first;
         await session.Messages("two");
@@ -195,7 +226,6 @@ public sealed class PromptSessionTests
         process.SetupGet(mock => mock.IsRunning).Returns(true);
         process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "kept"), Event(PromptEngineEventKind.Finished)));
         PromptSession session = Session(record ?? Record());
-        session.Configuration.IsPersistent = true;
         return session;
     }
 
@@ -228,13 +258,49 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public void IsPersistent_IsOffUntilSet()
+    public async Task Send_WhenTheKeptProcessDiedBetweenPrompts_StartsANewOneAndRunsThePromptThereOnce()
     {
-        PromptSession session = Session(Record());
+        PromptSession session = Persistent();
+        Mock<IPromptProcess> second = new();
+        second.SetupGet(mock => mock.IsRunning).Returns(true);
+        second.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "again"), Event(PromptEngineEventKind.Finished)));
+        runner.Setup(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>())).Returns(new Queue<IPromptProcess>([process.Object, second.Object]).Dequeue);
+        bool dead = false;
+        process.SetupGet(mock => mock.IsRunning).Returns(() => !dead);
+        int runs = 0;
+        process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() =>
+        {
+            if (Interlocked.Increment(ref runs) == 1)
+            {
+                return Events(Event(PromptEngineEventKind.Reply, "kept"), Event(PromptEngineEventKind.Finished));
+            }
 
-        Assert.False(session.Configuration.IsPersistent);
-        session.Configuration.IsPersistent = true;
-        Assert.True(session.Configuration.IsPersistent);
+            dead = true;
+            return Events(Event(PromptEngineEventKind.Failed, "Fake stopped."));
+        });
+
+        await session.Messages("one");
+        List<string> replies = await session.Messages("two");
+
+        Assert.Equal(["again"], replies);
+        process.Verify(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        second.Verify(mock => mock.Run(It.Is<PromptInput>(input => input.Text == "two"), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Send_WhenTheKeptProcessFailsAPromptAndStaysAlive_ReportsTheFailureWithoutTryingAgain()
+    {
+        PromptSession session = Persistent();
+        int runs = 0;
+        process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Interlocked.Increment(ref runs) == 1
+            ? Events(Event(PromptEngineEventKind.Reply, "kept"), Event(PromptEngineEventKind.Finished))
+            : Events(Event(PromptEngineEventKind.Failed, "Invalid API key")));
+        await session.Messages("one");
+
+        PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Messages("two"));
+
+        Assert.Equal("Invalid API key", exception.Message);
+        process.Verify(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -277,7 +343,7 @@ public sealed class PromptSessionTests
                 session.Configuration.Instructions = "Be brief.";
                 break;
             default:
-                session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
+                session.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
                 break;
         }
 
@@ -294,8 +360,8 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "max"])] };
-        session.Configuration.ModelSettings["effort"] = "max";
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.Max;
         await session.Messages("two");
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Once);
@@ -312,8 +378,7 @@ public sealed class PromptSessionTests
         await session.Messages("one");
 
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
-        session.Configuration.IsPersistent = true;
+        session.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
         await Eventually(() => process.Verify(mock => mock.Stop(), Times.Once));
         await session.Messages("two");
 
@@ -329,8 +394,7 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.Model = session.Configuration.Model;
-        session.Configuration.IsPersistent = true;
+        session.Configuration.Capability = session.Configuration.Capability;
         await Task.Delay(100);
         await session.Messages("two");
 
@@ -372,56 +436,6 @@ public sealed class PromptSessionTests
         Assert.Equal(["once"], await session.Messages("one"));
 
         runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task IsPersistent_WhenSetToFalse_EndsTheProcessInTheBackground()
-    {
-        PromptSession session = Persistent();
-        await session.Messages("one");
-
-        session.Configuration.IsPersistent = false;
-
-        await Eventually(() => process.Verify(mock => mock.DisposeAsync(), Times.Once));
-        process.Verify(mock => mock.Stop(), Times.Never);
-        Assert.Equal(["kept"], await session.Messages("two"));
-        runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
-    }
-
-    [Fact]
-    public async Task IsPersistent_WhenSetToFalseWhileAPromptRuns_EndsTheProcessAfterThePrompt()
-    {
-        PromptSession session = Persistent();
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.Setup(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "slow"), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
-        Task<List<string>> running = session.Messages("slow");
-        await Task.Delay(100);
-
-        session.Configuration.IsPersistent = false;
-        await Task.Delay(100);
-        process.Verify(mock => mock.DisposeAsync(), Times.Never);
-
-        release.SetResult();
-        await running;
-        await Eventually(() => process.Verify(mock => mock.DisposeAsync(), Times.Once));
-    }
-
-    [Fact]
-    public async Task IsPersistent_WhenSetToFalseAndBackOnBeforeItIsEnded_KeepsTheProcess()
-    {
-        PromptSession session = Persistent();
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.Setup(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "slow"), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
-        Task<List<string>> running = session.Messages("slow");
-        await Task.Delay(100);
-
-        session.Configuration.IsPersistent = false;
-        session.Configuration.IsPersistent = true;
-        release.SetResult();
-        await running;
-        await Task.Delay(100);
-
-        process.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
 
     [Fact]
@@ -591,11 +605,11 @@ public sealed class PromptSessionTests
 
     private void SetTools(PromptSession session, params PromptTool[] tools)
     {
-        session.Configuration.Tools.Clear();
+        session.Transient.Tools.Clear();
 
         foreach (PromptTool tool in tools)
         {
-            session.Configuration.Tools.Add(tool);
+            session.Transient.Tools.Add(tool);
         }
     }
 
@@ -633,16 +647,16 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         PromptTool tool = Tool("alpha");
 
-        Assert.Empty(session.Configuration.Tools);
+        Assert.Empty(session.Transient.Tools);
         SetTools(session, tool);
-        Assert.Equal([tool], session.Configuration.Tools);
+        Assert.Equal([tool], session.Transient.Tools);
     }
 
     [Theory]
     [InlineData("generate_image")]
     [InlineData("Generate_Image")]
     public void Tools_RejectTheNameOfTheImageTool(string name)
-        => Assert.Throws<ArgumentException>(() => Session(Record()).Configuration.Tools.Add(Tool(name)));
+        => Assert.Throws<ArgumentException>(() => Session(Record()).Transient.Tools.Add(Tool(name)));
 
     [Theory]
     [InlineData("")]
@@ -650,11 +664,11 @@ public sealed class PromptSessionTests
     [InlineData("dot.ted")]
     [InlineData("ünï")]
     public void Tools_RejectAnInvalidName(string name)
-        => Assert.Throws<ArgumentException>(() => Session(Record()).Configuration.Tools.Add(Tool(name)));
+        => Assert.Throws<ArgumentException>(() => Session(Record()).Transient.Tools.Add(Tool(name)));
 
     [Fact]
     public void Tools_RejectATooLongName()
-        => Assert.Throws<ArgumentException>(() => Session(Record()).Configuration.Tools.Add(Tool(new string('a', 65))));
+        => Assert.Throws<ArgumentException>(() => Session(Record()).Transient.Tools.Add(Tool(new string('a', 65))));
 
     [Fact]
     public void Tools_RejectDuplicateNames()
@@ -663,7 +677,7 @@ public sealed class PromptSessionTests
         SetTools(session, Tool("alpha"));
 
         Assert.Throws<ArgumentException>(() => SetTools(session, Tool("beta"), Tool("beta")));
-        Assert.Single(session.Configuration.Tools);
+        Assert.Single(session.Transient.Tools);
     }
 
     [Fact]
@@ -683,14 +697,14 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(new PromptSessionRecordBuilder().Build(engine.Object));
         Mock<IPromptToolServer> server = Server();
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(server.Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(server.Object);
         Plain();
         SetTools(session, Tool("alpha"), Tool("beta"));
 
         await session.Messages("one");
         await session.Messages("two");
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "alpha", "beta", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "alpha", "beta", "respond" }))), Times.Once);
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.Reaches(server.Object.Endpoint))), Times.Exactly(2));
         server.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
@@ -701,7 +715,7 @@ public sealed class PromptSessionTests
         PromptSession session = Session(new PromptSessionRecordBuilder().Build(engine.Object));
         Mock<IPromptToolServer> first = Server("http://127.0.0.1:1/mcp");
         Mock<IPromptToolServer> second = Server("http://127.0.0.1:2/mcp");
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(first.Object).Returns(second.Object);
+        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(first.Object).Returns(second.Object);
         Plain();
         SetTools(session, Tool("alpha"));
         await session.Messages("one");
@@ -718,7 +732,7 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(new PromptSessionRecordBuilder().Build(engine.Object));
         Mock<IPromptToolServer> server = Server();
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(server.Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(server.Object);
         Plain();
         SetTools(session, Tool("alpha"));
         await session.Messages("one");
@@ -735,7 +749,7 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(new PromptSessionRecordBuilder().Build(engine.Object));
         Mock<IPromptToolServer> server = Server();
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(server.Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(server.Object);
         Plain();
         SetTools(session, Tool("alpha"));
         await session.Messages("one");
@@ -749,7 +763,7 @@ public sealed class PromptSessionTests
     public async Task Send_WhenPersistent_KeepsTheProcessWhileTheToolsStayTheSameAndRestartsItWhenTheyChange()
     {
         PromptSession session = Persistent(new PromptSessionRecordBuilder().Build(engine.Object));
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
+        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
         SetTools(session, Tool("alpha"));
 
         await session.Messages("one");
@@ -761,71 +775,16 @@ public sealed class PromptSessionTests
         engine.Verify(mock => mock.CreatePersistentStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.Servers[0].Url!.EndsWith(":2/mcp"))), Times.Once);
     }
 
-    private PromptSession LibrarySession(bool mount = true)
-    {
-        PromptSession session = Session(new PromptSessionRecordBuilder().Build(engine.Object));
-
-        if (mount)
-        {
-            session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
-        }
-
-        return session;
-    }
+    private PromptSession LibrarySession()
+        => Session(new PromptSessionRecordBuilder().Build(engine.Object));
 
     private void Library(params PromptTool[] built)
-        => libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns(built);
+        => libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns(built);
 
     private readonly string[] everyday = ["current_time", "tool_search", "delegate"];
 
     private void Served(params string[] names)
-        => toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(names.Append("respond"))), It.IsAny<IPromptToolHooks?>()), Times.Once);
-
-    [Fact]
-    public void Mounts_AreEmptyUntilSetAndAreCopied()
-    {
-        PromptSession session = Session(Record());
-        Dictionary<string, IStore> given = new() { ["docs"] = new Mock<IStore>().Object };
-
-        Assert.Empty(session.Configuration.Mounts);
-        foreach ((string name, IStore files) in given)
-        {
-            session.Configuration.Mounts[name] = files;
-        }
-        given["more"] = new Mock<IStore>().Object;
-
-        Assert.Equal(["docs"], session.Configuration.Mounts.Keys);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData(".")]
-    [InlineData("..")]
-    [InlineData("/a")]
-    [InlineData("a/")]
-    [InlineData("a//b")]
-    [InlineData("a/./b")]
-    [InlineData("a/../b")]
-    [InlineData("../a")]
-    [InlineData("a\\b")]
-    public void Mounts_RejectAnInvalidName(string name)
-        => Assert.Throws<ArgumentException>(() => Session(Record()).Configuration.Mounts[name] = new Mock<IStore>().Object);
-
-    [Fact]
-    public async Task Mounts_AreAddedToAndRemovedFromOneAtATimeAcrossConfigureCalls()
-    {
-        PromptSession session = Session(Record());
-        IStore first = new Mock<IStore>().Object;
-        IStore second = new Mock<IStore>().Object;
-
-        session.Configuration.Mounts["a"] = first;
-        session.Configuration.Mounts["b"] = second;
-        Assert.Equal(["a", "b"], session.Configuration.Mounts.Keys.Order());
-        session.Configuration.Mounts.Remove("a");
-
-        Assert.Equal(["b"], session.Configuration.Mounts.Keys);
-        Assert.Same(second, session.Configuration.Mounts["b"]);
-    }
+        => toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(names.Append("respond")))), Times.Once);
 
     [Fact]
     public void Tools_AreAddedToAndRemovedFromOneAtATimeAcrossConfigureCalls()
@@ -833,11 +792,144 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         PromptTool alpha = Tool("alpha");
 
-        session.Configuration.Tools.Add(alpha);
-        session.Configuration.Tools.Add(Tool("beta"));
-        session.Configuration.Tools.Remove(alpha);
+        session.Transient.Tools.Add(alpha);
+        session.Transient.Tools.Add(Tool("beta"));
+        session.Transient.Tools.Remove(alpha);
 
-        Assert.Equal(["beta"], session.Configuration.Tools.Select(tool => tool.Name));
+        Assert.Equal(["beta"], session.Transient.Tools.Select(tool => tool.Name));
+    }
+
+    [Fact]
+    public async Task Cache_IsAnEmptyStoreOfTheSessionAndIsLostWhenItIsDisposed()
+    {
+        PromptSession session = Session(Record());
+        Assert.Empty(await session.Cache.List(string.Empty).ToListAsync());
+
+        await session.Cache.WriteText("notes/a.txt", "x");
+        Assert.Equal("x", await session.Cache.ReadText("notes/a.txt"));
+        await session.DisposeAsync();
+
+        Assert.Empty(await session.Cache.List(string.Empty, true).ToListAsync());
+    }
+
+    [Fact]
+    public void WorkspacePath_IsTheWorkingFolderOfTheRecordWhetherOrNotTheCallerGaveIt()
+    {
+        using TempFolder folder = new();
+
+        Assert.Equal("/work", Session(Record()).WorkspacePath);
+        Assert.Equal(folder.Path, Session(Record() with { WorkspacePath = folder.Path, WorkingFolder = folder.Path }).WorkspacePath);
+    }
+
+    [Fact]
+    public async Task Send_BuildsTheFileToolsOverTheWorkspaceAndTheCacheAtTheCachePath()
+    {
+        PromptSession session = Session(Record());
+        IStore? built = null;
+        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns((IStore store) =>
+        {
+            built = store;
+            return [Tool("read_file")];
+        });
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
+        Plain();
+        await session.Cache.WriteText("a.txt", "cached");
+
+        await session.Messages("one");
+
+        Assert.IsType<MountedStore>(built);
+        Assert.Equal("cached", await built!.ReadText("CACHE:/a.txt"));
+        Served("read_file");
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasWorkspace() && start.Instructions.Contains("CACHE:"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task Send_WithAWorkspacePath_GivesTheFileToolsTheWorkspaceAndTellsTheAiSo()
+    {
+        using TempFolder folder = new();
+        await File.WriteAllTextAsync(folder.Combine("a.txt"), "on disk");
+        PromptSession session = Session(Record() with { WorkspacePath = folder.Path, WorkingFolder = folder.Path });
+        IStore? built = null;
+        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns((IStore store) =>
+        {
+            built = store;
+            return [Tool("read_file")];
+        });
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
+        Plain();
+
+        await session.Messages("one");
+
+        Assert.Equal("on disk", await built!.ReadText("a.txt"));
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasWorkspace())), Times.Once);
+    }
+
+    [Fact]
+    public async Task Move_ANewWorkspace_RebuildsTheFileToolsAndReplacesTheServer()
+    {
+        using TempFolder first = new();
+        using TempFolder second = new();
+        PromptSession session = Session(Record() with { WorkspacePath = first.Path, WorkingFolder = first.Path });
+        Library(Tool("read_file"));
+        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
+        Plain();
+
+        await session.Messages("one");
+        await session.Messages("two");
+        await session.Move(second.Path);
+        await session.Messages("three");
+
+        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>()), Times.Exactly(2));
+        Assert.Equal(second.Path, session.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task WorkspacePath_IsWhereTheShellStartsAndTheAiIsToldSo()
+    {
+        using TempFolder folder = new();
+        PromptSession session = Session(Record() with { WorkspacePath = folder.Path, WorkingFolder = folder.Path });
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
+        Plain();
+        session.Configuration.IsShellAllowed = true;
+
+        await session.Messages("one");
+
+        libraryTools.Verify(mock => mock.CreateShell(folder.Path), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasShell() && start.ShellInWorkspace())), Times.Once);
+    }
+
+    [Fact]
+    public async Task Move_AnotherFolder_StartsTheShellThere()
+    {
+        using TempFolder first = new();
+        using TempFolder second = new();
+        PromptSession session = Session(Record() with { WorkspacePath = first.Path, WorkingFolder = first.Path });
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(() => Server().Object);
+        Plain();
+        session.Configuration.IsShellAllowed = true;
+        await session.Messages("one");
+
+        await session.Move(second.Path);
+        await session.Messages("two");
+
+        libraryTools.Verify(mock => mock.CreateShell(first.Path), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(second.Path), Times.Once);
+    }
+
+    [Fact]
+    public async Task Send_SaysTheAiHasFileToolsEvenWithoutAWorkspace()
+    {
+        PromptSession session = LibrarySession();
+        Library(Tool("read_file"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
+        Plain();
+
+        await session.Messages("one");
+
+        Served("read_file");
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles())), Times.Once);
     }
 
     [Fact]
@@ -845,14 +937,13 @@ public sealed class PromptSessionTests
     {
         PromptSession session = LibrarySession();
         Library(Tool("read_file"), Tool("write_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
         SetTools(session, Tool("mine"));
 
         await session.Messages("one");
 
-        Assert.Equal(["mine"], session.Configuration.Tools.Select(tool => tool.Name));
-        Assert.Equal(["main"], session.Configuration.Mounts.Keys);
+        Assert.Equal(["mine"], session.Transient.Tools.Select(tool => tool.Name));
         Served("read_file", "write_file", "mine");
     }
 
@@ -916,7 +1007,8 @@ public sealed class PromptSessionTests
         await session.Messages("look", new PromptRequestOptions { Attachments = [Image("one.png", 1, 2, 3), Image("two.png", 9)] });
 
         Assert.Equal("attachment-0.png=3,attachment-1.png=1", existedDuring);
-        Assert.All(seen, file => Assert.StartsWith(temp.Path, file));
+        Assert.All(seen, file => Assert.StartsWith(Path.GetTempPath(), file));
+        Assert.All(seen, file => Assert.DoesNotContain(temp.Path, file));
         Assert.Empty(Directory.GetFileSystemEntries(temp.Path));
     }
 
@@ -949,7 +1041,7 @@ public sealed class PromptSessionTests
         await Assert.ThrowsAsync<NotSupportedException>(() => session.Messages("look", new PromptRequestOptions { Attachments = [Image()] }));
 
         runner.Verify(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        toolHost.Verify(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>()), Times.Never);
+        toolHost.Verify(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>()), Times.Never);
     }
 
     [Fact]
@@ -974,7 +1066,7 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        Assert.False(session.Configuration.EnableShell);
+        Assert.False(session.Configuration.IsShellAllowed);
         Served();
         libraryTools.Verify(mock => mock.CreateShell(It.IsAny<string>()), Times.Never);
     }
@@ -986,11 +1078,10 @@ public sealed class PromptSessionTests
         PromptSession session = Session(record);
         Library(Tool("read_file"));
         Mock<IPromptToolServer> server = Server();
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(server.Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(server.Object);
         Plain();
-        session.Configuration.EnableShell = true;
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
-        session.Configuration.Tools.Add(Tool("mine"));
+        session.Configuration.IsShellAllowed = true;
+        session.Transient.Tools.Add(Tool("mine"));
 
         await session.Messages("one");
         await session.Messages("two");
@@ -998,55 +1089,45 @@ public sealed class PromptSessionTests
         Served("read_file", "shell", "mine");
         libraryTools.Verify(mock => mock.CreateShell(record.WorkingFolder), Times.Once);
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasShell())), Times.Exactly(2));
-        Assert.Equal(["mine"], session.Configuration.Tools.Select(tool => tool.Name));
-        Assert.True(session.Configuration.EnableShell);
+        Assert.Equal(["mine"], session.Transient.Tools.Select(tool => tool.Name));
+        Assert.True(session.Configuration.IsShellAllowed);
     }
 
     [Fact]
-    public async Task EnableImages_AndEnableWeb_AreOffByDefaultAndOfferNothing()
+    public async Task IsWebAllowed_IsOffByDefaultAndOffersNoWebTool()
     {
         PromptSession session = Session(Record());
-        engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
+        engine.Setup(mock => mock.Accepts("image/png")).Returns(false);
         Library(Tool("read_file"));
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
         Plain();
 
         await session.Messages("one");
 
-        Assert.False(session.Configuration.EnableImages);
-        Assert.False(session.Configuration.EnableWeb);
+        Assert.False(session.Configuration.IsWebAllowed);
         Served("read_file");
-        libraryTools.Verify(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>()), Times.Never);
-        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Never);
+        libraryTools.Verify(mock => mock.CreateFetch(), Times.Never);
     }
 
     [Theory]
-    [InlineData(true, true, true)]
-    [InlineData(false, true, false)]
-    [InlineData(true, false, false)]
-    public async Task EnableImages_OffersTheImageToolOnlyWithFilesToReadAndAnEngineThatCanBeShownImages(bool mounted, bool engineTakesImages, bool offered)
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task TheImageTool_IsAlwaysOfferedToAnEngineThatCanBeShownImagesAndToNoOtherOne(bool engineTakesImages, bool offered)
     {
         PromptSession session = Session(Record());
         engine.Setup(mock => mock.Accepts("image/png")).Returns(engineTakesImages);
         libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Returns(() => Tool("view_image"));
         Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
-        session.Configuration.EnableImages = true;
-
-        if (mounted)
-        {
-            session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
-        }
 
         await session.Messages("one");
 
-        string[] expected = [.. mounted ? ["read_file"] : Array.Empty<string>(), .. offered ? ["view_image"] : Array.Empty<string>()];
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(expected.Append("respond"))), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        string[] expected = [.. new[] { "read_file" }, .. offered ? ["view_image"] : Array.Empty<string>()];
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(expected.Append("respond")))), Times.Once);
     }
 
     [Fact]
-    public async Task EnableImages_GivesTheImageToTheAiAsAnInputOfItsOwnWithTheImageAttachedAndANote()
+    public async Task ImageTool_GivesTheImageToTheAiAsAnInputOfItsOwnWithTheImageAttachedAndANote()
     {
         PromptSession session = Session(Record());
         Func<string, PromptAttachment, CancellationToken, Task>? give = null;
@@ -1060,10 +1141,8 @@ public sealed class PromptSessionTests
         });
         libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
         Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Answers();
-        session.Configuration.EnableImages = true;
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
         await session.Messages("look");
         PromptAttachment image = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1, 2, 3 } };
 
@@ -1082,7 +1161,7 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task EnableImages_DuringARequest_SteersTheImageIntoTheWorkOfTheAiInsteadOfRefusingIt()
+    public async Task ImageTool_DuringARequest_SteersTheImageIntoTheWorkOfTheAiInsteadOfRefusingIt()
     {
         PromptSession session = Persistent();
         Func<string, PromptAttachment, CancellationToken, Task>? give = null;
@@ -1092,11 +1171,9 @@ public sealed class PromptSessionTests
         engine.Setup(mock => mock.Accepts("image/png")).Returns(true);
         libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
         Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => started.TrySetResult()));
         process.Setup(mock => mock.Steer(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Callback<PromptInput, CancellationToken>((input, _) => steered.Add(input)).ReturnsAsync(true);
-        session.Configuration.EnableImages = true;
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
         Task<List<string>> running = session.Messages("look");
         await started.Task;
         PromptAttachment image = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1, 2, 3 } };
@@ -1112,7 +1189,7 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task EnableImages_DuringARequestOfAnEngineThatCannotSteer_WaitsAndIsGivenAsWorkOnceTheRequestIsOver()
+    public async Task ImageTool_DuringARequestOfAnEngineThatCannotSteer_WaitsAndIsGivenAsWorkOnceTheRequestIsOver()
     {
         PromptSession session = Session(Record());
         Func<string, PromptAttachment, CancellationToken, Task>? give = null;
@@ -1128,10 +1205,8 @@ public sealed class PromptSessionTests
         });
         libraryTools.Setup(mock => mock.CreateImage(It.IsAny<IStore>(), It.IsAny<Func<string, PromptAttachment, CancellationToken, Task>>())).Callback<IStore, Func<string, PromptAttachment, CancellationToken, Task>>((_, given) => give = given).Returns(() => Tool("view_image"));
         Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => started.TrySetResult()));
-        session.Configuration.EnableImages = true;
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
         Task<List<string>> running = session.Messages("look");
         await started.Task;
 
@@ -1145,44 +1220,20 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task EnableWeb_OffersTheFetchToolEvenWithoutFilesAndOnlyWhileItIsOn()
+    public async Task EnableWeb_OffersTheFetchAndSearchToolsEvenWithoutFilesAndOnlyWhileItIsOn()
     {
         PromptSession session = Session(Record());
-        libraryTools.Setup(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>())).Returns(() => Tool("fetch_url"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        libraryTools.Setup(mock => mock.CreateFetch()).Returns(() => Tool("fetch_url"));
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
-        session.Configuration.EnableWeb = true;
+        session.Configuration.IsWebAllowed = true;
 
         await session.Messages("one");
-        session.Configuration.EnableWeb = false;
+        session.Configuration.IsWebAllowed = false;
         await session.Messages("two");
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "fetch_url", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
-        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task WebFilter_IsReadWhenAnAddressIsRequestedSoItCanChangeAndAFailureOfItBlocks()
-    {
-        PromptSession session = Session(Record());
-        Func<Uri, CancellationToken, Task<bool>>? isBlocked = null;
-        libraryTools.Setup(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>())).Callback<Func<Uri, CancellationToken, Task<bool>>>(given => isBlocked = given).Returns(() => Tool("fetch_url"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        session.Configuration.EnableWeb = true;
-        await session.Messages("one");
-        Uri address = new("https://example.com/");
-
-        Assert.False(await isBlocked!(address, CancellationToken.None));
-        session.Configuration.WebFilter = (given, _) => Task.FromResult(given.Host == "example.com");
-        Assert.True(await isBlocked(address, CancellationToken.None));
-        session.Configuration.WebFilter = (_, _) => throw new InvalidOperationException("broken");
-        Assert.True(await isBlocked(address, CancellationToken.None));
-        session.Configuration.WebFilter = (_, cancellation) => Task.FromCanceled<bool>(new CancellationToken(true));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => isBlocked(address, CancellationToken.None));
-        session.Configuration.WebFilter = null;
-        Assert.False(await isBlocked(address, CancellationToken.None));
-        libraryTools.Verify(mock => mock.CreateFetch(It.IsAny<Func<Uri, CancellationToken, Task<bool>>>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "fetch_url", "search_web", "respond" }))), Times.Once);
+        libraryTools.Verify(mock => mock.CreateFetch(), Times.Once);
     }
 
     [Fact]
@@ -1193,83 +1244,80 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "current_time", "tool_search", "delegate", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "current_time", "tool_search", "delegate", "respond" }))), Times.Once);
     }
 
     [Fact]
-    public async Task ImageGenerator_OffersTheImageToolOnlyWithFilesToSaveThemIn()
+    public async Task ImageGeneration_OffersTheImageToolWhileOneIsSet()
     {
         FakeImageGenerator generator = new();
         libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), generator)).Returns(() => Tool("generate_image"));
         Library(Tool("read_file"));
         Plain();
-        PromptSession without = Session(Record());
-        without.Configuration.ImageGenerator = generator;
-        await without.Messages("one");
-        PromptSession with = Session(Record());
-        with.Configuration.ImageGenerator = generator;
-        with.Configuration.Mounts["main"] = new Mock<IStore>().Object;
-        await with.Messages("one");
+        PromptSession session = Session(Record(), generators: _ => generator);
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions();
+
+        await session.Messages("one");
 
         Served("read_file", "generate_image");
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
         libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), generator), Times.Once);
     }
 
     [Fact]
-    public async Task ImageGenerator_ChangedOrClearedBetweenPrompts_ReplacesOrRemovesTheTool()
+    public async Task ImageGeneration_ChangedOrClearedBetweenPrompts_ReplacesOrRemovesTheTool()
     {
         FakeImageGenerator first = new();
         FakeImageGenerator second = new();
         libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
         Library(Tool("read_file"));
         Plain();
-        PromptSession session = Session(Record());
-        session.Configuration.Mounts["main"] = new Mock<IStore>().Object;
-        session.Configuration.ImageGenerator = first;
+        PromptSession session = Session(Record(), generators: options => options is StableDiffusionImageOptions { Width: 512 } ? first : second);
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Width = 512 };
         await session.Messages("one");
 
-        session.Configuration.ImageGenerator = second;
+        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Width = 640 };
         await session.Messages("two");
-        session.Configuration.ImageGenerator = null;
+        session.Configuration.ImageGeneration = null;
         await session.Messages("three");
 
         libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), first), Times.Once);
         libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), second), Times.Once);
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "generate_image")), It.IsAny<IPromptToolHooks?>()), Times.Exactly(2));
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "read_file") && !started.Any(tool => tool.Name == "generate_image")), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "generate_image"))), Times.Exactly(2));
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "read_file") && !started.Any(tool => tool.Name == "generate_image"))), Times.Once);
     }
 
     [Fact]
-    public async Task EnableSearch_OffersTheLibrarysSearchToAnEngineThatHasNoneOfItsOwn()
+    public async Task EnableWeb_OffersTheLibrarysSearchBesidesFetchToAnEngineThatHasNoneOfItsOwn()
     {
+        libraryTools.Setup(mock => mock.CreateFetch()).Returns(() => Tool("fetch_url"));
         PromptSession session = Session(Record());
         Plain();
-        session.Configuration.EnableSearch = true;
+        session.Configuration.IsWebAllowed = true;
 
         await session.Messages("one");
 
-        Served("search_web");
+        Served("fetch_url", "search_web");
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => !start.Search)), Times.Once);
     }
 
     [Fact]
-    public async Task EnableSearch_WithAnEngineThatSearchesItself_AllowsItsSearchAndOffersNoTool()
+    public async Task EnableWeb_WithAnEngineThatSearchesItself_AllowsItsSearchAndOffersOnlyFetch()
     {
         engine.SetupGet(mock => mock.NativeSearch).Returns(true);
+        libraryTools.Setup(mock => mock.CreateFetch()).Returns(() => Tool("fetch_url"));
         PromptSession session = Session(Record());
         Plain();
-        session.Configuration.EnableSearch = true;
+        session.Configuration.IsWebAllowed = true;
 
         await session.Messages("one");
 
-        Served();
+        Served("fetch_url");
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Search)), Times.Once);
         libraryTools.Verify(mock => mock.CreateSearch(), Times.Never);
     }
 
     [Fact]
-    public async Task EnableSearch_OffNeitherAllowsTheEnginesSearchNorOffersTheTool()
+    public async Task EnableWeb_OffNeitherAllowsTheEnginesSearchNorOffersTheTools()
     {
         engine.SetupGet(mock => mock.NativeSearch).Returns(true);
         PromptSession session = Session(Record());
@@ -1277,20 +1325,22 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        Assert.False(session.Configuration.EnableSearch);
+        Assert.False(session.Configuration.IsWebAllowed);
         Served();
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => !start.Search)), Times.Once);
         libraryTools.Verify(mock => mock.CreateSearch(), Times.Never);
+        libraryTools.Verify(mock => mock.CreateFetch(), Times.Never);
     }
 
     [Fact]
-    public async Task EnableSearch_ChangedBetweenPrompts_RestartsAKeptProcessOfAnEngineWhoseSearchIsAllowedWhenItStarts()
+    public async Task EnableWeb_ChangedBetweenPrompts_RestartsAKeptProcessOfAnEngineWhoseSearchIsAllowedWhenItStarts()
     {
         engine.SetupGet(mock => mock.NativeSearch).Returns(true);
+        libraryTools.Setup(mock => mock.CreateFetch()).Returns(() => Tool("fetch_url"));
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.EnableSearch = true;
+        session.Configuration.IsWebAllowed = true;
         await session.Messages("two");
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
@@ -1305,8 +1355,8 @@ public sealed class PromptSessionTests
         List<PromptInput> turns = Turns();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());
-        PromptSessionOptions? created = null;
-        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).Callback<PromptSessionOptions?, CancellationToken>((options, _) => created = options).ReturnsAsync(helper);
+        PromptProviderOptions? created = null;
+        provider.Setup(mock => mock.Create(It.IsAny<PromptProviderOptions?>(), It.IsAny<CancellationToken>())).Callback<PromptProviderOptions?, CancellationToken>((options, _) => created = options).ReturnsAsync(helper);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "the helper found it"), Event(PromptEngineEventKind.Finished)));
         session.Configuration.Instructions = "Be brief.";
         await session.Messages("start");
@@ -1314,7 +1364,7 @@ public sealed class PromptSessionTests
         string answer = await run!("look into x", false, CancellationToken.None);
 
         Assert.Equal("the helper found it", answer);
-        Assert.Equal(("sonnet", null), (created!.Model!.Id, created.WorkspacePath));
+        Assert.Equal((PromptCapability.Balanced, "/work"), (session.Configuration.Capability, created!.WorkspacePath));
         Assert.Equal("Be brief.", helper.Configuration.Instructions);
         Assert.Contains("look into x", turns[^1].Text, StringComparison.Ordinal);
         Assert.Contains("delegated to you", turns[^1].Text, StringComparison.Ordinal);
@@ -1331,13 +1381,13 @@ public sealed class PromptSessionTests
         Plain();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());
-        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
+        provider.Setup(mock => mock.Create(It.IsAny<PromptProviderOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
         await session.Messages("start");
 
         await run!("task", false, CancellationToken.None);
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "delegate")), It.IsAny<IPromptToolHooks?>()), Times.Once);
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => !started.Any(tool => tool.Name == "delegate")), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Any(tool => tool.Name == "delegate"))), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => !started.Any(tool => tool.Name == "delegate"))), Times.Once);
     }
 
     [Fact]
@@ -1348,7 +1398,7 @@ public sealed class PromptSessionTests
         List<PromptInput> turns = Turns();
         PromptSession session = Session(Record());
         PromptSession fork = Session(Record());
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(fork);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(fork);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "forked answer"), Event(PromptEngineEventKind.Finished)));
         await session.Messages("start");
 
@@ -1359,7 +1409,7 @@ public sealed class PromptSessionTests
         Assert.Contains("The request the other AI is working on now:\nstart", turns[^1].Text, StringComparison.Ordinal);
         Assert.Contains("continue its conversation", turns[^1].Text, StringComparison.Ordinal);
         provider.Verify(mock => mock.Delete(fork.Id, It.IsAny<CancellationToken>()), Times.Once);
-        provider.Verify(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
+        provider.Verify(mock => mock.Create(It.IsAny<PromptProviderOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1370,7 +1420,7 @@ public sealed class PromptSessionTests
         Plain();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());
-        provider.Setup(mock => mock.Create(It.IsAny<PromptSessionOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
+        provider.Setup(mock => mock.Create(It.IsAny<PromptProviderOptions?>(), It.IsAny<CancellationToken>())).ReturnsAsync(helper);
         await session.Messages("start");
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Failed, "the helper broke")));
 
@@ -1381,132 +1431,33 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task EnableShell_WithoutMounts_ServesOnlyTheShellAndSaysSo()
-    {
-        PromptSession session = Session(Record());
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        session.Configuration.EnableShell = true;
-
-        await session.Messages("one");
-
-        Served("shell");
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && !start.HasFiles() && start.HasShell())), Times.Once);
-    }
-
-    [Fact]
-    public async Task Workspace_GivesTheFileToolsAWorkspaceAndTellsTheAiSo()
-    {
-        PromptSession session = Session(Record());
-        IStore workspace = new Mock<IStore>().Object;
-        IStore? built = null;
-        bool? hasWorkspace = null;
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns((IStore store, IReadOnlyList<string> _, bool given) =>
-        {
-            built = store;
-            hasWorkspace = given;
-            return [Tool("read_file")];
-        });
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        session.Configuration.Workspace = workspace;
-
-        await session.Messages("one");
-
-        Assert.IsType<MountedStore>(built);
-        Assert.True(hasWorkspace);
-        Served("read_file");
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasWorkspace() && !start.ShellInWorkspace())), Times.Once);
-    }
-
-    [Fact]
-    public async Task Workspace_ChangedBetweenPrompts_RebuildsTheFileToolsAndReplacesTheServer()
-    {
-        PromptSession session = Session(Record());
-        Library(Tool("read_file"));
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
-        Plain();
-        session.Configuration.Workspace = new Mock<IStore>().Object;
-
-        await session.Messages("one");
-        await session.Messages("two");
-        session.Configuration.Workspace = new Mock<IStore>().Object;
-        await session.Messages("three");
-
-        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), true), Times.Exactly(2));
-    }
-
-    [Fact]
-    public async Task Workspace_OfAFolderOnDisk_IsWhereTheShellStartsAndTheAiIsToldSo()
-    {
-        PromptSession session = Session(Record());
-        Mock<IDiskStore> disk = new();
-        disk.SetupGet(mock => mock.Path).Returns("/projects/demo");
-        Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        session.Configuration.Workspace = disk.Object;
-        session.Configuration.EnableShell = true;
-
-        await session.Messages("one");
-
-        libraryTools.Verify(mock => mock.CreateShell("/projects/demo"), Times.Once);
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasShell() && start.ShellInWorkspace())), Times.Once);
-    }
-
-    [Fact]
-    public async Task Workspace_ChangedToAnotherFolder_StartsTheShellThere()
-    {
-        PromptSession session = Session(Record());
-        Mock<IDiskStore> first = new();
-        first.SetupGet(mock => mock.Path).Returns("/one");
-        Mock<IDiskStore> second = new();
-        second.SetupGet(mock => mock.Path).Returns("/two");
-        Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
-        Plain();
-        session.Configuration.EnableShell = true;
-        session.Configuration.Workspace = first.Object;
-        await session.Messages("one");
-
-        session.Configuration.Workspace = second.Object;
-        await session.Messages("two");
-        session.Configuration.Workspace = null;
-        await session.Messages("three");
-
-        libraryTools.Verify(mock => mock.CreateShell("/one"), Times.Once);
-        libraryTools.Verify(mock => mock.CreateShell("/two"), Times.Once);
-        libraryTools.Verify(mock => mock.CreateShell(Record().WorkingFolder), Times.Once);
-    }
-
-    [Fact]
     public async Task EnableShell_TurnedOffAgain_ReplacesTheServerWithoutTheShell()
     {
         PromptSession session = Session(Record());
         Mock<IPromptToolServer> first = Server("http://127.0.0.1:1/mcp");
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(first.Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
+        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(first.Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
         Plain();
-        session.Configuration.EnableShell = true;
-        session.Configuration.Tools.Add(Tool("mine"));
+        session.Configuration.IsShellAllowed = true;
+        session.Transient.Tools.Add(Tool("mine"));
         await session.Messages("one");
 
-        session.Configuration.EnableShell = false;
+        session.Configuration.IsShellAllowed = false;
         await session.Messages("two");
 
         first.Verify(mock => mock.DisposeAsync(), Times.Once);
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "mine", "respond" })), It.IsAny<IPromptToolHooks?>()), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "mine", "respond" }))), Times.Once);
     }
 
     [Fact]
     public async Task EnableShell_WhenPersistentAndChanged_StartsANewProcess()
     {
         PromptSession session = Persistent();
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
-        session.Configuration.EnableShell = true;
+        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server("http://127.0.0.1:1/mcp").Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
+        session.Configuration.IsShellAllowed = true;
         await session.Messages("one");
 
-        session.Configuration.EnableShell = false;
-        session.Configuration.Tools.Add(Tool("mine"));
+        session.Configuration.IsShellAllowed = false;
+        session.Transient.Tools.Add(Tool("mine"));
         await session.Messages("two");
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
@@ -1517,59 +1468,7 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(Record());
 
-        Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(Tool("shell")));
-    }
-
-    [Fact]
-    public async Task Send_WithMounts_BuildsTheLibraryToolsOverTheMountedView()
-    {
-        PromptSession session = LibrarySession(mount: false);
-        Mock<IStore> docs = new();
-        IStore? built = null;
-        IReadOnlyList<string>? names = null;
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns((IStore system, IReadOnlyList<string> mounts, bool _) =>
-        {
-            built = system;
-            names = mounts;
-            return [Tool("read_file")];
-        });
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        session.Configuration.Mounts["docs"] = docs.Object;
-
-        await session.Messages("one");
-
-        Assert.IsType<MountedStore>(built);
-        Assert.Equal(["docs"], names);
-    }
-
-    [Fact]
-    public async Task Send_WithoutMounts_OffersNoFileToolsAndServesOnlyTheRespondTool()
-    {
-        PromptSession session = LibrarySession(mount: false);
-        Library(Tool("read_file"));
-        Plain();
-
-        await session.Messages("one");
-
-        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>()), Times.Never);
-        Served();
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-    }
-
-    [Fact]
-    public async Task Send_WithoutMountsButWithCallerTools_ServesOnlyThoseAndSaysTheAiHasNoFiles()
-    {
-        PromptSession session = LibrarySession(mount: false);
-        Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        Plain();
-        SetTools(session, Tool("mine"));
-
-        await session.Messages("one");
-
-        Served("mine");
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && !start.HasFiles())), Times.Once);
+        Assert.Throws<ArgumentException>(() => session.Transient.Tools.Add(Tool("shell")));
     }
 
     [Fact]
@@ -1577,7 +1476,7 @@ public sealed class PromptSessionTests
     {
         PromptSession session = LibrarySession();
         Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
 
         await session.Messages("one");
@@ -1586,44 +1485,11 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task Send_WhenAllMountsAreRemoved_ReplacesTheServerWithOneThatOffersOnlyTheRespondTool()
-    {
-        PromptSession session = LibrarySession();
-        Mock<IPromptToolServer> server = Server();
-        Library(Tool("read_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(server.Object);
-        Plain();
-        await session.Messages("one");
-
-        session.Configuration.Mounts.Clear();
-        await session.Messages("two");
-
-        server.Verify(mock => mock.DisposeAsync(), Times.Once);
-    }
-
-    [Fact]
-    public async Task Send_WhenTheMountsChange_RebuildsTheToolsAndReplacesTheServer()
-    {
-        PromptSession session = LibrarySession();
-        Mock<IPromptToolServer> first = Server("http://127.0.0.1:1/mcp");
-        toolHost.SetupSequence(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(first.Object).Returns(Server("http://127.0.0.1:2/mcp").Object);
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns(() => [Tool("read_file")]);
-        Plain();
-        await session.Messages("one");
-
-        session.Configuration.Mounts["docs"] = new Mock<IStore>().Object;
-        await session.Messages("two");
-
-        first.Verify(mock => mock.DisposeAsync(), Times.Once);
-        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>()), Times.Exactly(2));
-    }
-
-    [Fact]
     public async Task Send_WithLibraryTools_OffersThemWithTheCallersToolsAndBuildsThemOnce()
     {
         PromptSession session = LibrarySession();
         Library(Tool("read_file"), Tool("write_file"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
         SetTools(session, Tool("mine"));
 
@@ -1631,7 +1497,7 @@ public sealed class PromptSessionTests
         await session.Messages("two");
 
         Served("read_file", "write_file", "mine");
-        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>()), Times.Once);
+        libraryTools.Verify(mock => mock.Create(It.IsAny<IStore>()), Times.Once);
     }
 
     [Fact]
@@ -1686,25 +1552,21 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         await session.DisposeAsync();
 
-        Assert.Throws<ObjectDisposedException>(() => session.Configuration.ModelSettings["effort"] = "high");
-        Assert.Throws<ObjectDisposedException>(() => session.Configuration.Tools.Add(Tool("late")));
-        Assert.Throws<ObjectDisposedException>(() => session.Configuration.Mounts["late"] = new Mock<IStore>().Object);
-        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
+        Assert.Throws<ObjectDisposedException>(() => session.Configuration.Effort = PromptEffort.High);
+        Assert.Throws<ObjectDisposedException>(() => session.Transient.Tools.Add(Tool("late")));
+        Assert.Equal(PromptEffort.Medium, session.Configuration.Effort);
     }
 
     [Fact]
     public void Settings_ThatAreNotAllowedThrowAtOnceAndChangeNothing()
     {
         PromptSession session = Session(Record());
-        session.Configuration.Mounts["docs"] = new Mock<IStore>().Object;
 
-        Assert.Throws<ArgumentException>(() => session.Configuration.Mounts["bad//name"] = new Mock<IStore>().Object);
-        Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(Tool("bad name")));
-        Assert.Throws<ArgumentException>(() => session.Configuration.ModelSettings["effort"] = "extreme");
+        Assert.Throws<ArgumentException>(() => session.Transient.Tools.Add(Tool("bad name")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Effort = (PromptEffort)99);
 
-        Assert.Equal(["docs"], session.Configuration.Mounts.Keys);
-        Assert.Equal("medium", session.Configuration.ModelSettings["effort"]);
-        Assert.Empty(session.Configuration.Tools);
+        Assert.Equal(PromptEffort.Medium, session.Configuration.Effort);
+        Assert.Empty(session.Transient.Tools);
     }
 
     [Fact]
@@ -1713,8 +1575,8 @@ public sealed class PromptSessionTests
         PromptSession session = Persistent();
         await session.Messages("one");
 
-        session.Configuration.ModelSettings["effort"] = "high";
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
+        session.Configuration.Effort = PromptEffort.High;
+        session.Configuration.Capability = PromptCapability.Strong;
         session.Configuration.Instructions = "Be brief.";
         await session.Messages("two");
 
@@ -1726,14 +1588,14 @@ public sealed class PromptSessionTests
     public async Task AChangeWhileAPromptRuns_DoesNotReachThatPromptAndSettingsAreTakenTogetherAtTheNext()
     {
         PromptSession session = Session(Record());
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
         Task<List<string>> first = session.Messages("one");
         await Task.Delay(100);
 
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high", "max"])] };
-        session.Configuration.Tools.Add(Tool("late"));
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Transient.Tools.Add(Tool("late"));
         release.SetResult();
         await first;
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
@@ -1748,54 +1610,49 @@ public sealed class PromptSessionTests
     {
         PromptSession session = Session(Record());
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium"])] };
-        session.Configuration.ModelSettings["effort"] = "low";
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.Low;
 
         await session.Messages("one");
         await session.Messages("two");
 
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.Settings["effort"] == "low" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Exactly(2));
-        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Model == "opus" && link.ModelSettings!["effort"] == "low"), It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Capability == PromptCapability.Strong && link.Effort == PromptEffort.Low), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public void ANewSession_StartsWithTheDefaultSettings()
     {
-        IPromptSessionConfiguration configuration = Session(Record()).Configuration;
+        PromptSession session = Session(Record());
+        IPromptSessionConfiguration configuration = session.Configuration;
 
-        Assert.Equal(("sonnet", "medium", false, false), (configuration.Model!.Id, configuration.ModelSettings["effort"], configuration.IsPersistent, configuration.EnableShell));
-        Assert.Empty(configuration.Mounts);
-        Assert.Empty(configuration.Tools);
-        Assert.Empty(configuration.McpServers);
+        Assert.Equal((PromptCapability.Balanced, PromptEffort.Medium, false), (configuration.Capability, configuration.Effort, configuration.IsShellAllowed));
+        Assert.Empty(session.Transient.Tools);
+        Assert.Empty(session.Transient.McpServers);
+        Assert.Null(session.Transient.Asker);
         Assert.Null(configuration.Instructions);
-        Assert.Null(configuration.BeforeToolCall);
-        Assert.Null(configuration.Workspace);
-        Assert.Null(configuration.Limits.Budget);
-        Assert.Null(configuration.Limits.Retry);
-        Assert.Null(configuration.Limits.Timeout);
     }
 
     [Fact]
-    public async Task NoSettingIsStoredWhateverTheSessionDoesOrWhenItIsDisposed()
+    public async Task TheConfigurationIsStoredWhenAPromptStartsButNeitherToolsNorServersAre()
     {
         PromptSession graceful = Session(Record());
         PromptSession immediate = Session(Record());
         Plain();
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
-        graceful.Configuration.EnableShell = true;
-        graceful.Configuration.IsPersistent = true;
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
+        graceful.Configuration.IsShellAllowed = true;
         graceful.Configuration.Instructions = "Be brief.";
-        graceful.Configuration.Mounts["app"] = IStore.FromDisk(AppContext.BaseDirectory);
-        graceful.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com");
-        graceful.Configuration.Tools.Add(Tool("mine"));
-        immediate.Configuration.EnableShell = true;
+        graceful.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com");
+        graceful.Transient.Tools.Add(Tool("mine"));
+        immediate.Configuration.IsShellAllowed = true;
 
         await graceful.Messages("one");
         immediate.Dispose();
         await immediate.DisposeAsync();
         await graceful.DisposeAsync();
 
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Id.ToString("N") == graceful.Id && link.IsShellAllowed && link.Instructions == "Be brief."), It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Id.ToString("N") == immediate.Id), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private List<PromptInput> Turns()
@@ -1841,24 +1698,6 @@ public sealed class PromptSessionTests
 
         Assert.Contains("Be brief.", Assert.Single(turns[0].Notes));
         Assert.Empty(turns[1].Notes);
-    }
-
-    [Fact]
-    public async Task AttachTo_ToAToolThatKeepsInstructions_TellsTheCurrentOnesAsANoteBecauseTheNewConversationsAreUnknown()
-    {
-        engine.SetupGet(mock => mock.KeepsInstructions).Returns(true);
-        engine.Setup(mock => mock.HasSession("other")).Returns(true);
-        List<PromptInput> turns = Turns();
-        PromptSession session = Session(Record("abc"));
-        Answers();
-        session.Configuration.Instructions = "Be brief.";
-        await session.Request("go");
-
-        await session.AttachTo("other");
-        await session.Request("again");
-
-        Assert.Contains("Be brief.", Assert.Single(turns[0].Notes));
-        Assert.Contains("Be brief.", Assert.Single(turns[1].Notes));
     }
 
     [Fact]
@@ -1939,7 +1778,7 @@ public sealed class PromptSessionTests
         PromptSession branch = Session(Record("copy"));
         Answers();
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "abc"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(branch);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(branch);
         session.Configuration.Instructions = "Be brief.";
         await session.Request("go");
 
@@ -1961,7 +1800,7 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         Answers();
 
-        await session.Send("go", new PromptOptions { Notes = ["first"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["first"] });
         await Idle(session);
         await session.Send("again");
         await Idle(session);
@@ -1977,7 +1816,7 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         Answers();
 
-        await session.Send("go", new PromptOptions { Notes = ["one", "two", "three"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["one", "two", "three"] });
         await Idle(session);
 
         Assert.Equal(["one", "two", "three"], Assert.Single(turns).Notes);
@@ -1992,9 +1831,9 @@ public sealed class PromptSessionTests
             .Returns(Events(Event(PromptEngineEventKind.Failed, "not now")))
             .Returns(Events(Event(PromptEngineEventKind.Reply, "ok"), Event(PromptEngineEventKind.Finished)));
 
-        await session.Send("go", new PromptOptions { Notes = ["keep me"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["keep me"] });
         await Idle(session);
-        await session.Send("go", new PromptOptions { Notes = ["and me"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["and me"] });
         await Idle(session);
 
         Assert.Equal(["keep me"], turns[0].Notes);
@@ -2023,7 +1862,7 @@ public sealed class PromptSessionTests
     [InlineData("")]
     [InlineData("  ")]
     public async Task Send_ABlankNote_Throws(string note)
-        => await Assert.ThrowsAsync<ArgumentException>(() => Session(Record()).Send("go", new PromptOptions { Notes = [note] }));
+        => await Assert.ThrowsAsync<ArgumentException>(() => Session(Record()).Send("go", new PromptSendOptions { Notes = [note] }));
 
     [Fact]
     public async Task Send_AfterDisposal_Throws()
@@ -2031,6 +1870,6 @@ public sealed class PromptSessionTests
         PromptSession session = Session(Record());
         await session.DisposeAsync();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Send("late", new PromptOptions { Notes = ["late"] }));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Send("late", new PromptSendOptions { Notes = ["late"] }));
     }
 }

@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// The session changed what it is doing. It is only reported on <see cref="IPromptSession.Output" />.
+/// The session changed what it is doing. It is only reported on <see cref="IPromptSession" />.
 /// </summary>
 public sealed record PromptStateEvent : PromptEvent
 {

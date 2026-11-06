@@ -5,13 +5,13 @@
 [![Build](https://github.com/Markwardt-Labs/Live-Ai/actions/workflows/build.yml/badge.svg)](https://github.com/Markwardt-Labs/Live-Ai/actions/workflows/build.yml)
 ![Coverage](.github/badges/badge_linecoverage.svg)
 
-Live AI drives the Claude Code (`claude`), OpenAI Codex (`codex`) and OpenCode (`opencode`, for local models) command line tools from .NET, so the agent loop and sign in stay theirs, also with an API key. A session is a resumable conversation with a workspace and mounted folders, and everything the AI does arrives as one stream of events.
+Live AI drives the Claude Code (`claude`), OpenAI Codex (`codex`) and OpenCode (`opencode`, for local models) command line tools from .NET, so the agent loop and sign in stay theirs, also with an API key. A session is a resumable conversation, stored with its configuration, with a workspace folder and a temporary cache, and everything the AI does arrives as one stream of events.
 
 - **Requests:** ask directly, mixed into running work, or in a fork. Send files and images, typed input, and get typed output under a JSON schema.
-- **Tools:** give the AI your own functions, MCP servers, a way to ask the user questions, web search and page reading, images (looking at them and making them with OpenAI or a local Stable Diffusion), helper delegation, the time and file diffs, and approve or refuse every call.
-- **Control:** timeouts, retries, budgets and subscription limits, plus loops, interrupts, branching, rewinding and compaction.
-- **Files:** the AI reaches files only through stores you choose (disk, zip, memory, overlays, read-only), and has no shell unless you enable one.
-- **Extensible and testable:** run local models through OpenCode, add other tools as engines, and test your code with the fakes in `Markwardt.LiveAi.Testing`.
+- **Tools:** give the AI your own functions, MCP servers, a way to ask the user questions, web search and page reading, images (looking at them and making them with OpenAI or a local Stable Diffusion), helper delegation, the time and file diffs.
+- **Control:** usage and subscription status, interrupts, branching, rewinding and compaction.
+- **Files:** the AI reaches files only through the library's file tools, in the session's workspace folder (one you give it, or one the library makes and keeps for the session) and in a temporary cache, and has no shell unless you enable one.
+- **Local models and tests:** run local models through OpenCode, and test your code with the fakes in `Markwardt.LiveAi.Testing`.
 
 Built on .NET 10 with one dependency, `Microsoft.Extensions.Logging.Abstractions`; see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
@@ -26,22 +26,23 @@ The command of each tool you use must be installed: `claude` and `codex` signed 
 ## Getting started
 
 ```csharp
-IPromptProvider provider = new PromptProvider(new ClaudeEngine());       // Claude Code
-// IPromptProvider provider = new PromptProvider(new CodexEngine());     // Codex
-// IPromptProvider provider = new PromptProvider(new OpenCodeEngine());  // models on this machine (Ollama)
+IPrompter prompter = new Prompter();
 
-IReadOnlyList<PromptModel> models = await provider.GetModels();          // each model lists the settings it offers (effort, context size)
-
-await using IPromptSession session = await provider.Create(new PromptSessionOptions { Model = models[0], WorkspacePath = "/path/to/project" });
+// ClaudeSessionOptions, CodexSessionOptions or OllamaSessionOptions (models on this machine) name the tool
+IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+session.Configuration.Capability = PromptCapability.Strong;   // how capable the model should be
+session.Configuration.Effort = PromptEffort.High;             // how hard it should work
 
 Console.WriteLine(await session.Request("Which file holds the entry point?"));
+string id = session.Id;
+await session.DisposeAsync();
 
-// Later, possibly in another process: the conversation comes back with its workspace and its model.
-await using IPromptSession resumed = await provider.Load(session.Id);
+// Later, possibly in another process: the conversation comes back with its workspace and its configuration.
+await using IPromptSession resumed = await prompter.Load(id);
 Console.WriteLine(await resumed.Request("And what does it do?"));
 ```
 
-A session runs the model chosen for it, with the values of that model's settings (`session.Configuration.ModelSettings["effort"] = "high"`), and both are stored with it, as is the workspace folder. Each engine takes the command and, for Claude Code and Codex, the configuration folder; `OpenCodeEngine` takes the servers on this machine whose models it offers.
+The library picks the model and its reasoning level in the background from the capability and the effort, so a caller never lists or names models. The options carry only what their tool needs (an API key, which is stored with the session in plain text in a file only the current user can read, the workspace, where the command is found), and the identifier alone is enough to load or delete a session.
 
 ## Documentation
 

@@ -14,7 +14,7 @@ public sealed class CodexSessionTests : IDisposable
         => temp.Dispose();
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private IPromptEngine Codex(string command)
         => new CodexEngine(command, temp.Combine("codex-state"));
@@ -22,7 +22,6 @@ public sealed class CodexSessionTests : IDisposable
     private async Task<IPromptSession> Create(string command, bool persistent = false)
     {
         IPromptSession session = temp.Track(await Provider(Codex(command)).Create(TestModels.Options));
-        session.Configuration.IsPersistent = persistent;
         return session;
     }
 
@@ -76,7 +75,7 @@ public sealed class CodexSessionTests : IDisposable
     {
         await using IPromptSession session = await Create(fake.Script());
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.ModelSettings["effort"] = "high";
+        session.Configuration.Effort = PromptEffort.High;
 
         await session.Request("hi");
 
@@ -85,12 +84,27 @@ public sealed class CodexSessionTests : IDisposable
         Assert.Equal(("never", "read-only", false), (thread.GetProperty("approvalPolicy").GetString(), thread.GetProperty("sandbox").GetString(), thread.GetProperty("ephemeral").GetBoolean()));
         Assert.Equal(PromptDirectory(session), thread.GetProperty("cwd").GetString());
         JsonElement turn = Assert.Single(await fake.Parameters("turn/start"));
-        Assert.Equal(("test-model", "high", "codex-thread"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString(), turn.GetProperty("threadId").GetString()));
+        Assert.Equal(("gpt-5.6-terra", "high", "codex-thread"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString(), turn.GetProperty("threadId").GetString()));
         Assert.Equal(("text", "hi"), (turn.GetProperty("input")[0].GetProperty("type").GetString(), turn.GetProperty("input")[0].GetProperty("text").GetString()));
     }
 
     private string PromptDirectory(IPromptSession session)
-        => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{session.Id}");
+        => session.WorkspacePath;
+
+    [Fact]
+    public async Task AfterAMove_TheNextPromptResumesTheThreadInTheNewFolder()
+    {
+        string moved = Directory.CreateDirectory(temp.Combine("moved")).FullName;
+        await using IPromptSession session = await Create(fake.Script());
+        await session.Request("one");
+
+        await session.Move(moved);
+        await session.Request("two");
+
+        JsonElement resume = Assert.Single(await fake.Parameters("thread/resume"));
+        Assert.Equal(("codex-thread", moved), (resume.GetProperty("threadId").GetString(), resume.GetProperty("cwd").GetString()));
+        Assert.Equal(2, (await Pids()).Length);
+    }
 
     [Fact]
     public async Task AToolCallOfTheAi_IsReportedWhenItStartsAndWhenItEnds()
@@ -133,12 +147,12 @@ public sealed class CodexSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task TheCodexIsAllowedItsOwnSearchOnlyWhenTheSessionEnablesSearch()
+    public async Task TheCodexIsAllowedItsOwnSearchOnlyWhenTheSessionAllowsTheWeb()
     {
         await using IPromptSession without = await Create(fake.Script());
         await without.Request("hi");
         await using IPromptSession with = await Create(fake.Script());
-        with.Configuration.EnableSearch = true;
+        with.Configuration.IsWebAllowed = true;
         await with.Request("hi");
 
         IReadOnlyList<JsonElement> threads = await fake.Parameters("thread/start");
@@ -232,7 +246,7 @@ public sealed class CodexSessionTests : IDisposable
     {
         await using IPromptSession session = await Create(fake.Script());
 
-        await session.Send("go", new PromptOptions { Notes = ["the build passes"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["the build passes"] });
         await WaitFor(() => session.State == PromptSessionState.Waiting && File.Exists(temp.Combine("turn-count")));
 
         string[] methods = [.. (await fake.Requests()).Select(request => request.TryGetProperty("method", out JsonElement method) ? method.GetString()! : string.Empty)];
@@ -290,7 +304,7 @@ public sealed class CodexSessionTests : IDisposable
     public async Task GetContext_OfAThreadThatHasNoTurnYet_ReportsNothingOnceTheWaitIsOver()
     {
         CodexEngine provider = new(fake.Script(), temp.Path) { ContextWait = TimeSpan.FromMilliseconds(100) };
-        PromptSessionRecord record = new() { Id = Guid.NewGuid(), Engine = provider, Model = TestModels.Model, WorkingFolder = temp.Path };
+        PromptSessionRecord record = new() { Id = Guid.NewGuid(), Engine = provider, WorkingFolder = temp.Path };
         PromptEngineStart given = record.ToStart(null, null, null);
         await using IPromptProcess process = new TurnRunner().Open(provider, provider.CreatePersistentStart(given), given);
 
@@ -308,7 +322,19 @@ public sealed class CodexSessionTests : IDisposable
 
         Assert.Equal("done", await session.Request("go"));
 
-        JsonElement answer = (await fake.Requests()).Single(request => request.TryGetProperty("id", out JsonElement id) && id.GetInt32() == 77);
+        JsonElement answer = default;
+
+        for (int attempt = 0; attempt < 100 && answer.ValueKind == JsonValueKind.Undefined; attempt++)
+        {
+            answer = (await fake.Requests()).FirstOrDefault(request => request.TryGetProperty("id", out JsonElement id) && id.ValueKind == JsonValueKind.Number && id.GetInt32() == 77);
+
+            if (answer.ValueKind == JsonValueKind.Undefined)
+            {
+                await Task.Delay(50);
+            }
+        }
+
+        Assert.NotEqual(JsonValueKind.Undefined, answer.ValueKind);
         Assert.False(answer.TryGetProperty("method", out JsonElement _));
         Assert.True(answer.GetProperty("error").TryGetProperty("message", out JsonElement _));
     }

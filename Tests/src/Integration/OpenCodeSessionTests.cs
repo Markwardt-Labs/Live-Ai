@@ -21,24 +21,14 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         temp.Dispose();
     }
 
-    private PromptModel Model(string id = "fake/model", params string[] variants)
-        => new() { Id = id, Settings = variants.Length == 0 ? [] : [PromptModelSetting.Choose("variant", "Reasoning", variants)] };
-
-    private PromptModel FakeModel
-        => Model("fake/model", "low", "medium", "high");
-
     private OpenCodeEngine Engine(IEnumerable<OpenCodeModelProvider>? providers = null, string? export = null, string? fork = null, string? command = null)
         => new(command ?? fake.Script(server, export: export, fork: fork), [], providers) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
 
     private IPromptProvider Provider(OpenCodeEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
-    private async Task<IPromptSession> Create(PromptModel? model = null, bool persistent = false, string? export = null, string? fork = null)
-    {
-        IPromptSession session = await Provider(Engine(null, export, fork)).Create(new PromptSessionOptions { Model = model ?? FakeModel, WorkspacePath = temp.Path });
-        session.Configuration.IsPersistent = persistent;
-        return session;
-    }
+    private async Task<IPromptSession> Create(string? export = null, string? fork = null)
+        => await Provider(Engine(null, export, fork)).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
 
     private IReadOnlyList<FakeOpenCodeServer.Step> Turn(params FakeOpenCodeServer.Step[] steps)
         => [FakeOpenCodeServer.Step.Event("session.execution.started", new { }), .. steps, FakeOpenCodeServer.Step.Event("session.execution.succeeded", new { })];
@@ -91,10 +81,27 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AfterAMove_TheNextPromptContinuesTheSameSessionOnAServerStartedInTheNewFolder()
+    {
+        server.OnPrompt = _ => server.Reply("ok");
+        string moved = Directory.CreateDirectory(temp.Combine("moved")).FullName;
+        await using IPromptSession session = await Create();
+        await session.Request("one");
+
+        await session.Move(moved);
+        await session.Request("two");
+
+        Assert.Single(server.Requests, request => request is { Method: "POST", Path: "/api/session" });
+        Assert.Equal(2, server.Bodies("POST", "/api/session/ses_fake/prompt").Count);
+        Assert.Equal(moved, server.Requests.Where(request => request.Path != "/api/event").Last().Directory);
+        Assert.Equal(2, (await File.ReadAllLinesAsync(temp.Combine("pids.txt"))).Length);
+    }
+
+    [Fact]
     public async Task TheServerAndTheSessionAreOpenedOnceAndEachPromptAfterItGoesToTheSameSession()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        await using IPromptSession session = await Create(persistent: true);
+        await using IPromptSession session = await Create();
 
         await session.Request("one");
         await session.Request("two");
@@ -109,7 +116,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     {
         server.OnPrompt = _ => server.Reply("ok");
         IPromptProvider provider = Provider(Engine());
-        IPromptSession first = await provider.Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
+        IPromptSession first = await provider.Create(new PromptProviderOptions { WorkspacePath = temp.Path });
         await first.Request("one");
         string id = first.Id;
         await first.DisposeAsync();
@@ -126,7 +133,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     {
         server.OnPrompt = _ => server.Reply("ok");
         IPromptProvider provider = Provider(Engine());
-        IPromptSession first = await provider.Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
+        IPromptSession first = await provider.Create(new PromptProviderOptions { WorkspacePath = temp.Path });
         await first.Request("one");
         string id = first.Id;
         await first.DisposeAsync();
@@ -178,7 +185,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     public async Task TheUsageOfThePromptIsTheSumOfItsStepsAndTheContextIsWhatTheLastOneUsedOfTheWindow()
     {
         server.OnPrompt = _ => Turn(Tokens(100, 7), Tokens(120, 9));
-        await using IPromptSession session = await Create(persistent: true);
+        await using IPromptSession session = await Create();
 
         List<PromptEvent> events = await session.EventList("go");
         PromptContext context = await session.GetContext();
@@ -211,52 +218,27 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TheModelAndTheVariantFollowTheModelAndItsSettingAndAreSentOnlyWhenTheyChange()
+    public async Task TheModelAndTheVariantFollowTheCapabilityAndTheEffortAndAreSentOnlyWhenTheyChange()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        await using IPromptSession session = await Create(Model("fake/big", "low", "high", "max"), persistent: true);
-        session.Configuration.ModelSettings["variant"] = "high";
+        await using IPromptSession session = await Create();
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.Max;
 
         await session.Request("one");
         await session.Request("two");
-        session.Configuration.Model = Model("fake/model", "low", "medium", "high");
-        session.Configuration.ModelSettings["variant"] = "low";
+        session.Configuration.Capability = PromptCapability.Balanced;
+        session.Configuration.Effort = PromptEffort.Low;
         await session.Request("three");
 
-        Assert.Equal(["fake/big#high", "fake/model#low"], server.Bodies("POST", "/api/session/ses_fake/model").Select(body => $"{body.GetProperty("model").GetProperty("providerID").GetString()}/{body.GetProperty("model").GetProperty("id").GetString()}#{(body.GetProperty("model").TryGetProperty("variant", out JsonElement variant) ? variant.GetString() : string.Empty)}"));
-    }
-
-    [Fact]
-    public async Task AModelWithoutSettingsIsSentWithoutAVariant()
-    {
-        server.OnPrompt = _ => server.Reply("ok");
-        await using IPromptSession session = await Create(Model("fake/big"));
-
-        await session.Request("one");
-
-        JsonElement chosen = Assert.Single(server.Bodies("POST", "/api/session/ses_fake/model")).GetProperty("model");
-        Assert.Equal("big", chosen.GetProperty("id").GetString());
-        Assert.False(chosen.TryGetProperty("variant", out _));
-    }
-
-    [Fact]
-    public async Task ASessionWithoutAModelRefusesEveryCallThatNeedsTheTool()
-    {
-        await using IPromptSession session = await Provider(Engine()).Create(new PromptSessionOptions { WorkspacePath = temp.Path });
-
-        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Request("go"));
-        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Send("go"));
-        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.Compact());
-        await Assert.ThrowsAsync<PromptSessionModelException>(() => session.GetContext());
-        Assert.Empty(server.Requests);
+        Assert.Equal(["fake/big#max", "fake/model#low"], server.Bodies("POST", "/api/session/ses_fake/model").Select(body => $"{body.GetProperty("model").GetProperty("providerID").GetString()}/{body.GetProperty("model").GetProperty("id").GetString()}#{(body.GetProperty("model").TryGetProperty("variant", out JsonElement variant) ? variant.GetString() : string.Empty)}"));
     }
 
     [Fact]
     public async Task TheLocalModelOfAnOllamaServerGetsItsProviderAndTheContextSizeFromItsSetting()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        await using IPromptSession session = await LocalSession();
-        session.Configuration.ModelSettings["context"] = "16384";
+        await using IPromptSession session = await LocalSession(16384);
 
         await session.Request("go");
 
@@ -268,25 +250,30 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ChangingTheContextSizeStartsANewProcessBecauseItIsPartOfTheConfiguration()
+    public async Task TwoSessionsWithTheSameOptionsExceptTheContextSizeEachRunWithTheirOwnSize()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        await using IPromptSession session = await LocalSession();
-        session.Configuration.IsPersistent = true;
+        Prompter prompter = TestProviders.MakePrompter(options => new OpenCodeEngine(fake.Script(server), ["http://localhost:11434/v1"], null, ((OllamaSessionOptions)options).Models, ((OllamaSessionOptions)options).Context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data"));
+        OllamaSessionOptions small = new() { Models = PromptCapabilityModels.All("gemma4:26b"), Context = 8192, WorkspacePath = temp.Path };
+        await using IPromptSession first = await prompter.Create(small);
+        await using IPromptSession second = await prompter.Create(small with { Context = 16384 });
 
-        await session.Request("one");
-        session.Configuration.ModelSettings["context"] = "8192";
-        await session.Request("two");
+        await first.Request("one");
+        int firstSize = (await fake.Config()).GetProperty("provider").GetProperty("ollama").GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
+        await second.Request("two");
+        int secondSize = (await fake.Config()).GetProperty("provider").GetProperty("ollama").GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
 
+        Assert.Equal((8192, 16384), (firstSize, secondSize));
         Assert.Equal(2, (await File.ReadAllLinesAsync(temp.Combine("pids.txt"))).Length);
+        Assert.Equal(8192, (await StoredContext(first)));
+        Assert.Equal(16384, (await StoredContext(second)));
     }
 
-    private async Task<IPromptSession> LocalSession()
-    {
-        PromptModel model = new() { Id = "ollama/gemma4:26b", Settings = [PromptModelSetting.Count("context", "Context window", 1024, 262144, 32768)] };
-        OpenCodeEngine engine = new(fake.Script(server), ["http://localhost:11434/v1"]) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
-        return await Provider(engine).Create(new PromptSessionOptions { Model = model, WorkspacePath = temp.Path });
-    }
+    private async Task<int> StoredContext(IPromptSession session)
+        => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement.GetProperty("options").GetProperty("context").GetInt32();
+
+    private async Task<IPromptSession> LocalSession(int context)
+        => await TestProviders.Make(new OpenCodeEngine(fake.Script(server), ["http://localhost:11434/v1"], null, PromptCapabilityModels.All("gemma4:26b"), context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
 
     [Fact]
     public async Task AnAnswerToASchemaThatIsNotInACodeFenceIsKeptAsItIs()
@@ -329,7 +316,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         server.OnPrompt = _ => [FakeOpenCodeServer.Step.Event("session.execution.started", new { }), FakeOpenCodeServer.Step.Interrupted()];
         await using IPromptSession session = await Create();
         Recorder<PromptEvent> recorder = new();
-        using IDisposable watch = session.Output.Subscribe(recorder);
+        using IDisposable watch = session.Subscribe(recorder);
 
         Task<string> asking = session.Request("slow");
         await WaitFor(() => Prompted(1));
@@ -346,13 +333,13 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     public async Task Send_ToAPromptThatRuns_IsSteeredIntoItAndDoesNotStartAnother()
     {
         server.OnPrompt = _ => [FakeOpenCodeServer.Step.Event("session.execution.started", new { }), FakeOpenCodeServer.Step.Steered("session.text.ended", new { ordinal = 0, text = "both done" }), Tokens(), FakeOpenCodeServer.Step.Event("session.execution.succeeded", new { })];
-        await using IPromptSession session = await Create(persistent: true);
+        await using IPromptSession session = await Create();
         Recorder<PromptEvent> recorder = new();
-        using IDisposable watch = session.Output.Subscribe(recorder);
+        using IDisposable watch = session.Subscribe(recorder);
 
         await session.Send("first");
         await WaitFor(() => Prompted(1));
-        await session.Send("second", new PromptOptions { Notes = ["be quick"] });
+        await session.Send("second", new PromptSendOptions { Notes = ["be quick"] });
         await WaitFor(() => session.State == PromptSessionState.Waiting);
 
         IReadOnlyList<JsonElement> prompts = server.Bodies("POST", "/api/session/ses_fake/prompt");
@@ -369,7 +356,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     public async Task Compact_AsksTheServerToCompactAndWaitsForTheExecutionToEnd()
     {
         server.OnPrompt = body => body.TryGetProperty("text", out _) ? server.Reply("ok") : Turn(FakeOpenCodeServer.Step.Event("session.compaction.started", new { reason = "manual" }), Tokens(40, 5));
-        await using IPromptSession session = await Create(persistent: true);
+        await using IPromptSession session = await Create();
         await session.Request("one");
 
         await session.Compact();
@@ -383,7 +370,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     public async Task Compact_ThatTheToolReportsAsFailedFailsWithItsMessage()
     {
         server.OnPrompt = body => body.TryGetProperty("text", out _) ? server.Reply("ok") : [FakeOpenCodeServer.Step.Event("session.execution.started", new { }), FakeOpenCodeServer.Step.Event("session.compaction.failed", new { reason = "manual", error = new { type = "compaction.failed", message = "Compaction summary did not match the required template" } }), FakeOpenCodeServer.Step.Event("session.execution.succeeded", new { })];
-        await using IPromptSession session = await Create(persistent: true);
+        await using IPromptSession session = await Create();
         await session.Request("one");
 
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Compact());
@@ -397,7 +384,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         string export = """{"info":{},"messages":[{"type":"user","text":"hi","time":{"created":1000}},{"type":"assistant","time":{"created":2000},"content":[{"type":"text","text":"hello"}],"tokens":{"input":40,"output":10,"cache":{"read":5,"write":0}}}]}""";
         server.OnPrompt = _ => server.Reply("ok");
         IPromptProvider provider = Provider(Engine(export: export));
-        IPromptSession first = await provider.Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
+        IPromptSession first = await provider.Create(new PromptProviderOptions { WorkspacePath = temp.Path });
         await first.Request("one");
         string id = first.Id;
         await first.DisposeAsync();
@@ -499,7 +486,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     {
         server.OnPrompt = _ => server.Reply("ok");
         IPromptProvider provider = Provider(Engine());
-        IPromptSession session = await provider.Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
+        IPromptSession session = await provider.Create(new PromptProviderOptions { WorkspacePath = temp.Path });
         await session.Request("one");
         string id = session.Id;
         await session.DisposeAsync();
@@ -578,22 +565,14 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GetWindows_IsEmptyBecauseTheToolHasNoSubscriptionLimits()
-    {
-        IPromptProvider provider = Provider(Engine());
-
-        Assert.Empty(await provider.GetWindows());
-    }
-
-    [Fact]
     public async Task TheToolIsStartedWithTheConfigurationOfTheSessionAndTheTokenOnlyInItsEnvironment()
     {
         server.OnPrompt = _ => server.Reply("ok");
         server.OtherMcpServers = ["docs", "files"];
-        await using IPromptSession session = await Create(Model("fake/model"));
+        await using IPromptSession session = await Create();
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.McpServers["docs"] = PromptMcpServer.Http("http://localhost:9/mcp", "DOCS_TOKEN");
-        session.Configuration.McpServers["files"] = PromptMcpServer.Stdio("npx", "-y", "files-server") with { EnvironmentVariables = new Dictionary<string, string> { ["ROOT"] = "/data" } };
+        session.Transient.McpServers["docs"] = PromptMcpServer.Http("http://localhost:9/mcp", "DOCS_TOKEN");
+        session.Transient.McpServers["files"] = PromptMcpServer.Stdio("npx", "-y", "files-server") with { EnvironmentVariables = new Dictionary<string, string> { ["ROOT"] = "/data" } };
 
         await session.Request("go");
 
@@ -658,8 +637,8 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     {
         server.OnPrompt = _ => server.Reply("ok");
         OpenCodeEngine engine = new(fake.Script(server), []) { ConnectWait = TimeSpan.FromMilliseconds(300), PollInterval = TimeSpan.FromMilliseconds(20) };
-        await using IPromptSession session = await Provider(engine).Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
-        session.Configuration.McpServers["docs"] = PromptMcpServer.Http("http://localhost:9/mcp");
+        await using IPromptSession session = await Provider(engine).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
+        session.Transient.McpServers["docs"] = PromptMcpServer.Http("http://localhost:9/mcp");
 
         Assert.Equal("ok", await session.Request("go"));
     }
@@ -669,7 +648,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     {
         server.McpStatuses = ["pending"];
         OpenCodeEngine engine = new(fake.Script(server), []) { ConnectWait = TimeSpan.FromMilliseconds(300), PollInterval = TimeSpan.FromMilliseconds(20) };
-        await using IPromptSession session = await Provider(engine).Create(new PromptSessionOptions { Model = FakeModel, WorkspacePath = temp.Path });
+        await using IPromptSession session = await Provider(engine).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
 
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("go"));
 

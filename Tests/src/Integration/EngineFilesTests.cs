@@ -105,7 +105,7 @@ public sealed class EngineFilesTests : IDisposable
         => Assert.Empty(await new CodexEngine("codex", temp.Path).ReadHistory("abc").ToListAsync());
 
     private PromptSessionRecord Record(string? aiSessionId = null, string? forkedFrom = null, string? forkedAt = null)
-        => new() { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), Model = TestModels.Model, WorkingFolder = temp.Path, AiSessionId = aiSessionId, ForkedFrom = forkedFrom, ForkedAt = forkedAt };
+        => new() { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = temp.Path, AiSessionId = aiSessionId, ForkedFrom = forkedFrom, ForkedAt = forkedAt };
 
     private string[] Codex(params string[] turns)
         => [.. new[] { """{"type":"session_meta","payload":{"id":"abc"}}""" }.Concat(turns.SelectMany((turn, index) => new[]
@@ -251,6 +251,53 @@ public sealed class EngineFilesTests : IDisposable
         Assert.False(engine.HasSession("abc"));
         await engine.DeleteSession("abc");
         await new ClaudeEngine("claude", temp.Combine("missing")).DeleteSession("abc");
+    }
+
+    [Fact]
+    public async Task Claude_MoveSession_CopiesTheConversationAndItsExtrasToTheFolderOfTheNewWorkingFolder()
+    {
+        Write("projects/-old/abc.jsonl", "{\"a\":1}");
+        Write("projects/-old/abc/subagents/one.jsonl", "{}");
+        string project = Directory.CreateDirectory(temp.Combine("my project.v2")).FullName;
+        ClaudeEngine engine = new("claude", temp.Path);
+
+        await engine.MoveSession("abc", project);
+
+        string folder = temp.Combine($"projects/{Regex.Replace(project, "[^a-zA-Z0-9]", "-")}");
+        Assert.Equal("{\"a\":1}", (await File.ReadAllTextAsync(Path.Combine(folder, "abc.jsonl"))).Trim());
+        Assert.True(File.Exists(Path.Combine(folder, "abc/subagents/one.jsonl")));
+        Assert.True(File.Exists(temp.Combine("projects/-old/abc.jsonl")));
+    }
+
+    [Fact]
+    public async Task Claude_MoveSession_ToAFolderThatAlreadyHasTheConversation_LeavesItAlone()
+    {
+        string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
+        string folder = Regex.Replace(project, "[^a-zA-Z0-9]", "-");
+        Write("projects/-old/abc.jsonl", "old");
+        Write($"projects/{folder}/abc.jsonl", "newer");
+
+        await new ClaudeEngine("claude", temp.Path).MoveSession("abc", project);
+
+        Assert.Equal("newer", (await File.ReadAllTextAsync(temp.Combine($"projects/{folder}/abc.jsonl"))).Trim());
+    }
+
+    [Fact]
+    public async Task Claude_MoveSession_OfAConversationThatIsGone_Fails()
+        => await Assert.ThrowsAsync<PromptSessionException>(() => new ClaudeEngine("claude", temp.Path).MoveSession("abc", temp.Path));
+
+    [Fact]
+    public async Task Claude_DeleteSession_AfterAMove_RemovesEveryCopy()
+    {
+        Write("projects/-old/abc.jsonl", "{}");
+        string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
+        ClaudeEngine engine = new("claude", temp.Path);
+        await engine.MoveSession("abc", project);
+
+        await engine.DeleteSession("abc");
+
+        Assert.False(engine.HasSession("abc"));
+        Assert.Empty(Directory.EnumerateFiles(temp.Combine("projects"), "abc.jsonl", SearchOption.AllDirectories));
     }
 
     [Fact]

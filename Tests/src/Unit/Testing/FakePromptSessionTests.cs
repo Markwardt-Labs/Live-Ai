@@ -15,11 +15,29 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task OutputReportsTheStatesAndTheEventsOfADirectRequest()
+    public async Task Descriptors_NameTheFakeProviderAndFollowTheCapabilityAndEffortAtEachPrompt()
+    {
+        FakePromptSession session = Session().Reply("a").Reply("b").Reply("c");
+        Recorder<PromptEvent> recorder = new();
+        session.Subscribe(recorder);
+        Assert.Equal(new Dictionary<string, string> { ["Provider"] = "Fake" }, session.Descriptors);
+
+        await session.Request("one");
+        session.Configuration.Capability = PromptCapability.Max;
+        await session.Request("two");
+        await session.Request("three");
+        await recorder.Until(values => values.OfType<PromptDescriptorsEvent>().Count() == 2);
+
+        Assert.Equal(new Dictionary<string, string> { ["Provider"] = "Fake", ["Model"] = "Fake Max", ["Effort"] = "Medium" }, session.Descriptors);
+        Assert.Equal(["Fake Balanced", "Fake Max"], recorder.Values.OfType<PromptDescriptorsEvent>().Select(change => change.Descriptors["Model"]));
+    }
+
+    [Fact]
+    public async Task TheEventsReportTheStatesAndTheEventsOfADirectRequest()
     {
         FakePromptSession session = Session().Reply("hello");
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         Assert.Equal("hello", await session.Request("a"));
         await recorder.Until(values => values.OfType<PromptStateEvent>().Count() == 2);
@@ -30,11 +48,11 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task SendRunsAScriptedPromptWhoseEventsAreOnOutputAndIsRefusedWhileResponding()
+    public async Task SendRunsAScriptedPromptWhoseEventsAreReportedAndIsRefusedWhileResponding()
     {
         FakePromptSession session = Session().Reply("one").Hang();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         await session.Send("input");
         await Eventually(() => session.State == PromptSessionState.Waiting);
@@ -92,7 +110,7 @@ public sealed class FakePromptSessionTests
     {
         FakePromptSession session = Session().Reply("side answer");
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         Assert.Equal("side answer", await session.Request("side", new PromptRequestOptions { Mode = PromptRequestMode.Fork }));
 
@@ -102,11 +120,11 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task OutputCompletesWhenTheSessionIsDisposed()
+    public async Task TheEventsCompleteWhenTheSessionIsDisposed()
     {
         FakePromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         await session.DisposeAsync();
         await recorder.Ended();
@@ -150,18 +168,15 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task UsageAddsUpAndTheBudgetStopsTheNextPrompt()
+    public async Task UsageAddsUpOverThePrompts()
     {
         PromptEvent usage = new PromptUsageEvent { Usage = new PromptUsage { InputTokens = 60, OutputTokens = 40 } };
         FakePromptSession session = Session().ReplyWith(_ => [new PromptMessageEvent { Text = "ok" }, usage]);
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 150 } };
 
         await session.Request("one");
         await session.Request("two");
 
         Assert.Equal(200, session.Usage.InputTokens + session.Usage.OutputTokens);
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("three"));
-        Assert.Equal(PromptLimit.Budget, exception.Limit);
         Assert.Equal(2, session.Prompts.Count);
     }
 
@@ -170,14 +185,14 @@ public sealed class FakePromptSessionTests
     {
         FakePromptSession session = Session().Reply("ok");
         PromptAttachment file = new() { Name = "a.png", MediaType = "image/png", Content = new byte[] { 1 } };
-        session.Configuration.ModelSettings["effort"] = "high";
+        session.Configuration.Effort = PromptEffort.High;
 
         await session.Request("look\n\nmore", new PromptRequestOptions { Attachments = [file] });
         FakePrompt prompt = session.Prompts.Single();
 
         Assert.Equal("look\n\nmore", prompt.Text);
         Assert.Equal([file], prompt.Attachments);
-        Assert.Equal(("fake-model", "high"), (prompt.Model.Id, prompt.ModelSettings["effort"]));
+        Assert.Equal((PromptCapability.Balanced, PromptEffort.High), (prompt.Capability, prompt.Effort));
         Assert.True(DateTimeOffset.UtcNow - prompt.Time < TimeSpan.FromMinutes(1));
     }
 
@@ -200,12 +215,12 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task AFailureIsThrownAndARetryGetsTheNextScriptedAnswer()
+    public async Task AFailureIsThrownAndTheNextPromptGetsTheNextScriptedAnswer()
     {
         FakePromptSession session = Session().Fail("rate limited").Fail("overloaded").Reply("finally");
 
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 3, InitialDelay = TimeSpan.FromMilliseconds(1) } };
-
+        await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("go"));
+        await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("go"));
         string answer = await session.Request("go");
 
         Assert.Equal("finally", answer);
@@ -214,13 +229,10 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task AHangingPromptEndsWithATimeoutACancellationOrAnInterruption()
+    public async Task AHangingPromptEndsWithACancellationOrAnInterruption()
     {
-        FakePromptSession session = Session().Hang().Hang().Hang();
+        FakePromptSession session = Session().Hang().Hang();
 
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromMilliseconds(50) };
-        PromptLimitException timeout = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("a"));
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = null };
         using CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(50));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.Request("b", null, cancellation: cancellation.Token));
         Task<List<PromptEvent>> running = session.EventList("c");
@@ -228,7 +240,6 @@ public sealed class FakePromptSessionTests
         bool interrupted = await session.Interrupt();
         List<PromptEvent> events = await running.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(PromptLimit.Timeout, timeout.Limit);
         Assert.True(interrupted);
         Assert.Equal([new PromptInterruptedEvent()], events);
         Assert.False(await Session().Interrupt());
@@ -249,69 +260,16 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task ASessionWithAClockWaitsOnItAndRecordsItsTimeOnThePrompts()
+    public async Task ASessionWithAClockRecordsItsTimeOnThePrompts()
     {
         ManualTime clock = new();
         FakePromptSession session = new(time: clock);
-        session.Hang();
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromHours(1) };
-
-        Task<string> asking = session.Request("slow");
-        await Task.Delay(100);
+        session.Reply("ok");
         DateTimeOffset started = clock.GetUtcNow();
-        clock.Advance(TimeSpan.FromHours(2));
 
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => asking.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Equal(PromptLimit.Timeout, exception.Limit);
+        await session.Request("go");
+
         Assert.Equal(started, Assert.Single(session.Prompts).Time);
-    }
-
-    [Fact]
-    public async Task TheLimitsOfTheSessionWorkAsInProduction()
-    {
-        PromptEvent call = new PromptToolCallEvent { Id = "1", Name = "x" };
-        FakePromptSession session = Session().Reply(call, call).Hang();
-        FakePromptSession limited = new() { Windows = TestWindows.Claude(session: 0.99) };
-        limited.Hang();
-        session.Configuration.Limits = session.Configuration.Limits with { MaxToolCalls = 1 };
-        limited.Configuration.Limits = limited.Configuration.Limits with { WindowLimit = new PromptWindowLimit { Reached = value => value.Used("Session", 0.9) } };
-
-        PromptLimitException tools = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("x"));
-        PromptLimitException status = await Assert.ThrowsAsync<PromptLimitException>(() => limited.Request("x"));
-
-        Assert.Equal(PromptLimit.ToolCalls, tools.Limit);
-        Assert.Equal(PromptLimit.Window, status.Limit);
-    }
-
-    [Fact]
-    public async Task DefaultsOfTheConfigurationApplyToRequests()
-    {
-        FakePromptSession session = Session().Hang();
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromMilliseconds(50) };
-
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("x"));
-
-        Assert.Equal(PromptLimit.Timeout, exception.Limit);
-    }
-
-    [Fact]
-    public async Task ALoopRunsOnTheFakeLikeOnARealSession()
-    {
-        FakePromptSession session = Session().Reply(new Answer("a", 1)).Reply(new Answer("b", 2)).Reply(new Answer("c", 3));
-        List<Answer> seen = [];
-        using IPromptLoop<Answer> loop = session.Loop<Answer>("check", limits: new PromptLoopLimits<Answer>
-        {
-            Until = answer =>
-        {
-            seen.Add(answer);
-            return answer.Score == 2;
-        }
-        });
-
-        await loop.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal([new Answer("a", 1), new Answer("b", 2)], seen);
-        Assert.Equal(PromptLoopStopReason.Until, loop.StopReason);
     }
 
     [Fact]
@@ -320,18 +278,17 @@ public sealed class FakePromptSessionTests
         FakePromptSession session = Session();
         PromptTool tool = PromptTool.Create<Question, string>("mine", "d", (_, _) => Task.FromResult("x"));
 
-        session.Configuration.ModelSettings["effort"] = "low";
+        session.Configuration.Effort = PromptEffort.Low;
         session.Configuration.Instructions = "Be brief.";
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.Tools.Add(tool);
-        session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
+        session.Transient.Tools.Add(tool);
+        session.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
 
-        Assert.Equal("low", session.Configuration.ModelSettings["effort"]);
+        Assert.Equal(PromptEffort.Low, session.Configuration.Effort);
         Assert.Equal("Be brief.", session.Configuration.Instructions);
-        Assert.Equal([tool], session.Configuration.Tools);
-        Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(PromptTool.Create<Question, string>("read_file", "d", (_, _) => Task.FromResult("x"))));
-        Assert.Throws<ArgumentException>(() => session.Configuration.Mounts["a//b"] = IStore.FromMemory());
-        Assert.Equal([tool], session.Configuration.Tools);
+        Assert.Equal([tool], session.Transient.Tools);
+        Assert.Throws<ArgumentException>(() => session.Transient.Tools.Add(PromptTool.Create<Question, string>("read_file", "d", (_, _) => Task.FromResult("x"))));
+        Assert.Equal([tool], session.Transient.Tools);
     }
 
     [Fact]
@@ -408,7 +365,7 @@ public sealed class FakePromptSessionTests
         Assert.True(graceful.IsDisposed);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Request("x"));
         Assert.Throws<ObjectDisposedException>(() => graceful.Configuration.Instructions = "late");
-        Assert.Throws<ObjectDisposedException>(() => graceful.Configuration.Tools.Add(PromptTool.Create<Question, string>("late", "d", (_, _) => Task.FromResult("x"))));
+        Assert.Throws<ObjectDisposedException>(() => graceful.Transient.Tools.Add(PromptTool.Create<Question, string>("late", "d", (_, _) => Task.FromResult("x"))));
         await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Interrupt());
         await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Fork());
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -434,15 +391,13 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public void TheSessionTellsItsProviderAndKey()
+    public void TheSessionTellsItsKeyAndHasAnIdentifier()
     {
-        FakePromptProvider provider = new();
         FakePromptSession plain = new();
-        FakePromptSession keyed = new(provider, apiKey: "k");
+        FakePromptSession keyed = new(apiKey: "k");
 
-        Assert.IsType<PromptProvider>(plain.Provider);
         Assert.Null(plain.ApiKey);
-        Assert.Equal((provider, "k"), (keyed.Provider, keyed.ApiKey));
+        Assert.Equal("k", keyed.ApiKey);
         Assert.Matches("^[0-9a-f]{32}$", plain.Id);
     }
 
@@ -471,32 +426,21 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task AttachTo_RecordsTheProviderSessionAndStartsAnotherConversation()
-    {
-        FakePromptSession session = await Talked();
-
-        await session.AttachTo("provider-session");
-
-        Assert.Equal("provider-session", session.AttachedTo);
-        Assert.Empty(await session.GetHistory().Take(100).ToListAsync());
-        Assert.Empty(session.Prompts);
-        await Assert.ThrowsAsync<ArgumentException>(() => session.AttachTo(" "));
-        await session.DisposeAsync();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.AttachTo("again"));
-    }
-
-    [Fact]
-    public async Task AttachTo_SetsTheWorkspaceToTheFolderOrClearsIt()
+    public async Task Move_SetsTheWorkspacePathToTheFolderOrClearsItAndKeepsTheConversation()
     {
         using TempFolder folder = new();
-        FakePromptSession session = new();
+        FakePromptSession session = await Talked();
 
-        await session.AttachTo("provider-session", new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = folder.Path, Sandbox = false });
-        Assert.Equal(folder.Path, Assert.IsAssignableFrom<IDiskStore>(session.Configuration.Workspace).Path);
+        await session.Move(folder.Path);
+        Assert.Equal(folder.Path, session.WorkspacePath);
 
-        await session.AttachTo();
-        Assert.Null(session.Configuration.Workspace);
-        Assert.Null(session.AttachedTo);
+        await session.Move(null);
+        Assert.StartsWith(Path.GetTempPath(), session.WorkspacePath);
+        Assert.NotEqual(folder.Path, session.WorkspacePath);
+        Assert.Equal(6, (await session.GetHistory().Take(100).ToListAsync()).Count);
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => session.Move(Path.Combine(folder.Path, "missing")));
+        await session.DisposeAsync();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Move(null));
     }
 
     [Fact]
@@ -541,14 +485,14 @@ public sealed class FakePromptSessionTests
     {
         FakePromptSession session = Session().Reply("a").Reply("b");
 
-        await session.Send("first", new PromptOptions { Notes = ["one"] });
+        await session.Send("first", new PromptSendOptions { Notes = ["one"] });
         await Eventually(() => session.State == PromptSessionState.Waiting && session.Prompts.Count == 1);
         await session.Send("second");
         await Eventually(() => session.State == PromptSessionState.Waiting && session.Prompts.Count == 2);
 
         Assert.Equal(["one"], session.Prompts[0].Notes);
         Assert.Empty(session.Prompts[1].Notes);
-        await Assert.ThrowsAsync<ArgumentException>(() => session.Send("x", new PromptOptions { Notes = [" "] }));
+        await Assert.ThrowsAsync<ArgumentException>(() => session.Send("x", new PromptSendOptions { Notes = [" "] }));
     }
 
     [Fact]
@@ -571,7 +515,7 @@ public sealed class FakePromptSessionTests
         await session.Send("work");
         await Eventually(() => session.State == PromptSessionState.Working && session.Prompts.Count == 1);
 
-        await session.Send("and this", new PromptOptions { Notes = ["the build passes"] });
+        await session.Send("and this", new PromptSendOptions { Notes = ["the build passes"] });
 
         Assert.Equal(["the build passes"], session.Prompts.Single().SteeredNotes);
         session.Dispose();
@@ -591,19 +535,39 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task TheWorkspaceAndTheToolCallHooks_AreCheckedAndCopiedLikeEverySetting()
+    public async Task AForkOfASessionInItsAutomaticWorkspace_GetsAWorkspaceOfItsOwn()
     {
         FakePromptSession session = Session().Reply("x");
-        IStore workspace = IStore.FromMemory();
-        Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>> before = (_, _) => Task.FromResult(PromptToolDecision.Allow);
-        session.Configuration.Workspace = workspace;
-        session.Configuration.BeforeToolCall = before;
-        session.Configuration.Mounts["my/docs"] = IStore.FromMemory();
 
         FakePromptSession fork = (FakePromptSession)await session.Fork();
 
-        Assert.Same(workspace, fork.Configuration.Workspace);
-        Assert.Same(before, fork.Configuration.BeforeToolCall);
-        Assert.Equal(["my/docs"], fork.Configuration.Mounts.Keys);
+        Assert.NotEqual(session.WorkspacePath, fork.WorkspacePath);
+        Assert.Contains(fork.Id, fork.WorkspacePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheWorkspacePath_IsCopiedToAFork()
+    {
+        using TempFolder folder = new();
+        FakePromptSession session = Session().Reply("x");
+        await session.Move(folder.Path);
+
+        FakePromptSession fork = (FakePromptSession)await session.Fork();
+
+        Assert.Equal(folder.Path, fork.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task TheCache_IsEmptyAtFirstOwnToEachSessionAndLostWhenTheSessionIsDisposed()
+    {
+        FakePromptSession session = Session().Reply("x");
+        await session.Cache.WriteText("a.txt", "kept");
+
+        FakePromptSession fork = (FakePromptSession)await session.Fork();
+
+        Assert.Equal("kept", await session.Cache.ReadText("a.txt"));
+        Assert.Empty(await fork.Cache.List(string.Empty).ToListAsync());
+        await session.DisposeAsync();
+        Assert.Empty(await session.Cache.List(string.Empty).ToListAsync());
     }
 }

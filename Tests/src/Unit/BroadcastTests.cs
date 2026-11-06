@@ -5,7 +5,7 @@ public sealed class BroadcastTests
     private readonly Broadcast<int> broadcast = new();
 
     [Fact]
-    public async Task Publish_ReachesEveryWatcherInOrder()
+    public async Task Publish_ReachesEveryWatcherThatIsThereInOrder()
     {
         Recorder<int> first = new();
         Recorder<int> second = new();
@@ -17,11 +17,11 @@ public sealed class BroadcastTests
         await broadcast.Delivered();
 
         Assert.Equal([1, 2], first.Values);
-        Assert.Equal([1, 2], second.Values);
+        Assert.Equal([2], second.Values);
     }
 
     [Fact]
-    public async Task ANewWatcher_IsGivenOnlyTheMostRecentValueFirst()
+    public async Task ANewWatcher_IsGivenOnlyWhatIsPublishedAfterItSubscribes()
     {
         broadcast.Publish(1);
         broadcast.Publish(2);
@@ -31,7 +31,7 @@ public sealed class BroadcastTests
         broadcast.Publish(3);
         await broadcast.Delivered();
 
-        Assert.Equal([2, 3], late.Values);
+        Assert.Equal([3], late.Values);
     }
 
     [Fact]
@@ -80,20 +80,6 @@ public sealed class BroadcastTests
         Assert.Empty(late.Values);
         Assert.True(late.IsCompleted);
         Assert.Null(late.Error);
-    }
-
-    [Fact]
-    public async Task ALateWatcherAfterTheEnd_IsGivenTheLastValueAndThenTheEnd()
-    {
-        broadcast.Publish(7);
-        broadcast.Complete();
-        Recorder<int> late = new();
-
-        broadcast.Subscribe(late);
-        await late.Ended();
-
-        Assert.Equal([7], late.Values);
-        Assert.True(late.IsCompleted);
     }
 
     [Fact]

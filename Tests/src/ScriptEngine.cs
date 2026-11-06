@@ -1,6 +1,6 @@
 namespace Markwardt.LiveAi.Tests;
 
-public sealed class ScriptEngine(string script) : IPromptEngine
+internal sealed class ScriptEngine(string script) : IPromptEngine
 {
     public List<PromptEngineStart> Starts { get; } = [];
 

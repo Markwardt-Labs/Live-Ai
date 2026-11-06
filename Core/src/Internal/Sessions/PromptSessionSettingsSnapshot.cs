@@ -6,69 +6,39 @@ namespace Markwardt.LiveAi;
 internal sealed record PromptSessionSettingsSnapshot
 {
     /// <summary>
-    /// Gets the selected model, or <see langword="null" /> when none is.
+    /// Gets how capable the model is.
     /// </summary>
-    public PromptModel? Model { get; init; }
+    public required PromptCapability Capability { get; init; }
 
     /// <summary>
-    /// Gets the values of the model's settings.
+    /// Gets how much effort the model puts into each prompt.
     /// </summary>
-    public required IReadOnlyDictionary<string, string> ModelSettings { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether the process stays alive between prompts.
-    /// </summary>
-    public required bool IsPersistent { get; init; }
+    public required PromptEffort Effort { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the AI has a shell tool.
     /// </summary>
-    public required bool EnableShell { get; init; }
+    public required bool IsShellAllowed { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether the AI has a tool to look at images.
+    /// Gets a value indicating whether the workspace only accepts paths inside its folder.
     /// </summary>
-    public required bool EnableImages { get; init; }
+    public required bool IsSandboxed { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the AI has a tool to fetch web pages.
     /// </summary>
-    public required bool EnableWeb { get; init; }
+    public required bool IsWebAllowed { get; init; }
 
     /// <summary>
-    /// Gets the function that decides which tool calls may run, or <see langword="null" /> for all.
+    /// Gets how images are made for the AI, or <see langword="null" /> when the AI has no tool for it.
     /// </summary>
-    public Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? BeforeToolCall { get; init; }
-
-    /// <summary>
-    /// Gets the function that is told what became of each tool call, or <see langword="null" /> for none.
-    /// </summary>
-    public Func<PromptToolCallEvent, PromptToolResultEvent, TimeSpan, CancellationToken, Task>? AfterToolCall { get; init; }
-
-    /// <summary>
-    /// Gets the limits of the session's requests.
-    /// </summary>
-    /// <summary>
-    /// Gets a value indicating whether the AI can search the web, with the tool's own search or the library's.
-    /// </summary>
-    public required bool EnableSearch { get; init; }
-
-    /// <summary>
-    /// Gets the generator that makes the images the AI asks for, or <see langword="null" /> when the AI has no tool for it.
-    /// </summary>
-    public IPromptImageGenerator? ImageGenerator { get; init; }
-
-    /// <summary>
-    /// Gets the function that blocks addresses of the fetch tool, or <see langword="null" /> to allow all.
-    /// </summary>
-    public Func<Uri, CancellationToken, Task<bool>>? WebFilter { get; init; }
+    public PromptImageOptions? ImageGeneration { get; init; }
 
     /// <summary>
     /// Gets the function that answers the questions of the AI, or <see langword="null" /> when the AI is offered no tool to ask.
     /// </summary>
-    public Func<string, CancellationToken, Task<string>>? Asker { get; init; }
-
-    public PromptSessionLimits Limits { get; init; } = new();
+    public PromptAsker? Asker { get; init; }
 
     /// <summary>
     /// Gets the custom instructions, or <see langword="null" /> for none.
@@ -86,43 +56,19 @@ internal sealed record PromptSessionSettingsSnapshot
     public required IReadOnlyList<PromptTool> Tools { get; init; }
 
     /// <summary>
-    /// Gets the mounted stores by name.
+    /// Sets every setting to what this snapshot holds, replacing the tools and external servers.
     /// </summary>
-    public required IReadOnlyDictionary<string, IStore> Mounts { get; init; }
-
-    /// <summary>
-    /// Gets the store that relative paths are relative to, or <see langword="null" /> for none.
-    /// </summary>
-    public IStore? Workspace { get; init; }
-
-    /// <summary>
-    /// Sets every setting of a configuration to what this snapshot holds, replacing its tools, mounts and external servers.
-    /// </summary>
-    /// <param name="target">The configuration to set.</param>
-    public void CopyTo(IPromptSessionConfiguration target)
+    /// <param name="target">The settings to set.</param>
+    public void CopyTo(PromptSessionSettings target)
     {
-        target.Model = Model;
-        target.ModelSettings.Clear();
-
-        foreach ((string id, string value) in ModelSettings)
-        {
-            target.ModelSettings[id] = value;
-        }
-
-        target.IsPersistent = IsPersistent;
-        target.EnableShell = EnableShell;
-        target.EnableImages = EnableImages;
-        target.EnableWeb = EnableWeb;
-        target.EnableSearch = EnableSearch;
-        target.Workspace = Workspace;
+        target.Capability = Capability;
+        target.Effort = Effort;
+        target.IsShellAllowed = IsShellAllowed;
+        target.IsSandboxed = IsSandboxed;
+        target.IsWebAllowed = IsWebAllowed;
         target.Instructions = Instructions;
-        target.BeforeToolCall = BeforeToolCall;
-        target.AfterToolCall = AfterToolCall;
-        target.WebFilter = WebFilter;
-        target.ImageGenerator = ImageGenerator;
+        target.ImageGeneration = ImageGeneration;
         target.Asker = Asker;
-        target.Limits = Limits;
-        target.Mounts.Clear();
         target.McpServers.Clear();
         target.Tools.Clear();
 
@@ -134,11 +80,6 @@ internal sealed record PromptSessionSettingsSnapshot
         foreach (PromptTool tool in Tools)
         {
             target.Tools.Add(tool);
-        }
-
-        foreach ((string name, IStore store) in Mounts)
-        {
-            target.Mounts[name] = store;
         }
     }
 }

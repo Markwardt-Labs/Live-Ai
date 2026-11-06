@@ -11,7 +11,7 @@ public enum PromptRequestMode
     Direct,
 
     /// <summary>
-    /// The request is mixed into the work the AI does anyway: it is given as input, in the main conversation, and the AI answers it by calling a <c>respond</c> tool with the unique identifier of the request, while its other output continues to flow to <see cref="IPromptSession.Output" />. It can be asked while the session is <see cref="PromptSessionState.Waiting" /> or <see cref="PromptSessionState.Working" />. The answer is a single message with what the AI gave to the tool, and nothing else about the work (its usage, tool calls and messages) is part of the request.
+    /// The request is mixed into the work the AI does anyway: it is given as input, in the main conversation, and the AI answers it by calling a <c>respond</c> tool with the unique identifier of the request, while its other output continues to flow to <see cref="IPromptSession" />. It can be asked while the session is <see cref="PromptSessionState.Waiting" /> or <see cref="PromptSessionState.Working" />. The answer is a single message with what the AI gave to the tool, and nothing else about the work (its usage, tool calls and messages) is part of the request.
     /// </summary>
     Mixed,
 

@@ -17,7 +17,7 @@ public sealed class ForkSessionTests : IDisposable
     private IPromptEngine Codex => codex ??= new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine provider)
         => temp.Track(await Provider(provider).Create(TestModels.Options));
@@ -32,7 +32,8 @@ public sealed class ForkSessionTests : IDisposable
     public async Task Fork_OfAWorkspaceSession_RunsInTheSameFolderWithTheSameWorkspace()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        await using IPromptSession origin = temp.Track(await Provider(Claude).Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project, Sandbox = false }));
+        await using IPromptSession origin = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        origin.Configuration.IsSandboxed = false;
         await origin.Request("first");
 
         await using IPromptSession fork = temp.Track(await origin.Fork());
@@ -40,8 +41,8 @@ public sealed class ForkSessionTests : IDisposable
         JsonElement stored = await Stored(fork);
         Assert.Equal(project, stored.GetProperty("workingFolder").GetString());
         Assert.Equal(project, stored.GetProperty("workspacePath").GetString());
-        Assert.False(stored.GetProperty("sandbox").GetBoolean());
-        Assert.Equal(project, Assert.IsAssignableFrom<IDiskStore>(fork.Configuration.Workspace).Path);
+        Assert.False(stored.GetProperty("isSandboxed").GetBoolean());
+        Assert.Equal(project, fork.WorkspacePath);
     }
 
     [Fact]
@@ -115,31 +116,14 @@ public sealed class ForkSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task AttachTo_MakesTheNextPromptResumeTheGivenClaudeSessionAndStoresIt()
-    {
-        string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        IPromptProvider provider = Provider(Claude);
-        await using IPromptSession first = temp.Track(await provider.Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
-        await first.Request("one");
-        await using IPromptSession second = temp.Track(await provider.Create(new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project }));
-
-        await second.AttachTo("claude-0");
-        await second.Request("two");
-
-        string[] arguments = await Run(1);
-        Assert.Equal("claude-0", arguments[Array.IndexOf(arguments, "--resume") + 1]);
-        Assert.Equal("claude-1", (await Stored(second)).GetProperty("aiSessionId").GetString());
-    }
-
-    [Fact]
-    public async Task AttachTo_AnotherWorkspace_RunsTheNextPromptThereAndLoadsWithIt()
+    public async Task Move_AnotherWorkspace_CopiesTheClaudeConversationThereRunsTheNextPromptInItAndLoadsWithIt()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         IPromptProvider provider = Provider(Claude);
         IPromptSession session = await provider.Create(TestModels.Options);
         await session.Request("one");
 
-        await session.AttachTo("claude-0", new PromptSessionOptions { Model = TestModels.Model, WorkspacePath = project, Sandbox = false });
+        await session.Move(project);
         await session.Request("two");
         string id = session.Id;
         await session.DisposeAsync();
@@ -147,17 +131,35 @@ public sealed class ForkSessionTests : IDisposable
 
         string[] arguments = await Run(1);
         Assert.Equal("claude-0", arguments[Array.IndexOf(arguments, "--resume") + 1]);
-        Assert.Equal(project, Assert.IsAssignableFrom<IDiskStore>(loaded.Configuration.Workspace).Path);
-        Assert.Equal(project, JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{id}.json"))).RootElement.GetProperty("workingFolder").GetString());
+        Assert.True(File.Exists(temp.Combine($"claude-state/projects/{Regex.Replace(project, "[^a-zA-Z0-9]", "-")}/claude-0.jsonl")));
+        Assert.Equal(project, loaded.WorkspacePath);
+        JsonElement stored = JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{id}.json"))).RootElement;
+        Assert.Equal(project, stored.GetProperty("workingFolder").GetString());
     }
 
     [Fact]
-    public async Task AttachTo_ASessionThatDoesNotExist_FailsAndLeavesTheLink()
+    public async Task Move_ToNull_GoesToTheAutomaticWorkspaceInTheDataFolder()
+    {
+        string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
+        await using IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        await session.Request("one");
+
+        await session.Move(null);
+        await session.Request("two");
+
+        Assert.Equal(temp.Combine($"data/Workspaces/{session.Id}"), session.WorkspacePath);
+        JsonElement stored = await Stored(session);
+        Assert.Equal(session.WorkspacePath, stored.GetProperty("workingFolder").GetString());
+        Assert.Equal(JsonValueKind.Null, stored.GetProperty("workspacePath").ValueKind);
+    }
+
+    [Fact]
+    public async Task Move_ToAFolderThatDoesNotExist_FailsAndLeavesTheLink()
     {
         await using IPromptSession session = await Create(Claude);
         await session.Request("one");
 
-        await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => session.AttachTo("no-such-session"));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => session.Move(temp.Combine("missing")));
 
         Assert.Equal("claude-0", (await Stored(session)).GetProperty("aiSessionId").GetString());
     }
@@ -193,48 +195,35 @@ public sealed class ForkSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task Fork_CarriesTheConfigurationAndTheToolsButHasAScratchFolderOfItsOwn()
+    public async Task Fork_CarriesTheConfigurationAndTheToolsButHasAnAutomaticWorkspaceOfItsOwn()
     {
         await using IPromptSession origin = await Create(Claude);
-        IStore notes = IStore.FromMemory();
         PromptTool tool = PromptTool.Create<Question, string>("ask", "asks", (_, _) => Task.FromResult("a"));
-        Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>> approval = (_, _) => Task.FromResult(PromptToolDecision.Allow);
-        origin.Configuration.ModelSettings["effort"] = "high";
-        origin.Configuration.ModelSettings["fast"] = "true";
-        origin.Configuration.EnableShell = true;
-        origin.Configuration.EnableImages = true;
-        origin.Configuration.EnableWeb = true;
-        origin.Configuration.EnableSearch = true;
-        FakeImageGenerator generator = new();
-        origin.Configuration.ImageGenerator = generator;
-        Func<Uri, CancellationToken, Task<bool>> filter = (_, _) => Task.FromResult(false);
-        origin.Configuration.WebFilter = filter;
-        origin.Configuration.BeforeToolCall = approval;
-        origin.Configuration.Workspace = notes;
+        origin.Configuration.Capability = PromptCapability.Strong;
+        origin.Configuration.Effort = PromptEffort.High;
+        origin.Configuration.IsShellAllowed = true;
+        origin.Configuration.IsSandboxed = false;
+        origin.Configuration.IsWebAllowed = true;
+        PromptImageOptions images = new StableDiffusionImageOptions { Width = 640 };
+        origin.Configuration.ImageGeneration = images;
         origin.Configuration.Instructions = "Be brief.";
-        origin.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
-        origin.Configuration.Tools.Add(tool);
-        origin.Configuration.Mounts["notes"] = notes;
+        origin.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
+        origin.Transient.Tools.Add(tool);
 
         await using IPromptSession fork = temp.Track(await origin.Fork());
 
-        Assert.Equal(origin.Configuration.Model, fork.Configuration.Model);
-        Assert.Equal(origin.Configuration.ModelSettings.OrderBy(entry => entry.Key), fork.Configuration.ModelSettings.OrderBy(entry => entry.Key));
-        Assert.Equal("high", fork.Configuration.ModelSettings["effort"]);
-        Assert.True(fork.Configuration.EnableShell);
-        Assert.True(fork.Configuration.EnableImages);
-        Assert.True(fork.Configuration.EnableWeb);
-        Assert.True(fork.Configuration.EnableSearch);
-        Assert.Same(generator, fork.Configuration.ImageGenerator);
-        Assert.Same(filter, fork.Configuration.WebFilter);
-        Assert.Same(approval, fork.Configuration.BeforeToolCall);
-        Assert.Same(notes, fork.Configuration.Workspace);
+        Assert.Equal((PromptCapability.Strong, PromptEffort.High), (fork.Configuration.Capability, fork.Configuration.Effort));
+        Assert.True(fork.Configuration.IsShellAllowed);
+        Assert.False(fork.Configuration.IsSandboxed);
+        Assert.True(fork.Configuration.IsWebAllowed);
+        Assert.Equal(images, fork.Configuration.ImageGeneration);
         Assert.Equal("Be brief.", fork.Configuration.Instructions);
-        Assert.Equal(origin.Configuration.McpServers["db"], fork.Configuration.McpServers["db"]);
-        Assert.Equal([tool], fork.Configuration.Tools);
-        Assert.Same(notes, fork.Configuration.Mounts["notes"]);
-        Assert.Equal(origin.Provider, fork.Provider);
-        Assert.True(Directory.Exists(Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{fork.Id}")));
+        Assert.Equal(origin.Transient.McpServers["db"], fork.Transient.McpServers["db"]);
+        Assert.Equal([tool], fork.Transient.Tools);
+        Assert.NotSame(origin.Cache, fork.Cache);
+        Assert.Equal(temp.Combine($"data/Workspaces/{fork.Id}"), fork.WorkspacePath);
+        Assert.True(Directory.Exists(fork.WorkspacePath));
+        Assert.NotEqual(origin.WorkspacePath, fork.WorkspacePath);
     }
 
     [Fact]

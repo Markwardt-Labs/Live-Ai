@@ -20,7 +20,7 @@ public sealed record FakePrompt
     public required string Text { get; init; }
 
     /// <summary>
-    /// Gets the input the session was given with <see cref="IPromptSession.Send(object, PromptOptions?, CancellationToken)" /> or a mixed request while the prompt ran, which the AI took into its work at once.
+    /// Gets the input the session was given with <see cref="IPromptSession.Send(object, PromptSendOptions?, CancellationToken)" /> or a mixed request while the prompt ran, which the AI took into its work at once.
     /// </summary>
     public IReadOnlyList<string> Steered
     {
@@ -58,17 +58,17 @@ public sealed record FakePrompt
     public JsonElement? Schema { get; init; }
 
     /// <summary>
-    /// Gets the model the prompt ran with: the session's at the time.
+    /// Gets how capable the model was that the prompt ran with: the session's at the time.
     /// </summary>
-    public required PromptModel Model { get; init; }
+    public PromptCapability Capability { get; init; } = PromptCapability.Balanced;
 
     /// <summary>
-    /// Gets the values of the model's settings the prompt ran with: the session's at the time.
+    /// Gets how much effort the model put into the prompt: the session's at the time.
     /// </summary>
-    public IReadOnlyDictionary<string, string> ModelSettings { get; init; } = new Dictionary<string, string>();
+    public PromptEffort Effort { get; init; } = PromptEffort.Medium;
 
     /// <summary>
-    /// Gets the notes the session was told (with <see cref="IPromptSession.Send(object, PromptOptions?, CancellationToken)" />) since the prompt before this one, which are delivered with it.
+    /// Gets the notes the session was told (with <see cref="IPromptSession.Send(object, PromptSendOptions?, CancellationToken)" />) since the prompt before this one, which are delivered with it.
     /// </summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 

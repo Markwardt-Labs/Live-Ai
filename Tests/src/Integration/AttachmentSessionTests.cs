@@ -17,7 +17,7 @@ public sealed class AttachmentSessionTests : IDisposable
     private IPromptEngine Codex => codex ??= new CodexEngine(new FakeCodex(temp).Script(reply: "codex saw it", before: "for path in $(printf '%s' \"$line\" | grep -o '\"path\":\"[^\"]*\"' | sed 's/\"path\":\"//; s/\"$//'); do cp \"$path\" \"$PWD/seen-$(basename \"$path\")\"; echo \"$path\" >> \"$PWD/codex-image-paths.txt\"; done"), temp.Combine("codex-state"));
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine provider)
         => temp.Track(await Provider(provider).Create(TestModels.Options));
@@ -87,10 +87,12 @@ public sealed class AttachmentSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task Codex_ResumesTheSessionWithTheImageOnTheSecondPrompt()
+    public async Task Codex_ResumesTheLoadedSessionWithTheImageOnTheSecondPrompt()
     {
-        await using IPromptSession session = await Create(Codex);
-        await session.Request("first");
+        IPromptSession first = await Create(Codex);
+        await first.Request("first");
+        await first.DisposeAsync();
+        await using IPromptSession session = temp.Track(await Provider(Codex).Load(first.Id));
 
         await session.Request("second", new PromptRequestOptions { Attachments = [Png(1)] });
 
@@ -128,7 +130,7 @@ public sealed class AttachmentSessionTests : IDisposable
     [Fact]
     public async Task AFileOfAStoreCanBeAttachedAfterReadingIt()
     {
-        IStore store = IStore.FromMemory();
+        IStore store = new MemoryStore();
         await store.WriteBytes("pics/shot.png", [4, 4]);
         await using IPromptSession session = await Create(Claude);
 

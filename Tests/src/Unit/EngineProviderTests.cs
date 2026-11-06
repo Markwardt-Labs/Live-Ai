@@ -8,7 +8,7 @@ public sealed class EngineProviderTests
     {
         using TempFolder temp = new();
         string command = temp.Script("claude", $"printf '%s' \"$CLAUDE_CONFIG_DIR\" > \"{temp.Combine("config-seen.txt")}\"");
-        IPromptProvider provider = new PromptProvider(new ClaudeEngine(command, temp.Combine("claude-state")), temp.Combine("data"), new ListLogger(), TimeProvider.System);
+        IPromptProvider provider = TestProviders.Make(new ClaudeEngine(command, temp.Combine("claude-state")), temp.Combine("data"), new ListLogger(), TimeProvider.System);
 
         PromptTestResult result = await provider.Test();
         temp.Track(await provider.Create(TestModels.Options));
@@ -23,7 +23,7 @@ public sealed class EngineProviderTests
     {
         using TempFolder temp = new();
         string command = temp.Script("codex", $"printf '%s' \"$CODEX_HOME\" > \"{temp.Combine("config-seen.txt")}\"");
-        IPromptProvider provider = new PromptProvider(new CodexEngine(command, temp.Combine("codex-state")), temp.Combine("data"));
+        IPromptProvider provider = TestProviders.Make(new CodexEngine(command, temp.Combine("codex-state")), temp.Combine("data"));
 
         PromptTestResult result = await provider.Test();
         temp.Track(await provider.Create(TestModels.Options));
@@ -34,14 +34,14 @@ public sealed class EngineProviderTests
     }
 
     [Fact]
-    public async Task AProviderOfOpenCodeOverALocalServerListsItsModelsAndTestsOnTheFirst()
+    public async Task AProviderOfOpenCodeOverALocalServerSelectsFromItsModelsAndTestsOnTheFirst()
     {
         using TempFolder temp = new();
         using FakeModelServer server = new FakeModelServer().Answer("/api/tags", """{ "models": [{ "name": "gemma4:26b", "capabilities": ["tools", "thinking"] }, { "name": "embed", "capabilities": ["embedding"] }] }""");
         string command = temp.Script("opencode", $"printf '%s' \"$OPENCODE_CONFIG_CONTENT\" > \"{temp.Combine("config-seen.txt")}\"");
-        IPromptProvider provider = new PromptProvider(new OpenCodeEngine(command, [server.Api]), temp.Combine("data"));
+        IPromptProvider provider = TestProviders.Make(new OpenCodeEngine(command, [server.Api]), temp.Combine("data"));
 
-        PromptModel model = Assert.Single(await provider.GetModels());
+        (PromptModel model, _) = await provider.Select(PromptCapability.Balanced, PromptEffort.Medium);
         await provider.Test();
 
         JsonElement config = JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine("config-seen.txt"))).RootElement;
@@ -56,10 +56,10 @@ public sealed class EngineProviderTests
         using TempFolder temp = new();
         string command = temp.Script("opencode", $"printf '%s' \"$OPENCODE_CONFIG_CONTENT\" > \"{temp.Combine("config-seen.txt")}\"");
         OpenCodeModelProvider described = new() { Id = "lmstudio", BaseUrl = "http://box:1234/v1", Models = [new OpenCodeModel { Id = "qwen3-coder" }] };
-        IPromptProvider provider = new PromptProvider(new OpenCodeEngine(command, [], [described]), temp.Combine("data"));
+        IPromptProvider provider = TestProviders.Make(new OpenCodeEngine(command, [], [described]), temp.Combine("data"));
 
         await provider.Test();
-        temp.Track(await provider.Create(new PromptSessionOptions { Model = new PromptModel { Id = "lmstudio/qwen3-coder" } }));
+        temp.Track(await provider.Create(new PromptProviderOptions()));
 
         JsonElement config = JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine("config-seen.txt"))).RootElement;
         Assert.Equal("lmstudio/qwen3-coder", config.GetProperty("model").GetString());

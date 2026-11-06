@@ -12,9 +12,8 @@ internal interface IPromptSessionOpener
     /// <param name="provider">The provider that opens the session, which the session reports.</param>
     /// <param name="engine">The command line tool the session runs on.</param>
     /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured subscription.</param>
-    /// <param name="model">The model the link names, as the tool lists it, or <see langword="null" /> to use only what the link says about it.</param>
     /// <returns>The session.</returns>
-    IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey, PromptModel? model = null);
+    IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey);
 }
 
 /// <inheritdoc />
@@ -27,16 +26,14 @@ internal interface IPromptSessionOpener
 internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, ILogger? logger = null, TimeProvider? time = null) : IPromptSessionOpener
 {
     /// <inheritdoc />
-    public IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey, PromptModel? model = null)
+    public IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey)
     {
-        PromptSessionRecord record = link.ToRecord(engine);
-        PromptSession session = new(model is null ? record : record with { Model = model }, apiKey, store, provider, engine, runner, toolHost, libraryTools, this, logger, time);
-
-        if (link.WorkspacePath is not null)
+        if (link.WorkspacePath is not null && !Directory.Exists(link.WorkspacePath))
         {
-            session.Configuration.Workspace = IStore.FromDisk(link.WorkspacePath, link.Sandbox);
+            throw new DirectoryNotFoundException($"The workspace folder '{link.WorkspacePath}' does not exist.");
         }
 
-        return session;
+        PromptSessionRecord record = link.ToRecord(engine);
+        return new PromptSession(record, apiKey, store, provider, engine, runner, toolHost, libraryTools, this, logger, time);
     }
 }

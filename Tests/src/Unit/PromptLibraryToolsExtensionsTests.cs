@@ -7,7 +7,7 @@ public sealed class PromptLibraryToolsExtensionsTests
         IPromptLibraryTools tools = new PromptLibraryTools();
 
         return typeof(IPromptLibraryTools).GetProperties()
-            .Where(property => property.Name.EndsWith("Name", StringComparison.Ordinal) && property.PropertyType == typeof(string))
+            .Where(property => property.Name.EndsWith("Name", StringComparison.Ordinal) && property.Name != nameof(IPromptLibraryTools.CacheName) && property.PropertyType == typeof(string))
             .Select(property => (string)property.GetValue(tools)!)
             .Concat(tools.Names);
     }
@@ -39,7 +39,7 @@ public sealed class PromptLibraryToolsExtensionsTests
 
         foreach (string name in EveryNameTheLibraryHas().Append("respond"))
         {
-            Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(Tool(name)));
+            Assert.Throws<ArgumentException>(() => session.Transient.Tools.Add(Tool(name)));
         }
     }
 }

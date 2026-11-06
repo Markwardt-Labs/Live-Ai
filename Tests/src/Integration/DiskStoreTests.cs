@@ -194,18 +194,18 @@ public sealed class DiskStoreTests : IDisposable
     }
 
     [Fact]
-    public void FromDisk_RevealsTheFullPathOfTheFolder()
+    public void Open_RevealsTheFullPathOfTheFolder()
     {
-        IDiskStore relative = IStore.FromDisk(Path.GetRelativePath(Directory.GetCurrentDirectory(), temp.Path));
+        DiskStore relative = DiskStore.Open(Path.GetRelativePath(Directory.GetCurrentDirectory(), temp.Path));
 
-        Assert.Equal(temp.Path, IStore.FromDisk(temp.Path).Path);
-        Assert.Equal(temp.Path, relative.Path);
+        Assert.Equal(temp.Path, DiskStore.Open(temp.Path).Folder);
+        Assert.Equal(temp.Path, relative.Folder);
     }
 
     [Fact]
-    public async Task FromDisk_MakesAConfinedStoreOfAFolderOnDisk()
+    public async Task Open_MakesAConfinedStoreOfAFolderOnDisk()
     {
-        IStore files = IStore.FromDisk(temp.Path);
+        IStore files = DiskStore.Open(temp.Path);
 
         await files.WriteText("a/b.txt", "text");
 
@@ -217,10 +217,10 @@ public sealed class DiskStoreTests : IDisposable
     [Fact]
     public void FromDisk_AcceptsARelativePathAndRefusesAFolderThatDoesNotExist()
     {
-        DirectoryNotFoundException exception = Assert.Throws<DirectoryNotFoundException>(() => IStore.FromDisk(temp.Combine("missing")));
+        DirectoryNotFoundException exception = Assert.Throws<DirectoryNotFoundException>(() => DiskStore.Open(temp.Combine("missing")));
 
         Assert.Contains("does not exist", exception.Message);
-        Assert.NotNull(IStore.FromDisk(Path.GetRelativePath(Directory.GetCurrentDirectory(), temp.Path)));
+        Assert.NotNull(DiskStore.Open(Path.GetRelativePath(Directory.GetCurrentDirectory(), temp.Path)));
     }
 
     [Fact]
@@ -393,13 +393,5 @@ public sealed class DiskStoreTests : IDisposable
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => open.Delete(root));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => open.Move(root, temp.Combine("moved")));
         await Assert.ThrowsAsync<ArgumentException>(() => open.Copy("x", root));
-    }
-
-    [Fact]
-    public void TheSandboxFlagIsRevealed()
-    {
-        Assert.True(IStore.FromDisk(temp.Path).IsSandboxed);
-        Assert.True(IStore.FromDisk(temp.Path, true).IsSandboxed);
-        Assert.False(IStore.FromDisk(temp.Path, false).IsSandboxed);
     }
 }

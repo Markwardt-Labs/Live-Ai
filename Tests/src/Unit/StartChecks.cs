@@ -8,7 +8,7 @@ internal static class StartChecks
             => start.Servers.Any(server => server.Name == "liveai");
 
         public bool OffersOnlyRespond()
-            => start.HasEndpoint() && !start.HasFiles() && !start.HasShell();
+            => start.HasEndpoint() && !start.HasShell();
 
         public bool HasFiles()
             => start.Instructions.Contains("file tools");

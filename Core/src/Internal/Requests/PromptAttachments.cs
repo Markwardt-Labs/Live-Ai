@@ -57,7 +57,7 @@ internal static class PromptAttachments
                 }
                 else
                 {
-                    throw new NotSupportedException($"{engine.Identifier} cannot be given the attachment '{attachment.Name}' of type '{attachment.MediaType}'. Images (PNG, JPEG, GIF, WebP) are shown to the AI{(engine.Accepts("application/pdf") ? ", and so are PDF documents" : string.Empty)}, and text files are put into the prompt; mount anything else so that the AI can read it with the file tools.");
+                    throw new NotSupportedException($"{engine.Identifier} cannot be given the attachment '{attachment.Name}' of type '{attachment.MediaType}'. Images (PNG, JPEG, GIF, WebP) are shown to the AI{(engine.Accepts("application/pdf") ? ", and so are PDF documents" : string.Empty)}, and text files are put into the prompt; put anything else in the session's cache so that the AI can read it with the file tools.");
                 }
             }
 
@@ -76,7 +76,7 @@ internal static class PromptAttachments
         {
             if (attachment.Content.Length > maxTextBytes)
             {
-                throw new ArgumentException($"The text file '{attachment.Name}' is larger than {maxTextBytes / 1024} KB, which is the most that is put into a prompt. Mount it instead so that the AI can read it in parts.", nameof(attachment));
+                throw new ArgumentException($"The text file '{attachment.Name}' is larger than {maxTextBytes / 1024} KB, which is the most that is put into a prompt. Put it in the session's cache instead so that the AI can read it in parts.", nameof(attachment));
             }
 
             string content;

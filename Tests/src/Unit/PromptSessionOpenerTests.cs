@@ -19,15 +19,14 @@ public sealed class PromptSessionOpenerTests : IDisposable
     }
 
     private PromptSessionLink Link(string? workspace = null, bool sandbox = true)
-        => new() { Id = Guid.NewGuid(), Provider = "Fake", WorkingFolder = workspace ?? temp.Path, WorkspacePath = workspace, Sandbox = sandbox };
+        => new() { Id = Guid.NewGuid(), Provider = "Fake", WorkingFolder = workspace ?? temp.Path, WorkspacePath = workspace, IsSandboxed = sandbox };
 
     [Fact]
     public void ALinkWithAWorkspace_OpensASessionWhoseWorkspaceIsThatFolder()
     {
         IPromptSession session = Open(Link(temp.Path));
 
-        IDiskStore disk = Assert.IsAssignableFrom<IDiskStore>(session.Configuration.Workspace);
-        Assert.Equal(temp.Path, disk.Path);
+        Assert.Equal(temp.Path, session.WorkspacePath);
     }
 
     [Theory]
@@ -40,7 +39,7 @@ public sealed class PromptSessionOpenerTests : IDisposable
         await File.WriteAllTextAsync(outside, "secret");
         IPromptSession session = Open(Link(temp.Path, sandbox));
 
-        Task<string> read = session.Configuration.Workspace!.ReadText(outside);
+        Task<string> read = ((PromptSession)session).Files.ReadText(outside);
 
         if (sandbox)
         {
@@ -53,8 +52,8 @@ public sealed class PromptSessionOpenerTests : IDisposable
     }
 
     [Fact]
-    public void ALinkWithoutAWorkspace_OpensASessionWithoutOne()
-        => Assert.Null(Open(Link()).Configuration.Workspace);
+    public void ALinkWithoutAWorkspace_OpensASessionWorkingInItsWorkingFolder()
+        => Assert.Equal(temp.Path, Open(Link()).WorkspacePath);
 
     [Fact]
     public void ALinkWhoseWorkspaceIsGone_Throws()

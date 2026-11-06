@@ -2,6 +2,8 @@ namespace Markwardt.LiveAi.Tests.Unit;
 
 public sealed class MountedStoreTests
 {
+    public static TheoryData<string> MountSpellings => ["docs", "docs/", "docs//", "docs/.", "docs/./", "./docs", "/docs", "docs/x/..", "docs/api/../", "data/../docs"];
+
     private readonly FakeStore project = new(new Dictionary<string, string> { ["main.txt"] = "main", ["src/a.cs"] = "a" });
 
     private readonly FakeStore docs = new(new Dictionary<string, string> { ["guide.md"] = "guide", ["api/ref.md"] = "ref" });
@@ -142,8 +144,6 @@ public sealed class MountedStoreTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => mounted.Copy("docs/guide.md", "loose.md"));
         await Assert.ThrowsAsync<IOException>(() => mounted.Copy("docs/guide.md", "data"));
     }
-
-    public static TheoryData<string> MountSpellings => ["docs", "docs/", "docs//", "docs/.", "docs/./", "./docs", "/docs", "docs/x/..", "docs/api/../", "data/../docs"];
 
     [Theory]
     [MemberData(nameof(MountSpellings))]

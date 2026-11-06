@@ -1,28 +1,28 @@
 # Usage
 
-Runnable examples of `IPromptProvider` and `IPromptSession` in different situations.
+Runnable examples of `IPrompter` and `IPromptSession` in different situations.
 
 ## A question about a folder
 
 ```csharp
-IPromptProvider provider = new PromptProvider(new ClaudeEngine());   // or new CodexEngine()
+IPrompter prompter = new Prompter();
 
-IPromptSession session = await provider.Create(new PromptSessionOptions { Model = await provider.GetModel("sonnet"), WorkspacePath = "/path/to/project" });
+IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });   // or CodexSessionOptions
 
 Console.WriteLine(await session.Request("Summarize what is in this folder."));
 ```
 
-A session runs on a model that is chosen: `GetModel` finds one of the models the tool lists (see below), and a session without one refuses to do anything with the tool. The settings of the model start at their defaults, on the subscription already configured in `claude`. The AI can reach only the workspace and the folders mounted to the session; a session with neither can only talk.
+The options name the tool and carry only what that tool needs. The model is chosen for the session by the library from how capable and how hard-working it should be (see below), on the subscription already configured in `claude`. The AI can reach only the workspace (the folder given as `WorkspacePath`) and the cache of the session (temporary storage, see below); without one the library makes a workspace folder for the session in its data folder, which is kept until the session is deleted or moved elsewhere.
 
 ## Reading the answer as it is written
 
 ```csharp
-using IDisposable watch = session.Output.Subscribe(new Watcher());   // an IObserver<PromptEvent>
+using IDisposable watch = session.Subscribe(new Watcher());   // an IObserver<PromptEvent>
 
 Console.WriteLine(await session.Request("Review Program.cs and explain each step."));
 ```
 
-`Request` returns when the AI has finished. What the AI writes while it works arrives on `Output`, each message when it is written, including its progress notes. To show the text while it is still being written, take the deltas from the events:
+`Request` returns when the AI has finished. What the AI writes while it works arrives in the event stream, each message when it is written, including its progress notes. To show the text while it is still being written, take the deltas from the events:
 
 ```csharp
 void Show(PromptEvent output)
@@ -39,52 +39,51 @@ void Show(PromptEvent output)
 }
 ```
 
-## Choosing the model and letting the AI change files
+## Choosing capability and effort, and letting the AI change files
 
 ```csharp
-IPromptProvider codex = new PromptProvider(new CodexEngine());
-IPromptSession session = await codex.Create(new PromptSessionOptions { Model = await codex.GetModel("gpt-5.6-terra") });
-session.Configuration.ModelSettings["effort"] = "high";
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
+IPromptSession session = await prompter.Create(new CodexSessionOptions { WorkspacePath = "/path/to/project" });
+session.Configuration.Capability = PromptCapability.Strong;
+session.Configuration.Effort = PromptEffort.High;
 
 await session.Request("Add a unit test for the parser and make it pass.");
 ```
 
-The AI never asks for permission and may create, edit and delete in its workspace and the mounted folders, so give it only what it may change (or give it with `AsReadOnly()`). A relative path the AI uses is relative to the workspace, like a current directory; because the store is a sandbox (the default), a path outside the folder is refused.
+The AI never asks for permission and may create, edit and delete in its workspace and the cache, so point it only at a folder it may change. A relative path the AI uses is relative to the workspace, like in a shell. Which model runs is the library's business, see "How a model is chosen".
 
 ## A session with an API key
 
 ```csharp
-IPromptSession session = await provider.Create(new PromptSessionOptions { ApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") });
+IPromptSession session = await prompter.Create(new ClaudeSessionOptions { ApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") });
 
 Console.WriteLine(await session.Request("Say hello."));
 ```
 
-The key is used by the tool for this session only and is not stored.
+The key is stored with the session, in plain text in its file in the data folder (readable by the current user only on Linux and macOS), so a session that is loaded later runs on the same key.
 
 ## Resuming later
 
 ```csharp
 string id = session.Id;
 
-// ... later, possibly in another process (provider.List() shows the identifiers that are stored)
-IPromptSession resumed = await provider.Load(id, new PromptSessionOptions { ApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") });
+// ... later, possibly in another process (prompter.List() shows the identifiers that are stored)
+IPromptSession resumed = await prompter.Load(id);
 
 Console.WriteLine(await resumed.Request("What did I ask you before?"));
 ```
 
-`Load` continues the same conversation with the provider of the same tool (a provider over another tool refuses the session with an `ArgumentException`; `session.Provider` is the provider that made or loaded it). Only the link to the conversation and the model with the values of its settings are stored, so the session comes back on the model it last ran on (see the section on models), and the API key is given again and every other setting (mounts, tools, instructions and the rest) starts at its default and is set again through `Configuration` before the next prompt. The provider that loads must use the same data folder as the one that created the session, and an engine made with another configuration folder than the one that made the session cannot find it.
+`Load` needs only the identifier: the stored link holds the options the session was created with, so the tool and where it is found are read from it. The session comes back with its workspace and its whole configuration (capability, effort, the shell, image and web switches, the image generation options and the instructions); the tools, MCP servers, asker and cache belong to the session object and are set again. The prompter that loads must use the same data folder as the one that created the session, and a tool configured with another configuration folder than the one that made the session cannot find it.
 
-## Changing the model mid-conversation
+## Changing capability and effort mid-conversation
 
 ```csharp
-session.Configuration.Model = await session.Provider.GetModel("opus");
-session.Configuration.ModelSettings["effort"] = "high";
+session.Configuration.Capability = PromptCapability.Max;
+session.Configuration.Effort = PromptEffort.High;
 
 await session.Request("Now make the change you proposed.");
 ```
 
-Nothing happens when a setting is assigned: the session takes all of them together when the next prompt starts, so a process that is kept alive is restarted at most once however many of them are changed, and a prompt that is running keeps what it started with. A value that is not allowed throws where it is assigned and changes nothing. The provider stays fixed for the life of a session.
+Nothing happens when a setting is assigned: the session takes all of them together when the next prompt starts, so a process that is kept alive is restarted at most once however many of them are changed, and a prompt that is running keeps what it started with. A value that is not allowed throws where it is assigned and changes nothing. The tool stays fixed for the life of a session.
 
 ## Structured output and input
 
@@ -103,79 +102,41 @@ An object as the input writes the prompt as JSON, and that is the whole prompt, 
 ## Working on files
 
 ```csharp
-// The AI reads and edits only what it is given, only through the library's file tools, with no shell (see the shell example).
-await using IPromptSession session = await provider.Create();
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
+// The AI reads and edits only the workspace and the cache, only through the library's file tools, with no shell (see the shell example).
+await using IPromptSession project = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+Console.WriteLine(project.WorkspacePath);
 
-// The same in one step, and a loaded session has it again (sandbox: false lets the AI use any path on the machine).
-await using IPromptSession project = await provider.Create(new PromptSessionOptions { WorkspacePath = "/path/to/project", Sandbox = true });
-
-// Or the AI works on something other than a folder on disk.
-session.Configuration.Mounts["documents"] = new MyDatabaseFiles(database);
+// IsSandboxed = false lets the AI use any path on the machine.
+await using IPromptSession open = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+open.Configuration.IsSandboxed = false;
 ```
 
-`MyDatabaseFiles` is an `IStore`: list, open, create folder, delete and move, where open hands back a stream for the mode asked for. The library's tools build numbered reads, search, exact-match edits and copying on top of those five operations. The AI cannot build, test or run commands; add a tool of your own for the commands you allow.
+The workspace path is the folder the tool runs in, so Claude Code, Codex and OpenCode find the instruction files of the project (`CLAUDE.md`, `AGENTS.md`) there, as they do when you start them in that folder, and the file tools take relative paths relative to it. It is stored with the session, so `Load` brings it back; `session.WorkspacePath` reads it and `Move` changes it. The AI cannot build, test or run commands; add a tool of your own for the commands you allow.
 
 ## A working directory that can reach the machine
 
 ```csharp
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project", sandbox: false);
-session.Configuration.EnableShell = true;
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+session.Configuration.IsSandboxed = false;
+session.Configuration.IsShellAllowed = true;
 
 await session.Request("Compare Program.cs with /etc/hosts and run the tests.");
 ```
 
-Assigning `Workspace` changes the running session only. It is not stored, so a loaded session does not have it again and the tool keeps running in the folder the session was created with. To have a folder as the workspace for good (also after a load), give it to `Create` as `workspacePath`, or move the session there with `AttachTo`.
+With `IsSandboxed = false` (a stored setting, true by default, that can be changed at any time) the folder is only where relative paths start, and the AI may also give absolute paths of the machine or paths that climb out of the folder, so use it only when the AI may read and write anything the program can. The default keeps every path, absolute or not, inside the folder. The workspace is also where the shell starts.
 
-With `sandbox: false` the folder is only where relative paths start, and the AI may also give absolute paths of the machine or paths that climb out of the folder, so use it only when the AI may read and write anything the program can. The default keeps every path, absolute or not, inside the folder. A store of a folder on disk is also where the shell starts.
-
-## Working on documents in memory
+## Giving the AI data and collecting what it makes
 
 ```csharp
-IStore notes = IStore.FromMemory();
-await notes.WriteText("todo.md", "- write the report");
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await session.Cache.WriteText("todo.md", "- write the report");
 
-await using IPromptSession session = await provider.Create();
-session.Configuration.Mounts["notes"] = notes;
+await session.Request("Add three items to CACHE:/todo.md and put a summary in CACHE:/summary.md.");
 
-await session.Request("Add three items to notes/todo.md and put a summary in notes/summary.md.");
-
-Console.WriteLine(await notes.Read("summary.md"));
+Console.WriteLine(await session.Cache.ReadText("summary.md"));
 ```
 
-Nothing touches the disk. The store is the place to read back what the AI made, with `List`, `ReadText` (or `Open` in `Read` mode for the bytes of a file that is not text).
-
-## Working on a zip archive
-
-```csharp
-IZipStore archive = await IStore.FromZip("/path/to/data.zip");
-
-await using IPromptSession session = await provider.Create();
-session.Configuration.Mounts["data"] = archive;
-
-await session.Request("Add a summary of data/report.txt to data/summary.md.");
-
-if (archive.HasChanges)
-{
-    await archive.Save();
-}
-```
-
-The archive is read into memory, the AI works on the copy, and the file is only written when you call `Save()` (to the same path, atomically), so the AI's changes can be inspected first, or thrown away by not saving. `Save(stream)` writes the archive somewhere else. A zip is not stored with the session, so mount it again after a `Load`.
-
-## Working on more than one folder
-
-```csharp
-await using IPromptSession session = await provider.Create();
-
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
-session.Configuration.Mounts["reference"] = IStore.FromDisk("/path/to/reference").AsReadOnly();
-session.Configuration.Mounts["notes/scratch"] = IStore.FromDisk("/tmp/scratch");
-
-await session.Request("Follow reference/style.md to tidy src, and keep notes in notes/scratch/notes.md.");
-```
-
-A relative path is in the workspace, unless it starts with the path of a mount: `reference/style.md` is `style.md` of the reference folder and `notes/scratch/notes.md` is `notes.md` of the scratch folder (a mount can be at any relative path, and covers what the workspace has there). The AI can copy and move between them. `AsReadOnly()` lets it read `reference/` but not change it. Without a workspace only the mounts can be reached.
+`session.Cache` is an in-memory `IStore` that belongs to the session object: it starts empty, nothing in it is stored, and it is lost when the session is disposed. The AI reaches it with paths that start with `CACHE:` (`CACHE:/folder/file.txt`), next to the workspace, and can copy and move between the two. It is where to put what the AI should read (a document from a database, a file too large for a prompt) and where to find what it makes (a summary, generated images) without touching the disk. A helper the AI starts with `delegate` shares the cache, and a branch gets an empty one of its own.
 
 ## Giving the AI tools
 
@@ -183,9 +144,9 @@ A relative path is in the workspace, unless it starts with the path of a mount: 
 public sealed record Lookup(string Name);
 public sealed record Customer(string Name, string Plan, int Seats);
 
-await using IPromptSession session = await provider.Create();
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
 
-session.Configuration.Tools.Add(
+session.Transient.Tools.Add(
     PromptTool.Create<Lookup, Customer>("find_customer", "Finds a customer by name and returns its plan and seats.", async (input, cancellation) => await customers.Find(input.Name, cancellation)));
 
 Console.WriteLine(await session.Request("How many seats does Acme have?"));
@@ -196,8 +157,8 @@ The AI calls `find_customer` itself when it needs it, and the call runs in your 
 ## Letting the AI ask the user
 
 ```csharp
-await using IPromptSession session = await provider.Create();
-session.Configuration.Asker = async (question, cancellation) =>
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+session.Transient.Asker = async (question, cancellation) =>
 {
     Console.WriteLine($"The AI asks: {question}");
     return await Task.Run(Console.ReadLine, cancellation) ?? string.Empty;
@@ -206,62 +167,56 @@ session.Configuration.Asker = async (question, cancellation) =>
 Console.WriteLine(await session.Request("Rename the project folder to whatever I prefer."));
 ```
 
-While `Asker` is set the AI has an `ask_user` tool, and it calls it when it needs something only you can say; the reply you return is the tool's result. Leave it null and the AI is never offered the tool, so it must decide on its own. The request waits for your reply, so a timeout in the limits counts that time too.
+`Asker` is a `PromptAsker`, a function from the question to the reply. While it is set the AI has an `ask_user` tool, and it calls it when it needs something only you can say; the reply you return is the tool's result. Leave it null and the AI is never offered the tool, so it must decide on its own. The request waits for your reply.
 
 ## Letting the AI run commands
 
 ```csharp
-await using IPromptSession session = await provider.Create();
-session.Configuration.EnableShell = true;
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+session.Configuration.IsShellAllowed = true;
 
 Console.WriteLine(await session.Request("Run the unit tests in /path/to/project and tell me which ones fail."));
 ```
 
-The `shell` tool runs any command on this machine with the rights of the user your program runs as, so enable it only for an AI and a task you trust that far; mounts and read-only stores do not limit it. It is off by default. Commands start in the workspace when that is a folder on disk, and otherwise in an empty scratch folder, unless the AI gives a working directory, and a command that runs longer than its timeout is stopped.
+The `shell` tool runs any command on this machine with the rights of the user your program runs as, so enable it only for an AI and a task you trust that far; the sandbox does not limit it. It is off by default. Commands start in the workspace in the workspace, unless the AI gives a working directory, and a command that runs longer than its timeout is stopped.
 
 ## Letting the AI look at images and read the web
 
 ```csharp
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project");
-session.Configuration.EnableImages = true;
-session.Configuration.EnableWeb = true;
+session.Configuration.IsWebAllowed = true;
 
 await session.Request("Look at docs/design.png, then read https://example.com/spec and say what differs.");
 ```
 
-`EnableImages` gives the AI a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB) of the workspace or a mount. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered only while the session has files to read, the selected model takes images and the engine can be shown images. `EnableWeb` gives the AI a `fetch_url` tool that reads text from an http or https address (HTML reduced to readable text, binary content refused, cut at 40000 characters unless the AI asks for up to 200000), as this machine with its network access, so addresses on the local network and on this machine are reachable too, unless you set `WebFilter`: a function that gets the address of every request the tool makes (the addresses a page redirects to too) and returns `true` to block it, for example `session.Configuration.WebFilter = (address, _) => Task.FromResult(address.IsLoopback || address.Host.EndsWith(".internal"));`. It is `null` by default, which allows every address, and it can be changed while the AI works. Both tools are off by default.
+Every session has a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB). It reaches what the file tools reach: the cache through `CACHE:` always, and the workspace only when the session has a workspace path, inside it while the session is sandboxed. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered while the selected model takes images and the engine can be shown images. `IsWebAllowed`, off by default, is described below.
 
-## Searching the web and the tools every session has
+## The web and the tools every session has
 
 ```csharp
-session.Configuration.EnableSearch = true;
+session.Configuration.IsWebAllowed = true;
 
 await session.Request("Find out what changed in the latest stable .NET release and compare notes.md with notes-old.md.");
 ```
 
-`EnableSearch` lets the AI search the web, with no key and no other software. When the tool has a web search of its own (Claude Code and Codex do) the AI is simply allowed to use it, and the library does not see or filter what it searches; otherwise (OpenCode, and engines you add) the AI is given a `search_web` tool that reads DuckDuckGo's plain HTML page. That page is not an API, so the tool is best effort: it can change or turn the library away. The library spaces its requests at least two seconds apart, and when DuckDuckGo turns a search away it pauses searching for a minute and tells the AI so. `WebFilter` applies to neither kind of search, only to `fetch_url`. Search is off by default and independent of `EnableWeb`, and changing it ends a kept process of an engine that is told about it when it starts.
+`IsWebAllowed` gives the AI the web with no restriction, as this machine with its network access, so addresses on the local network and on this machine are reachable too. It has two parts, with no key and no other software. A `fetch_url` tool reads text from an http or https address (HTML reduced to readable text, binary content refused, cut at 40000 characters unless the AI asks for up to 200000). For searching, when the tool has a web search of its own (Claude Code and Codex do) the AI is simply allowed to use it, and the library does not see what it searches; otherwise (OpenCode) the AI is given a `search_web` tool that reads DuckDuckGo's plain HTML page. That page is not an API, so the tool is best effort: it can change or turn the library away. The library spaces its requests at least two seconds apart, and when DuckDuckGo turns a search away it pauses searching for a minute and tells the AI so. The web is off by default, and changing the switch ends a kept process of an engine that is told about it when it starts.
 
-Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace or a mount, offered with the file tools) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, mounts, hooks and limits, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
+Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace or the cache) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, cache and settings, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
 
 ## Making images
 
 ```csharp
-session.Configuration.Mounts["art"] = IStore.FromDisk("/path/to/assets");
-string key = Environment.GetEnvironmentVariable("OPENAI_API_KEY")!;
-foreach (PromptImageModel model in await IPromptImageGenerator.OpenAiModels(key)) { Console.WriteLine($"{model.Id} {model.Features}"); }
-session.Configuration.ImageGenerator = IPromptImageGenerator.OpenAi(key);   // or OpenAi(key, "gpt-image-1.5") for another model
+session.Configuration.ImageGeneration = new OpenAiImageOptions { ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY"), Capability = PromptCapability.Balanced };
 // or a Stable Diffusion server on this machine (AUTOMATIC1111 or Forge, started with its API on):
-// foreach (PromptImageModel checkpoint in await IPromptImageGenerator.StableDiffusionModels(new Uri("http://localhost:7860"))) { Console.WriteLine(checkpoint.Id); }
-// session.Configuration.ImageGenerator = IPromptImageGenerator.StableDiffusion(new Uri("http://localhost:7860"), width: 1024, height: 1024, draftSteps: 6, standardSteps: 20, highSteps: 35);
+// session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Server = new Uri("http://localhost:7860"), Width = 1024, Height = 1024, DraftSteps = 6, StandardSteps = 20, HighSteps = 35 };
 
 await session.Request("Make three draft icons of a lighthouse, 256x256, save them as art/icons/lighthouse, then tell me which one is best after you look at them.");
 ```
 
-While `ImageGenerator` is set and the session has files to save in (a workspace or a mount), the AI has a `generate_image` tool. It gives a description and a path, and optionally a size, a quality (`draft`, `standard` or `high`) and a count of 1 to 4; the image is saved as a file where the AI says, with the extension of what was made, numbered when there are several, and a file that is there is never replaced. What else the AI can ask for depends on the generator: `OpenAi` can make a transparent background (not with `gpt-image-2`, which the API refuses it for, so the tool does not offer it there) and works with a server that copies the OpenAI image endpoint, through its `baseUrl`; `StableDiffusion` takes a negative prompt and a seed and reports the seed it used. The tool does not show the AI the image: with `EnableImages` on, the AI can look at it with `view_image`.
+While `ImageGeneration` is set, the AI has a `generate_image` tool. It gives a description and a path, and optionally a size, a quality (`draft`, `standard` or `high`) and a count of 1 to 4; the image is saved as a file where the AI says, with the extension of what was made, numbered when there are several, and a file that is there is never replaced. What else the AI can ask for depends on the service: OpenAI can make a transparent background (not with `gpt-image-2`, which the API refuses it for, so the tool does not offer it there); Stable Diffusion takes a negative prompt and a seed and reports the seed it used. The tool does not show the AI the image: the AI can look at it with `view_image`.
 
-`OpenAi` uses `gpt-image-2.6-flare` unless another model is given (models differ in price and in what they can do, and their names change). `OpenAiModels` asks the service for its models, keeps the GPT Image ones (the ones the generator can use) and gives each its features, so a UI can show which ones can make a transparent background; a key the service refuses, or a service that cannot be reached, is an `InvalidOperationException` with the service's message, unlike the model list of a provider, which gives an empty list. `StableDiffusionModels` does the same for a server's checkpoints (`/sdapi/v1/sd-models`): the `Id` of each is its title, which `StableDiffusion` takes as `model` to have the server load it for each image, and every checkpoint has the same features since the server does not tell the steps or guidance that suit one.
+The OpenAI image model follows the capability: `Fast` is the mini model, `Balanced` the flare model and `Strong` or `Max` the sunburst model, the newest of that kind the key can use (a fixed model of each kind when the service cannot be asked). Models differ in price and in what they can do, so the library keeps the choice to itself. The options are stored with the session, the key included, so a `Load` brings the service back ready to use.
 
-An image costs money or a graphics card for a while, so the call goes through `BeforeToolCall`, where a host can approve or refuse it. The key is passed to the factory by your code (read it from where you keep secrets) and is never stored or logged. For Stable Diffusion the quality is a number of steps, which depends on the model (a turbo model needs few steps and a low `guidance`, a full model many), so give the values that suit the one the server has loaded; `promptGuide` replaces the advice the AI is given for describing images (comma separated phrases by default, plain sentences for a model like FLUX). Another backend is a class that implements `IPromptImageGenerator`.
+An image costs money or a graphics card for a while. The key is given by your code (read it from where you keep secrets), is stored with the session like the other options, and is never logged. For Stable Diffusion the quality is a number of steps, which depends on the model (a turbo model needs few steps and a low `Guidance`, a full model many), so give the values that suit the one the server has loaded; `PromptGuide` replaces the advice the AI is given for describing images (comma separated phrases by default, plain sentences for a model like FLUX).
 
 ## Sending images and files with a prompt
 
@@ -275,50 +230,23 @@ PromptAttachment fromMount = await project.ReadAttachment("docs/diagram.png");  
 Review review = await session.Request<Review>("Review this diagram.", new PromptRequestOptions { Attachments = [fromMount] });
 ```
 
-The image is shown to the AI, the markdown file is put into the prompt as text, and a PDF would be shown to Claude Code (Codex refuses it with `NotSupportedException`, as it does any type it cannot take). Mounted files that the AI should read in parts are better mounted than attached.
+The image is shown to the AI, the markdown file is put into the prompt as text, and a PDF would be shown to Claude Code (Codex refuses it with `NotSupportedException`, as it does any type it cannot take). Files that the AI should read in parts are better put in the cache or the workspace than attached.
 
-## Watching a loop
-
-```csharp
-await using IPromptLoop<string> loop = session.Loop("Check inbox/ for new files and report what you did.", PromptLoopSchedule.Every(TimeSpan.FromMinutes(5)));
-
-using IDisposable subscription = loop.Replies.Subscribe(new Watcher());   // an IObserver<string>
-```
-
-A loop can also carry files and the other options of a request (`session.Loop("Check this folder against the diagram.", PromptLoopSchedule.Every(TimeSpan.FromMinutes(5)), new PromptRequestOptions { Attachments = [diagram] })`), and its prompt and options can be replaced with `loop.Input = "new text"` (or an object) and `loop.Options = loop.Options with { ... }`; the next send uses them. `Replies` is a plain `IObservable<string>`, so it works with System.Reactive (`loop.Replies.Subscribe(Console.WriteLine)` with its extension methods) or any observer of your own. Each completed send publishes its answer; a watcher gets the latest answer first, so it does not miss the first one, and it is told when the loop stops, normally or with the exception of a failed send.
-
-## Keeping the process alive between prompts
+## Disposing a session
 
 ```csharp
-await using IPromptSession session = await provider.Create();
-session.Configuration.IsPersistent = true;
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
 
 await session.Request("Read the project and remember its layout.");
 await session.Request("Which folder holds the tests?");
-
-session.Configuration.IsPersistent = false;
 ```
 
-The first prompt starts the tool and the second reuses the same process, which saves a start per prompt, with either provider. The model and its settings can be changed between prompts without ending it (OpenCode starts a new process for a changed model or context size). Setting `IsPersistent` to `false` returns at once and ends the process in the background. Disposing the session ends it too: `await using` (or `DisposeAsync`) lets a running prompt finish first, and `Dispose` cancels it and ends the process at once.
-
-## Sending a prompt repeatedly
-
-```csharp
-await using IPromptSession session = await provider.Create();
-session.Configuration.Mounts["inbox"] = IStore.FromDisk("/path/to/inbox");
-
-await using IPromptLoop<string> loop = session.Loop("Process any new files in inbox/ and move them to inbox/done/.", PromptLoopSchedule.Every(TimeSpan.FromMinutes(5)));
-
-loop.Trigger();
-loop.Input = "Process new files in inbox/ and write a one line summary of each to inbox/log.md.";
-```
-
-The first send starts when the loop is made, and the next one when the last is done and five minutes have passed since it started (`Loop(input)` without a schedule sends again as soon as each send is done, `Loop(input, PromptLoopSchedule.Manual)` only when triggered, and `loop.Schedule` can be replaced later). `Trigger()` sends at once (it does nothing while a send is running), and the new prompt is used from the next send. Disposing the loop stops it (`await using` lets a send in progress finish, `Dispose` cancels it); if a send fails, the loop stops and `loop.Task` is faulted with the exception.
+A session keeps the tool's process alive between prompts, so the second prompt reuses the process of the first, which saves a start per prompt. The capability and effort can be changed between prompts without ending it (OpenCode starts a new process for a changed model or context size). Disposing the session ends the process and stores the configuration if it changed: `await using` (or `DisposeAsync`) lets a running prompt finish first, and `Dispose` cancels it and ends the process at once.
 
 ## Watching everything the AI does
 
 ```csharp
-using IDisposable watch = session.Output.Subscribe(new Watcher());   // an IObserver<PromptEvent>
+using IDisposable watch = session.Subscribe(new Watcher());   // an IObserver<PromptEvent>
 
 // In the watcher:
 public void OnNext(PromptEvent output)
@@ -343,50 +271,25 @@ public void OnNext(PromptEvent output)
 await session.Request("Fix the failing test in project/.");
 ```
 
-`Request` returns the answer text only. Everything else the AI does while it works reaches `Output` as it happens, for a request in the main conversation (the default mode; a fork's events stay in the fork). The cost is only reported by Claude Code, and `session.Usage` adds it up.
+`Request` returns the answer text only. Everything else the AI does while it works reaches the event stream as it happens, for a request in the main conversation (the default mode; a fork's events stay in the fork). The cost is only reported by Claude Code, and `session.Usage` adds it up.
 
-## Choosing the model and the limits for a session
+## Setting up a session before a prompt
 
 ```csharp
-session.Configuration.Model = await session.Provider.GetModel("haiku");
-session.Configuration.ModelSettings["effort"] = "low";
-session.Configuration.Tools.Add(PromptTool.Create<Lookup, Customer>("find_customer", "Finds a customer.", (input, cancellation) => customers.Find(input.Name, cancellation)));
-session.Configuration.Mounts["scratch"] = IStore.FromMemory();
+session.Configuration.Capability = PromptCapability.Fast;
+session.Configuration.Effort = PromptEffort.Low;
+session.Transient.Tools.Add(PromptTool.Create<Lookup, Customer>("find_customer", "Finds a customer.", (input, cancellation) => customers.Find(input.Name, cancellation)));
 
 string answer = await session.Request("Summarize project/README.md in one line.");
 ```
 
-The model with its settings, the tools and the stores belong to the session and apply from the next prompt on; a request has only its schema, its mode and whether it interrupts (and, like `Send`, files and a note).
-
-## Timeouts and subscription limits
-
-```csharp
-session.Configuration.Limits = new PromptSessionLimits
-{
-    Timeout = TimeSpan.FromMinutes(10),
-    WindowLimit = new PromptWindowLimit
-    {
-        Reached = windows => windows.Any(window => window.Used > 0.95 || window.Pace > 1.5),
-        Interval = TimeSpan.FromMinutes(2)
-    }
-};
-
-try
-{
-    await session.Request("Refactor project/ completely.");
-}
-catch (PromptLimitException exception) when (exception.Limit == PromptLimit.Window)
-{
-    Console.WriteLine("Stopped to keep the subscription from running out.");
-}
-```
-
-The prompt is cancelled when it runs longer than ten minutes or when the status, read when it starts and every two minutes, passes the limit.
+The configuration and the tools belong to the session and apply from the next prompt on; a request has only its schema, its mode and whether it interrupts (and, like `Send`, files and a note).
 
 ## Reading the subscription status
 
 ```csharp
-IReadOnlyList<PromptWindow> windows = await new PromptProvider(new ClaudeEngine()).GetWindows();   // the same shape for Codex, or session.Provider.GetWindows()
+PromptTestResult result = await prompter.Test(new ClaudeSessionOptions());   // the same shape for Codex
+IReadOnlyList<PromptWindow> windows = result.Windows ?? [];
 
 foreach (PromptWindow window in windows)
 {
@@ -394,36 +297,19 @@ foreach (PromptWindow window in windows)
     Console.WriteLine($"{window.Name}: {window.Used:P0} of {window.Length.TotalHours} hours, resets {window.ResetsAt}, pace {window.Pace:0.0}");
 }
 
-IReadOnlyList<PromptWindow> other = await new ClaudeEngine(configFolder: "/accounts/second").GetWindows();   // another account
+PromptTestResult other = await prompter.Test(new ClaudeSessionOptions { ConfigFolder = "/accounts/second" });   // another account
 ```
 
-`Pace` is how fast a window was being used when it was read: 1 uses all of it exactly when it resets, 2 would use it up halfway, and it is `null` when the reset time is not known or the window had only just started. It needs a subscription login, and sends no prompt, so a read takes a second or two and costs nothing.
+`Pace` is how fast a window was being used when it was read: 1 uses all of it exactly when it resets, 2 would use it up halfway, and it is `null` when the reset time is not known or the window had only just started. Windows need a subscription login, so they are `null` on an API key, for OpenCode and when the tool cannot be read. The read costs nothing beyond the test prompt.
 
 ## Checking that a tool works
 
 ```csharp
-PromptTestResult result = await new PromptProvider(new CodexEngine()).Test(Environment.GetEnvironmentVariable("CODEX_API_KEY"));
+PromptTestResult result = await prompter.Test(new CodexSessionOptions { ApiKey = Environment.GetEnvironmentVariable("CODEX_API_KEY") });
 Console.WriteLine(result.IsAvailable ? "Codex works." : $"Codex is not available: {result.Error}");
 ```
 
 The tool is run with a tiny prompt, so a missing command, a missing login and a wrong key all show up as a reason instead of as a failure in the middle of real work. The test ends as soon as the tool has answered and has no time limit of its own, so a model that is slow to load or to think is waited for; pass a `CancellationToken` to give up sooner.
-
-## A loop that stops by itself
-
-```csharp
-public sealed record Findings(int Open, string Summary);
-
-using IPromptLoop<Findings> loop = session.Loop<Findings>(
-    "Count the open TODO comments in project/ and summarize them.",
-    PromptLoopSchedule.Every(TimeSpan.FromMinutes(10)),
-    limits: new PromptLoopLimits<Findings> { Timeout = TimeSpan.FromHours(8), MaxRuns = 50, Until = findings => findings.Open == 0 });
-
-loop.Replies.Subscribe(new Watcher());   // an IObserver<Findings>
-await loop.Task;
-Console.WriteLine(loop.StopReason);      // Until, MaxRuns, Timeout, WindowLimit or Disposed
-```
-
-Every reply is a `Findings`. The loop ends normally at the first limit it reaches, after publishing the reply that reached it, and `StopReason` says which. Add `WindowLimit = status => ...` to stop it before it uses up a subscription, and `WaitForWindow = windows => windows.MaxBy(window => window.ResetsAt)` (or whichever window your limit is about) to make it wait for that window to reset and carry on instead (`loop.ResumesAt` says until when).
 
 ## Trying two approaches from one point
 
@@ -436,7 +322,7 @@ await session.Request("Implement it with an in-memory dictionary.");
 await alternative.Request("Implement it with a file cache.");
 ```
 
-The branch starts with everything the session has said and done and then goes its own way; each is resumable with its own `Id`. It has the same configuration, tools and mounts, so mount a copy of the folder for the branch if both write to it.
+The branch starts with everything the session has said and done and then goes its own way; each is resumable with its own `Id`. It has the same configuration, tools and workspace, and an empty cache of its own, so give the branch a folder of its own with `Move` if both write to it.
 
 ## Going back to an earlier point
 
@@ -450,25 +336,24 @@ await session.Rewind(proposal);                                       // or take
 
 An entry of the history is a point: the conversation is kept up to the end of the exchange it belongs to, and everything after is no longer part of the one that was branched or rewound. A rewound session keeps its `Id`; the original conversation stays in the tool's own storage.
 
-## Moving a session to another conversation or folder
+## Moving a session to another folder
 
 ```csharp
-await using IPromptSession session = await provider.Create(new PromptSessionOptions { WorkspacePath = "/path/to/project" });
+await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
 
-await session.AttachTo("0b1c...", new PromptSessionOptions { WorkspacePath = "/path/to/project" });     // continue a conversation the tool already has (its session or thread id)
-await session.AttachTo(null, new PromptSessionOptions { WorkspacePath = "/path/to/other-project" });    // a new conversation in another folder
-await session.AttachTo();                                  // a new conversation, no workspace, an empty folder of the session
+await session.Move("/path/to/other-project");   // the same conversation, now working in another folder
+await session.Move(null);                       // back to a folder the library makes for the session in its data folder (empty)
 ```
 
-Both arguments are the new values: a `null` session id starts a new conversation with the next prompt and a `null` path means no workspace. The session keeps its `Id` and settings, ends a kept process, and leaves the old conversation and folder alone. The `Workspace` of the configuration is set to the folder (`sandbox` as for `Create`), and is set again by every `Load`. It fails with `PromptSessionNotFoundException` when the tool has no such session and `DirectoryNotFoundException` for a folder that does not exist. Claude Code finds a conversation by the folder it ran in, so give the path the conversation was made in.
+The conversation goes along: Claude Code finds a conversation by the folder it ran in, so the library copies it to the new folder, and the other tools need nothing. The session keeps its `Id` and settings, ends a kept process, and leaves the old folder alone. The folder becomes the `WorkspacePath` of the session (with the sandbox switch it had) and comes back with every `Load`. It fails with `DirectoryNotFoundException` for a folder that does not exist.
 
 ## Telling the AI something with an input
 
 ```csharp
-await session.Send("What is left to do?", new PromptOptions { Notes = ["The build now passes; the failing test you saw was fixed by hand."] });
+await session.Send("What is left to do?", new PromptSendOptions { Notes = ["The build now passes; the failing test you saw was fixed by hand."] });
 ```
 
-The note comes with the input as a message from the application, not as something the user said, and stays in the conversation. It costs no answer of its own. `Request` takes the same `Notes` (and `Attachments`) in its `PromptRequestOptions`, which derive from `PromptOptions`, the options `Send` takes.
+The note comes with the input as a message from the application, not as something the user said, and stays in the conversation. It costs no answer of its own. `Request` takes the same `Notes` (and `Attachments`) in its `PromptRequestOptions`, which derive from `PromptSendOptions`, the options `Send` takes.
 
 ## Keeping the context from overflowing
 
@@ -501,56 +386,23 @@ The history is what the tool stored, newest first and read lazily (so `Take(20)`
 session.Configuration.Instructions = "Answer in French. Never edit files outside project/src.";
 ```
 
-The instructions are passed to the tool as a system prompt. They can be changed between prompts, also after a `Load` (they are set again then like every other setting), and the next prompt follows the new ones: Claude Code renders its system prompt again, and Codex is given the new instructions in a note (a developer message) with the prompt. Clearing them tells the AI that the earlier ones no longer apply.
+The instructions are passed to the tool as a system prompt. They are stored with the session, so a `Load` brings them back, and they can be changed between prompts; the next prompt follows the new ones: Claude Code renders its system prompt again, and Codex is given the new instructions in a note (a developer message) with the prompt. Clearing them tells the AI that the earlier ones no longer apply.
 
 ## Using an MCP server that exists already
 
 ```csharp
-session.Configuration.McpServers["issues"] = PromptMcpServer.Http("https://issues.example.com/mcp", bearerTokenVariable: "ISSUES_TOKEN");
-session.Configuration.McpServers["git"] = PromptMcpServer.Stdio("uvx", "mcp-server-git", "--repository", "/path/to/project");
+session.Transient.McpServers["issues"] = PromptMcpServer.Http("https://issues.example.com/mcp", bearerTokenVariable: "ISSUES_TOKEN");
+session.Transient.McpServers["git"] = PromptMcpServer.Stdio("uvx", "mcp-server-git", "--repository", "/path/to/project");
 
 Console.WriteLine(await session.Request("List the open issues that mention the parser, and the commits that touched it."));
 ```
 
 The tools of both servers are offered next to the library's own, and all of them are allowed, so add only servers you trust. The token is read from the `ISSUES_TOKEN` environment variable and is never stored.
 
-## Approving and watching the tools
-
-```csharp
-session.Configuration.EnableShell = true;
-session.Configuration.BeforeToolCall = (call, cancellation) => Task.FromResult(
-    call.Name != "shell" || call.Arguments.GetProperty("command").GetString()!.StartsWith("dotnet test")
-        ? PromptToolDecision.Allow
-        : PromptToolDecision.Deny("only dotnet test may run"));
-session.Configuration.AfterToolCall = (call, result, duration, cancellation) =>
-{
-    log.Information("{Tool} took {Time} ({Failed})", call.Name, duration, result.IsError);
-    return Task.CompletedTask;
-};
-```
-
-The functions see every call of the shell, the file tools and your own tools before and after it runs; one that is refused is not run and the AI is told why, so it can say so or choose another way. They do not see the tools of an MCP server that exists already, which the AI's tool calls itself.
-
-## Retrying, budgets and defaults
-
-```csharp
-session.Configuration.Limits = new PromptSessionLimits
-{
-    Retry = new PromptRetry { MaxAttempts = 4, InitialDelay = TimeSpan.FromSeconds(5) },
-    MaxToolCalls = 20,
-    Budget = new PromptBudget { MaxTokens = 500_000, MaxCostUsd = 5m },
-    Timeout = TimeSpan.FromMinutes(10)
-};
-
-Console.WriteLine($"Used {session.Usage.InputTokens + session.Usage.OutputTokens} tokens so far.");
-```
-
-A failure before anything was reported (a rate limit, an overloaded service) is tried again after a wait that grows, and a prompt that makes more than twenty tool calls is stopped. The budget makes the next prompt fail with `PromptLimitException` once the session has used that much, and the timeout and the retries apply to every request made afterwards.
-
 ## Giving input at any time and watching the output
 
 ```csharp
-using IDisposable watch = session.Output.Subscribe(new Watcher());   // an IObserver<PromptEvent>
+using IDisposable watch = session.Subscribe(new Watcher());   // an IObserver<PromptEvent>
 
 await session.Send("Look at project/src and tell me what is slow.");
 await session.Send("Mind that Parser.cs is generated.");   // while it works: given to the AI at once and taken into the work
@@ -585,16 +437,16 @@ string partial = await task;   // what the AI had written when it was interrupte
 string reply = await session.Request("Stop. Only change project/src/Parser.cs.");
 ```
 
-`Interrupt()` stops the running prompt (it ends normally, with a `PromptInterruptedEvent` on `Output`), and the next request runs in the same conversation once the session is waiting again. To change course without stopping the AI, give it more input with `Send`, which it takes into the work it is doing.
+`Interrupt()` stops the running prompt (it ends normally, with a `PromptInterruptedEvent` in the event stream), and the next request runs in the same conversation once the session is waiting again. To change course without stopping the AI, give it more input with `Send`, which it takes into the work it is doing.
 
 ## Deleting sessions
 
 ```csharp
 await session.DisposeAsync();
-await provider.Delete(session.Id);   // the stored link, the tool's conversation and the scratch folder
+await prompter.Delete(session.Id);   // the stored link, the tool's conversation and the folder the library made for it
 ```
 
-The library keeps no list of sessions, so keep the identifiers you want to show.
+`prompter.List()` shows what is stored, so the identifiers need not be kept.
 
 ## Reading a long conversation in pages
 
@@ -606,66 +458,6 @@ List<PromptHistoryEntry> older = await session.GetHistory().OlderThan(page[^1].P
 List<PromptHistoryEntry> news = await session.GetHistory().NewerThan(page[0].Point).ToListAsync();
 ```
 
-## Letting the AI edit, then deciding
-
-```csharp
-IOverlayStore overlay = IStore.FromDisk("/path/to/project").AsOverlay();
-session.Configuration.Workspace = overlay;
-
-await session.Request("Rename Parser to ExpressionParser everywhere.");
-
-foreach (StoreChange change in await overlay.GetChanges())
-{
-    Console.WriteLine($"{change.Kind} {change.Path}");
-}
-
-await overlay.Apply();     // or await overlay.Discard() to throw the work away
-```
-
-The folder on disk is not touched until `Apply()`.
-
-## Keeping a log of what the AI touches
-
-```csharp
-session.Configuration.Workspace = IStore.FromDisk("/path/to/project").Audited(entry =>
-    log.Information("{Operation} {Path} {Error}", entry.Operation, entry.Path, entry.Error));
-```
-
-## Adding another command line tool
-
-```csharp
-public sealed class MyToolEngine : IPromptEngine
-{
-    public string Identifier => "My Tool";
-
-    public ProcessStartInfo CreateStart(PromptEngineStart start)
-    {
-        ProcessStartInfo info = new("my-tool") { WorkingDirectory = start.WorkingFolder };
-        info.ArgumentList.Add("--json");
-
-        if (start.AiSessionId is { } id)
-        {
-            info.ArgumentList.Add("--resume");
-            info.ArgumentList.Add(id);
-        }
-
-        return info;   // the prompt is written to its standard input
-    }
-
-    public IReadOnlyList<PromptEngineEvent> Parse(string line)
-        => line.StartsWith("session ") ? [new PromptEngineEvent { Kind = PromptEngineEventKind.Session, Text = line[8..] }]
-            : line.StartsWith("text ") ? [new PromptEngineEvent { Kind = PromptEngineEventKind.Reply, Text = line[5..] }]
-            : line == "done" ? [new PromptEngineEvent { Kind = PromptEngineEventKind.Finished }]
-            : [];
-}
-
-IPromptProvider tool = new PromptProvider(new MyToolEngine());
-IPromptSession session = await tool.Create();
-
-// Later: the stored session names "My Tool", so a provider over an engine of that name loads it.
-IPromptSession resumed = await tool.Load(session.Id);
-```
-
 ## Testing code that uses the library
 
 ```csharp
@@ -674,66 +466,47 @@ using Markwardt.LiveAi.Testing;
 [Fact]
 public async Task Reviews_CodeWithTheAi()
 {
-    FakePromptProvider provider = new() { OnCreate = session => session.Reply(new Review("Looks fine.", 9, [])) };
+    FakePrompter prompter = new() { OnCreate = session => session.Reply(new Review("Looks fine.", 9, [])) };
 
-    Review review = await new Reviewer(provider).Review("var x = 1;");
+    Review review = await new Reviewer(prompter).Review("var x = 1;");
 
     Assert.Equal(9, review.Score);
-    Assert.Contains("var x = 1;", provider.Sessions.Single().Prompts.Single().Text);
+    Assert.Contains("var x = 1;", prompter.Sessions.Single().Prompts.Single().Text);
 }
 ```
 
-Pass a `TimeProvider` (`new FakePromptProvider { Time = clock }`) to run timeouts, retry delays and loop schedules on a clock the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so timeouts, retries, loops and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt. Sessions of the fake provider start with its first model (`FakePromptProvider.Models`), so a test does not have to choose one.
+Pass a `TimeProvider` (`new FakePrompter { Time = clock }`) to run the clock of the sessions on a time the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so options and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt. `Created` and `Tests` record the options the code under test passed.
 
 ## Logging what sessions do
 
 ```csharp
 using ILoggerFactory logging = LoggerFactory.Create(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
-PromptProvider provider = new(new ClaudeEngine(), logger: logging.CreateLogger("LiveAi"));
+Prompter prompter = new(logger: logging.CreateLogger("LiveAi"));
 ```
 
-`new PromptProvider(engine, dataFolder, logger, time)` also takes a `TimeProvider` for the request timeouts, retry delays and loop schedules of its sessions. In a trimmed or native AOT application, `Request<T>`, `Loop<T>` and `PromptTool.Create<,>` warn because they use reflection; keep the members of the types you pass.
+`new Prompter(dataFolder, logger, time)` also takes a `TimeProvider` for the clock of its sessions (the pauses of the web search, the times of prompts). In a trimmed or native AOT application, `Request<T>` and `PromptTool.Create<,>` warn because they use reflection; keep the members of the types you pass.
 
-The logger receives what the library does, not what the AI says: state changes, processes and tool servers that were started, input given to running work, branches, retries and limits that stopped a request (information and warning levels for the notable ones, debug for the routine). Prompts, answers and files are never logged. Without a logger nothing is logged.
+The logger receives what the library does, not what the AI says: state changes, processes and tool servers that were started, input given to running work and branches (information and warning levels for the notable ones, debug for the routine). Prompts, answers and files are never logged. Without a logger nothing is logged.
 
 ## Running a model on this machine
 
 ```csharp
 // ollama pull gemma4:26b
-IPromptProvider provider = new PromptProvider(new OpenCodeEngine());   // finds Ollama on http://localhost:11434/v1
-
-PromptModel model = (await provider.GetModels()).First(listed => listed.Name == "gemma4:26b");
-await using IPromptSession session = await provider.Create(new PromptSessionOptions { Model = model, WorkspacePath = "/path/to/project" });
-session.Configuration.ModelSettings["context"] = "16384";   // the size Ollama runs the model with (OLLAMA_CONTEXT_LENGTH)
-session.Configuration.Mounts["docs"] = IStore.FromDisk("/path/to/docs");
+await using IPromptSession session = await prompter.Create(new OllamaSessionOptions { Models = PromptCapabilityModels.All("gemma4:26b"), Context = 16384, WorkspacePath = "/path/to/project" });   // finds Ollama on http://localhost:11434/v1
 
 Console.WriteLine(await session.Request("Which file holds the entry point?"));
 ```
 
-`OpenCodeEngine` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as the first argument). Its models are those of the servers on this machine that it is given (`new OpenCodeEngine(localServers: ["http://localhost:1234/v1"])` for LM Studio, llama.cpp or vLLM; the default is Ollama), listed live and limited to the models that can call tools when the server says which those are; those of `OpenCodeModelProvider`s you describe (`new OpenCodeEngine(providers: [...])`, for a server that has to be configured by hand); and those of OpenCode's own configuration, such as a provider it is signed in to. A local model offers one setting, `context`: the size of the context window, which OpenCode needs to know to compact in time and which the server has to run the model with (the default is what a loaded model reports, and otherwise Ollama's own default of 4096). The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool, and `IPromptProvider.Test` waits for it). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
+`OllamaSessionOptions` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as `Command`) over the model server named by `Server` (Ollama on this machine by default; LM Studio, llama.cpp and vLLM speak the same protocol). `Models` is required and says which model runs: `PromptCapabilityModels.All("gemma4:26b")` runs one model whatever the capability is, and `new PromptCapabilityModels { Fast = "small", Balanced = "medium", Strong = "large", Max = "huge" }` runs a different one for each capability of the session, so changing `Configuration.Capability` between prompts switches models. `Context` is the size of the context window, which OpenCode needs to know to compact in time and which the server has to run the model with (the default is what a loaded model reports, and otherwise Ollama's own default of 4096). The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool, and `Test` waits for it). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
 
-## Choosing a model and its settings
+## How a model is chosen
 
 ```csharp
-IReadOnlyList<PromptModel> models = await provider.GetModels();   // for the subscription; pass an API key for the models of a key
-
-foreach (PromptModel model in models)
-{
-    Console.WriteLine($"{model.Name ?? model.Id} (images: {model.AcceptsImages})");
-
-    foreach (PromptModelSetting setting in model.Settings ?? [])
-    {
-        Console.WriteLine($"  {setting.Name}: {setting.Kind}, {(setting.Kind == PromptModelSettingKind.Choice ? string.Join(" < ", setting.Choices) : setting.Default)}");
-    }
-}
-
-session.Configuration.Model = models.First(model => model.Id == "opus");
-session.Configuration.ModelSettings["effort"] = "high";   // refused unless the model offers it and accepts the value
+session.Configuration.Capability = PromptCapability.Strong;   // Fast, Balanced, Strong or Max
+session.Configuration.Effort = PromptEffort.High;             // Low, Medium, High or Max
 ```
 
-The tools differ in what a model offers, so an application does not need to know them: every model lists its settings (a reasoning effort for Claude Code and Codex, the context window of a local model), each a choice ordered from the lowest to the highest, a toggle or a number in a range, with a default, and values are written as text. Selecting a model fills `ModelSettings` with the defaults of its settings, keeping the values of those the previous model also had. Listing never throws because the tool is missing; a tool that is not installed or a server that is not running gives an empty list, and `Test` tells why. The list is kept for a minute (per API key), so asking again is cheap; `GetModel(id)` finds one model and asks the tool again once if it is not in the list.
-
-A session is stored with its model and the values of its settings. When it is loaded they are brought up to date with what the tool offers now: a setting the model no longer has is dropped, a value it no longer accepts goes back to the setting's default, a new setting gets its default (the changes are logged), and a model that is no longer offered leaves the session without one, so that it has to be selected again before the session is used. Give `PromptSessionOptions.Model` to `Load` to run another model than the stored one.
+The tools differ in what they offer, so the library hides it: a capability and an effort are all a caller says. For Claude Code the capabilities are `haiku`, `sonnet`, `opus` and `fable`, for Codex the models its catalog describes by size, and for a local server the models it lists in order. When a tier does not exist the nearest one is used, the higher on a tie. The effort becomes the reasoning level of the chosen model: the one of the same name, the highest for `Max`, otherwise the levels are spread in order, and a model without one runs as it is. The choice is made when a prompt starts, from the models the tool lists at that moment (kept for a minute), with models the library knows as a fallback when the tool cannot be asked; changing either setting between prompts changes the model for the next prompt. Both are stored with the session.
 
 ## Handling failures and cancelling
 
@@ -759,10 +532,8 @@ Cancelling ends the tool's process and everything it started.
 ## Tools that are not on the PATH
 
 ```csharp
-IPromptProvider claude = new PromptProvider(
-    new ClaudeEngine("/opt/claude/bin/claude", configFolder: "/var/lib/my-app/claude"),
-    dataFolder: "/var/lib/my-app/ai");
+Prompter prompter = new("/var/lib/my-app/ai");
 
-IPromptSession session = await claude.Create();
-IPromptSession resumed = await claude.Load(session.Id);
+IPromptSession session = await prompter.Create(new ClaudeSessionOptions { Command = "/opt/claude/bin/claude", ConfigFolder = "/var/lib/my-app/claude" });
+IPromptSession resumed = await prompter.Load(session.Id);
 ```

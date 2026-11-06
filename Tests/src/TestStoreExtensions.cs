@@ -4,7 +4,7 @@ public static class TestStoreExtensions
 {
     public static async Task<IStore> Memory(IReadOnlyDictionary<string, string> files)
     {
-        IStore store = IStore.FromMemory();
+        IStore store = new MemoryStore();
 
         foreach ((string path, string text) in files)
         {

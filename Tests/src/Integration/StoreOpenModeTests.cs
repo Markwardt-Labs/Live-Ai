@@ -2,15 +2,15 @@ namespace Markwardt.LiveAi.Tests.Integration;
 
 public sealed class StoreOpenModeTests : IDisposable
 {
-    private readonly TempFolder temp = new();
-
     public static TheoryData<string> Kinds => ["disk", "memory"];
+
+    private readonly TempFolder temp = new();
 
     public void Dispose()
         => temp.Dispose();
 
     private IStore Make(string kind)
-        => kind == "disk" ? IStore.FromDisk(temp.Path) : IStore.FromMemory();
+        => kind == "disk" ? DiskStore.Open(temp.Path) : new MemoryStore();
 
     private async Task Put(IStore store, string path, string text)
     {
@@ -200,7 +200,7 @@ public sealed class StoreOpenModeTests : IDisposable
     [Fact]
     public async Task Memory_Flush_StoresWhatWasWrittenBeforeTheStreamIsDisposed()
     {
-        IStore store = IStore.FromMemory();
+        IStore store = new MemoryStore();
 
         await using Stream stream = await store.Open("a.txt", StoreOpenMode.Replace);
         await stream.WriteAsync("flushed"u8.ToArray());
@@ -212,7 +212,7 @@ public sealed class StoreOpenModeTests : IDisposable
     [Fact]
     public async Task Memory_OpeningAFileForWritingMakesItExistAtOnce()
     {
-        IStore store = IStore.FromMemory();
+        IStore store = new MemoryStore();
 
         await using Stream stream = await store.Open("a.txt", StoreOpenMode.Create);
 
@@ -223,7 +223,7 @@ public sealed class StoreOpenModeTests : IDisposable
     [Fact]
     public async Task Disk_TheStreamsAreExactlyAsCapableAsTheModeSays()
     {
-        IStore store = IStore.FromDisk(temp.Path);
+        IStore store = DiskStore.Open(temp.Path);
         await Put(store, "a.txt", "x");
 
         foreach ((StoreOpenMode mode, bool canRead, bool canWrite) in new[] { (StoreOpenMode.Read, true, false), (StoreOpenMode.Open, true, true), (StoreOpenMode.Replace, false, true), (StoreOpenMode.Append, false, true) })

@@ -2,10 +2,6 @@ namespace Markwardt.LiveAi.Tests.Integration;
 
 public sealed class StoreTreeTests : IDisposable
 {
-    private readonly TempFolder source = new();
-
-    private readonly TempFolder target = new();
-
     public static TheoryData<string, string> Pairs => new()
     {
         { "disk", "disk" },
@@ -14,6 +10,10 @@ public sealed class StoreTreeTests : IDisposable
         { "memory", "memory" }
     };
 
+    private readonly TempFolder source = new();
+
+    private readonly TempFolder target = new();
+
     public void Dispose()
     {
         source.Dispose();
@@ -21,7 +21,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     private IStore Make(string kind, TempFolder folder)
-        => kind == "disk" ? IStore.FromDisk(folder.Path) : IStore.FromMemory();
+        => kind == "disk" ? DiskStore.Open(folder.Path) : new MemoryStore();
 
     private async Task<IStore> Tree(string kind)
     {
@@ -212,31 +212,6 @@ public sealed class StoreTreeTests : IDisposable
         await Assert.ThrowsAsync<IOException>(() => store.CreateFolder("file.txt/inner"));
 
         Assert.Equal(["file.txt"], await Everything(store));
-    }
-
-    [Fact]
-    public async Task Move_OutOfAReadOnlyStore_IsRefusedAndNothingIsCopied()
-    {
-        IStore origin = await Tree("memory");
-        IStore destination = Make("memory", target);
-        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["a"] = origin.AsReadOnly(), ["b"] = destination });
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => mounted.Move("a/tree", "b/moved"));
-
-        Assert.Empty(await Everything(destination));
-        Assert.Equal(7, (await Everything(origin)).Count);
-    }
-
-    [Fact]
-    public async Task Move_IntoAReadOnlyStore_IsRefusedAndTheSourceIsKept()
-    {
-        IStore origin = await Tree("memory");
-        IStore destination = Make("memory", target).AsReadOnly();
-        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["a"] = origin, ["b"] = destination });
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => mounted.Move("a/tree", "b/moved"));
-
-        Assert.Equal(7, (await Everything(origin)).Count);
     }
 
     [Fact]
@@ -537,10 +512,10 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Fact]
-    public async Task List_Recursive_AcrossMountsPrefixesEachMountAndReadOnlyPassesItThrough()
+    public async Task List_Recursive_AcrossMountsPrefixesEachMount()
     {
         IStore first = await Tree("memory");
-        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["a"] = first.AsReadOnly(), ["b"] = Make("memory", target) });
+        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["a"] = first, ["b"] = Make("memory", target) });
 
         Assert.Equal(["a/", "a/tree/", "a/tree/a.txt", "a/tree/deep/", "a/tree/deep/also/", "a/tree/deep/also/empty/", "a/tree/deep/b.txt", "a/tree/empty/", "b/"], Shown(await mounted.List(string.Empty, true).ToListAsync()));
         Assert.Equal(["tree/", "tree/a.txt", "tree/deep/", "tree/deep/also/", "tree/deep/also/empty/", "tree/deep/b.txt", "tree/empty/"], Shown(await mounted.List("a", true).ToListAsync()));

@@ -18,11 +18,13 @@ public sealed class PromptSessionAskerTests
 
     public PromptSessionAskerTests()
     {
+        store.Setup(mock => mock.GetWorkspaceFolder(It.IsAny<Guid>())).Returns((Guid id) => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}"));
         engine.SetupGet(mock => mock.Identifier).Returns("Fake");
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Callback<IReadOnlyList<PromptTool>, IPromptToolHooks?>((tools, _) => served.Add(tools)).Returns(() => Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Callback<IReadOnlyList<PromptTool>>(tools => served.Add(tools)).Returns(() => Server().Object);
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
+        provider.Setup(mock => mock.Select(It.IsAny<PromptCapability>(), It.IsAny<PromptEffort>(), It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync((TestModels.Model, new Dictionary<string, string>()));
     }
 
     private PromptSession Session()
@@ -58,7 +60,7 @@ public sealed class PromptSessionAskerTests
     {
         PromptSession session = Session();
         string? asked = null;
-        session.Configuration.Asker = (question, _) =>
+        session.Transient.Asker = (question, _) =>
         {
             asked = question;
             return Task.FromResult("blue");
@@ -76,11 +78,11 @@ public sealed class PromptSessionAskerTests
     public async Task TheAskerIsReadWhenTheQuestionArrives_SoClearingItLeavesAnErrorForTheAi()
     {
         PromptSession session = Session();
-        session.Configuration.Asker = (_, _) => Task.FromResult("yes");
+        session.Transient.Asker = (_, _) => Task.FromResult("yes");
         await session.Request("go");
         PromptTool ask = served.Single().Single(tool => tool.Name == "ask_user");
 
-        session.Configuration.Asker = null;
+        session.Transient.Asker = null;
 
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => Call(ask, """{"question":"Sure?"}"""));
         Assert.Contains("No one is available", error.Message);
@@ -90,7 +92,7 @@ public sealed class PromptSessionAskerTests
     public async Task AnAskerThatThrows_FailsTheCallAndANullReplyBecomesEmptyText()
     {
         PromptSession session = Session();
-        session.Configuration.Asker = (question, _) => question == "boom" ? throw new IOException("window closed") : Task.FromResult<string>(null!);
+        session.Transient.Asker = (question, _) => question == "boom" ? throw new IOException("window closed") : Task.FromResult<string>(null!);
         await session.Request("go");
         PromptTool ask = served.Single().Single(tool => tool.Name == "ask_user");
 
@@ -103,14 +105,14 @@ public sealed class PromptSessionAskerTests
     public async Task SettingOrClearingTheAsker_ChangesWhatIsServedAndSettingItAgainDoesNotRestartTheServer()
     {
         PromptSession session = Session();
-        Func<string, CancellationToken, Task<string>> asker = (_, _) => Task.FromResult("a");
+        PromptAsker asker = (_, _) => Task.FromResult("a");
 
         await session.Request("one");
-        session.Configuration.Asker = asker;
+        session.Transient.Asker = asker;
         await session.Request("two");
-        session.Configuration.Asker = (_, _) => Task.FromResult("b");
+        session.Transient.Asker = (_, _) => Task.FromResult("b");
         await session.Request("three");
-        session.Configuration.Asker = null;
+        session.Transient.Asker = null;
         await session.Request("four");
 
         Assert.Equal([false, true, false], served.Select(tools => tools.Any(tool => tool.Name == "ask_user")));
@@ -123,7 +125,7 @@ public sealed class PromptSessionAskerTests
 
         foreach (string name in new[] { "ask_user", "ASK_USER", "respond", "Respond", "shell", "Read_File" })
         {
-            Assert.Throws<ArgumentException>(() => session.Configuration.Tools.Add(new PromptTool { Name = name, Description = "x", InputSchema = JsonDocument.Parse("""{"type":"object"}""").RootElement, Handler = (_, _) => Task.FromResult("ok") }));
+            Assert.Throws<ArgumentException>(() => session.Transient.Tools.Add(new PromptTool { Name = name, Description = "x", InputSchema = JsonDocument.Parse("""{"type":"object"}""").RootElement, Handler = (_, _) => Task.FromResult("ok") }));
         }
     }
 }

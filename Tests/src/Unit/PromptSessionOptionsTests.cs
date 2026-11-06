@@ -20,16 +20,18 @@ public sealed class PromptSessionOptionsTests
 
     public PromptSessionOptionsTests()
     {
+        store.Setup(mock => mock.GetWorkspaceFolder(It.IsAny<Guid>())).Returns((Guid id) => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}"));
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         engine.SetupGet(mock => mock.Identifier).Returns("Fake");
+        provider.Setup(mock => mock.Select(It.IsAny<PromptCapability>(), It.IsAny<PromptEffort>(), It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync((TestModels.Model, new Dictionary<string, string> { ["effort"] = "medium" }));
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
         libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns(() => [Tool("read_file")]);
+        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns(() => [Tool("read_file")]);
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
         engine.Setup(mock => mock.CreatePersistentStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(() => Server().Object);
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
         runner.Setup(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>())).Returns(process.Object);
         process.SetupGet(mock => mock.IsRunning).Returns(true);
@@ -92,25 +94,25 @@ public sealed class PromptSessionOptionsTests
         PromptMcpServer server = PromptMcpServer.Stdio("tool", "--flag");
 
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.McpServers["db"] = server;
+        session.Transient.McpServers["db"] = server;
 
         Assert.Equal("Be brief.", session.Configuration.Instructions);
-        Assert.Equal(server, session.Configuration.McpServers["db"]);
+        Assert.Equal(server, session.Transient.McpServers["db"]);
         session.Configuration.Instructions = "  ";
         Assert.Null(session.Configuration.Instructions);
     }
 
     [Fact]
-    public async Task InstructionsAndMcpServers_ReachTheProviderAndAreNotStored()
+    public async Task InstructionsAndMcpServers_ReachTheProviderAndOnlyTheInstructionsAreStored()
     {
         PromptSession session = Session();
         session.Configuration.Instructions = "Be brief.";
-        session.Configuration.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
+        session.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
 
         await session.Request("go");
 
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Instructions.EndsWith("Be brief.") && start.Servers.Any(server => server.Name == "db") && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.Instructions == "Be brief."), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Theory]
@@ -121,8 +123,8 @@ public sealed class PromptSessionOptionsTests
     {
         PromptSession session = Session();
 
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers[name] = PromptMcpServer.Http("https://example.com"));
-        Assert.Empty(session.Configuration.McpServers);
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers[name] = PromptMcpServer.Http("https://example.com"));
+        Assert.Empty(session.Transient.McpServers);
     }
 
     [Fact]
@@ -130,13 +132,13 @@ public sealed class PromptSessionOptionsTests
     {
         PromptSession session = Session();
 
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = new PromptMcpServer());
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = new PromptMcpServer { Command = "x", Url = "https://example.com" });
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = PromptMcpServer.Http("not a url"));
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = PromptMcpServer.Http("ftp://example.com"));
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = PromptMcpServer.Stdio(""));
-        Assert.Throws<ArgumentException>(() => session.Configuration.McpServers["a"] = PromptMcpServer.Stdio("  "));
-        Assert.Empty(session.Configuration.McpServers);
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = new PromptMcpServer());
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = new PromptMcpServer { Command = "x", Url = "https://example.com" });
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = PromptMcpServer.Http("not a url"));
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = PromptMcpServer.Http("ftp://example.com"));
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = PromptMcpServer.Stdio(""));
+        Assert.Throws<ArgumentException>(() => session.Transient.McpServers["a"] = PromptMcpServer.Stdio("  "));
+        Assert.Empty(session.Transient.McpServers);
     }
 
     [Fact]
@@ -144,91 +146,12 @@ public sealed class PromptSessionOptionsTests
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session();
-        session.Configuration.IsPersistent = true;
         await session.Request("one");
 
         session.Configuration.Instructions = "New.";
         await session.Request("two");
 
         runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
-    }
-
-    [Fact]
-    public async Task BeforeToolCall_DecidesEachCallAndIsReadWhenTheCallArrives()
-    {
-        PromptSession session = Session();
-        IPromptToolHooks hooks = session;
-        PromptToolCallEvent call = new() { Id = "call-1", Name = "shell", Input = """{"command":"ls"}""" };
-        List<string> asked = [];
-
-        Assert.True((await hooks.Before(call)).Allowed);
-        session.Configuration.BeforeToolCall = (asking, _) =>
-        {
-            asked.Add(asking.Name);
-            return Task.FromResult(PromptToolDecision.Deny("not now"));
-        };
-        PromptToolDecision decision = await hooks.Before(call);
-        session.Configuration.BeforeToolCall = null;
-
-        Assert.False(decision.Allowed);
-        Assert.Equal("not now", decision.Reason);
-        Assert.Equal(["shell"], asked);
-        Assert.True((await hooks.Before(call)).Allowed);
-    }
-
-    [Fact]
-    public async Task AfterToolCall_IsToldWhatBecameOfEachCall()
-    {
-        PromptSession session = Session();
-        IPromptToolHooks hooks = session;
-        PromptToolCallEvent call = new() { Id = "call-2", Name = "read_file" };
-        PromptToolResultEvent outcome = new() { Id = "call-2", Output = "text", IsError = false };
-        List<(PromptToolResultEvent Result, TimeSpan Duration)> told = [];
-
-        await hooks.After(call, outcome, TimeSpan.FromSeconds(1));
-        session.Configuration.AfterToolCall = (_, reported, took, _) =>
-        {
-            told.Add((reported, took));
-            return Task.CompletedTask;
-        };
-        await hooks.After(call, outcome, TimeSpan.FromSeconds(1));
-
-        Assert.Equal([(outcome, TimeSpan.FromSeconds(1))], told);
-    }
-
-    [Fact]
-    public void ToolCallHooksAndTheWorkspaceStartEmptyAndCanBeSet()
-    {
-        PromptSession session = Session();
-        IStore workspace = new Mock<IStore>().Object;
-        Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>> before = (_, _) => Task.FromResult(PromptToolDecision.Allow);
-
-        Assert.Equal((null, null, null), (session.Configuration.BeforeToolCall, session.Configuration.AfterToolCall, session.Configuration.Workspace));
-        session.Configuration.BeforeToolCall = before;
-        session.Configuration.Workspace = workspace;
-        Assert.Same(before, session.Configuration.BeforeToolCall);
-        Assert.Same(workspace, session.Configuration.Workspace);
-    }
-
-    [Fact]
-    public async Task TheToolServerIsGivenTheSessionToTellItOfEveryCall()
-    {
-        PromptSession session = Session();
-        session.Configuration.Tools.Add(Tool("mine"));
-
-        await session.Request("go");
-
-        toolHost.Verify(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), session), Times.Once);
-    }
-
-    [Fact]
-    public async Task GetWindows_ReadsThroughTheEngine()
-    {
-        IReadOnlyList<PromptWindow> status = TestWindows.Claude(session: 0.05);
-        engine.Setup(mock => mock.GetWindows(It.IsAny<CancellationToken>())).ReturnsAsync(status);
-        IPromptExecutor executor = Session();
-
-        Assert.Same(status, await executor.GetWindows());
     }
 
     [Fact]
@@ -249,24 +172,15 @@ public sealed class PromptSessionOptionsTests
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
         Mock<IPromptSession> opened = new();
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), "key", It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), "key")).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
         {
             stored = record;
             return opened.Object;
         });
         PromptTool tool = Tool("mine");
-        IStore files = new Mock<IStore>().Object;
-        session.Configuration.Tools.Add(tool);
-        session.Configuration.Mounts["docs"] = files;
+        session.Transient.Tools.Add(tool);
         PromptSessionSettings forkSettings = new(Record(), []);
-        forkSettings.Mounts["stale"] = files;
         opened.SetupGet(mock => mock.Configuration).Returns(forkSettings);
-        Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>> approval = (_, _) => Task.FromResult(PromptToolDecision.Allow);
-        session.Configuration.BeforeToolCall = approval;
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 9 } };
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 4, ShouldRetry = _ => false } };
-        session.Configuration.Limits = session.Configuration.Limits with { MaxToolCalls = 3 };
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromMinutes(2) };
 
         IPromptSession fork = await session.Fork();
 
@@ -278,14 +192,24 @@ public sealed class PromptSessionOptionsTests
         Assert.True(Directory.Exists(stored.WorkingFolder));
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(record => record.Id == stored.Id), It.IsAny<CancellationToken>()), Times.Once);
         Assert.Equal([tool], forkSettings.Tools);
-        Assert.Equal(["docs"], forkSettings.Mounts.Keys);
-        Assert.Same(approval, forkSettings.BeforeToolCall);
-        Assert.Equal(9, forkSettings.Limits.Budget!.MaxTokens);
-        Assert.Equal(4, forkSettings.Limits.Retry!.MaxAttempts);
-        Assert.NotNull(forkSettings.Limits.Retry.ShouldRetry);
-        Assert.Equal(3, forkSettings.Limits.MaxToolCalls);
-        Assert.Equal(TimeSpan.FromMinutes(2), forkSettings.Limits.Timeout);
         Directory.Delete(stored.WorkingFolder, true);
+    }
+
+    [Fact]
+    public async Task Fork_WhenTheLinkCannotBeStored_LeavesNoAutomaticFolderBehind()
+    {
+        PromptSession session = Session(Record());
+        string? attempted = null;
+        store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Returns((PromptSessionLink link, CancellationToken _) =>
+        {
+            attempted = link.WorkingFolder;
+            throw new IOException("disk full");
+        });
+
+        await Assert.ThrowsAsync<PromptSessionException>(() => session.Fork());
+
+        Assert.NotNull(attempted);
+        Assert.False(Directory.Exists(attempted));
     }
 
     [Fact]
@@ -294,7 +218,7 @@ public sealed class PromptSessionOptionsTests
         PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -312,7 +236,7 @@ public sealed class PromptSessionOptionsTests
     {
         PromptSession session = Session();
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -334,7 +258,7 @@ public sealed class PromptSessionOptionsTests
         runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task));
         engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
         PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _, PromptModel? _) =>
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptProvider _, IPromptEngine _, string? _) =>
         {
             stored = record;
             return OpenedSession();
@@ -501,138 +425,6 @@ public sealed class PromptSessionOptionsTests
     }
 
     [Fact]
-    public async Task Budget_OfTokens_StopsTheNextPromptOnceReachedAndNotBefore()
-    {
-        PromptSession session = Session();
-        EveryPromptUses(100, 20);
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 200 } };
-
-        await session.Request("one");
-        await session.Request("two");
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("three"));
-
-        Assert.Equal(PromptLimit.Budget, exception.Limit);
-        runner.Verify(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
-    }
-
-    [Fact]
-    public async Task Budget_OfCost_StopsTheNextPromptAndNeverStopsAToolThatReportsNoCost()
-    {
-        PromptSession costly = Session();
-        EveryPromptUses(1, 1, 0.6m);
-        costly.Configuration.Limits = costly.Configuration.Limits with { Budget = new PromptBudget { MaxCostUsd = 1m } };
-        await costly.Request("one");
-        await costly.Request("two");
-        await Assert.ThrowsAsync<PromptLimitException>(() => costly.Request("three"));
-
-        PromptSession free = Session();
-        EveryPromptUses(1, 1);
-        free.Configuration.Limits = free.Configuration.Limits with { Budget = new PromptBudget { MaxCostUsd = 0.01m } };
-        for (int prompt = 0; prompt < 5; prompt++)
-        {
-            await free.Request("go");
-        }
-    }
-
-    [Fact]
-    public async Task Budget_CanBeRaisedOrRemovedToGoOn()
-    {
-        PromptSession session = Session();
-        EveryPromptUses(100, 0);
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 100 } };
-        await session.Request("one");
-        await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("two"));
-
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 1000 } };
-        await session.Request("three");
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = null };
-        await session.Request("four");
-
-        Assert.Null(session.Configuration.Limits.Budget);
-    }
-
-    [Fact]
-    public void Budget_WithALimitThatIsNotPositive_IsRefused()
-    {
-        PromptSession session = Session();
-
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 0 } });
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxCostUsd = -1m } });
-        Assert.Null(session.Configuration.Limits.Budget);
-    }
-
-    [Fact]
-    public async Task Timeout_AppliesToEveryRequestUntilItIsCleared()
-    {
-        PromptSession session = Session();
-        RunsHang();
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromMilliseconds(80) };
-
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("go"));
-        using CancellationTokenSource stop = new(TimeSpan.FromMilliseconds(300));
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = null };
-        Task<string> unlimited = session.Request("go", cancellation: stop.Token);
-        await Task.Delay(150);
-        bool unlimitedRunning = !unlimited.IsCompleted;
-
-        Assert.Equal(PromptLimit.Timeout, exception.Limit);
-        Assert.True(unlimitedRunning);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => unlimited);
-    }
-
-    [Fact]
-    public async Task Limits_CarryRetriesToolCallLimitsAndWindowLimits()
-    {
-        PromptSession session = Session();
-        runner.SetupSequence(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Returns(Events(Event(PromptEngineEventKind.Failed, "rate limited")))
-            .Returns(Events(Event(PromptEngineEventKind.Reply, "fine")))
-            .Returns(Events(new PromptEngineEvent { Kind = PromptEngineEventKind.Event, Event = new PromptToolCallEvent { Id = "1", Name = "x" } }, new PromptEngineEvent { Kind = PromptEngineEventKind.Event, Event = new PromptToolCallEvent { Id = "2", Name = "x" } }));
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 3, InitialDelay = TimeSpan.FromMilliseconds(1) } };
-        session.Configuration.Limits = session.Configuration.Limits with { MaxToolCalls = 1 };
-
-        Assert.Equal("fine", await session.Request("go"));
-        PromptLimitException exception = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("go"));
-
-        Assert.Equal(PromptLimit.ToolCalls, exception.Limit);
-        engine.Setup(mock => mock.GetWindows(It.IsAny<CancellationToken>())).ReturnsAsync(TestWindows.Claude(session: 0.99));
-        RunsHang();
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = null };
-        session.Configuration.Limits = session.Configuration.Limits with { MaxToolCalls = null };
-        session.Configuration.Limits = session.Configuration.Limits with { WindowLimit = new PromptWindowLimit { Reached = status => status.Used("Session", 0.9), Interval = TimeSpan.FromSeconds(30) } };
-        PromptLimitException status = await Assert.ThrowsAsync<PromptLimitException>(() => session.Request("go"));
-        Assert.Equal(PromptLimit.Window, status.Limit);
-    }
-
-    [Fact]
-    public void Defaults_WithValuesOutOfRange_AreRefused()
-    {
-        PromptSession session = Session();
-
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.Zero });
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromDays(40) });
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { WindowLimit = new PromptWindowLimit { Reached = _ => false, Interval = TimeSpan.Zero } });
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 0 } });
-        Assert.Throws<ArgumentException>(() => session.Configuration.Limits = session.Configuration.Limits with { MaxToolCalls = -1 });
-        Assert.Null(session.Configuration.Limits.Timeout);
-        Assert.Null(session.Configuration.Limits.WindowLimit);
-        Assert.Null(session.Configuration.Limits.Retry);
-        Assert.Null(session.Configuration.Limits.MaxToolCalls);
-    }
-
-    [Fact]
-    public void Defaults_AreNotStored()
-    {
-        PromptSession session = Session();
-
-        session.Configuration.Limits = session.Configuration.Limits with { Timeout = TimeSpan.FromMinutes(1) };
-        session.Configuration.Limits = session.Configuration.Limits with { Budget = new PromptBudget { MaxTokens = 5 } };
-
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
-        Assert.Equal(TimeSpan.FromMinutes(1), session.Configuration.Limits.Timeout);
-    }
-
-    [Fact]
     public async Task Interrupt_WhenIdle_DoesNothing()
         => Assert.False(await Session().Interrupt());
 
@@ -658,7 +450,6 @@ public sealed class PromptSessionOptionsTests
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session();
-        session.Configuration.IsPersistent = true;
         TaskCompletionSource stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Interruptible(stopped.Task));
         process.Setup(mock => mock.Interrupt(It.IsAny<CancellationToken>())).Callback(() => stopped.SetResult()).Returns(Task.CompletedTask);
@@ -741,7 +532,7 @@ public sealed class PromptSessionOptionsTests
         => new() { Event = new PromptInputEvent { Text = "asked" }, Point = new PromptHistoryPoint(position) };
 
     [Fact]
-    public async Task Compact_RunsItOnAProcessOfItsOwnFollowsTheNewSessionAndEndsTheProcess()
+    public async Task Compact_RunsOnTheProcessOfTheSessionAndFollowsTheNewSession()
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session(Record(builder => builder.AiSessionId = "old"));
@@ -751,7 +542,7 @@ public sealed class PromptSessionOptionsTests
 
         store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == "new" && link.ForkedFrom == null && link.ForkedAt == null), It.IsAny<CancellationToken>()), Times.Once);
         runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.Is<PromptEngineStart>(start => start.AiSessionId == "old")), Times.Once);
-        process.Verify(mock => mock.DisposeAsync(), Times.Once);
+        process.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
 
     [Fact]
@@ -759,7 +550,6 @@ public sealed class PromptSessionOptionsTests
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session();
-        session.Configuration.IsPersistent = true;
         process.Setup(mock => mock.Compact(It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Finished)));
         await session.Request("one");
 
@@ -781,11 +571,11 @@ public sealed class PromptSessionOptionsTests
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Compact());
 
         Assert.Equal("Not enough messages to compact", exception.Message);
-        process.Verify(mock => mock.DisposeAsync(), Times.Once);
+        process.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
 
     [Fact]
-    public async Task GetContext_AsksAProcessAndEndsItWhenTheSessionDoesNotKeepOne()
+    public async Task GetContext_AsksTheProcessTheSessionKeeps()
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session();
@@ -794,7 +584,7 @@ public sealed class PromptSessionOptionsTests
 
         Assert.Same(context, await session.GetContext());
 
-        process.Verify(mock => mock.DisposeAsync(), Times.Once);
+        process.Verify(mock => mock.DisposeAsync(), Times.Never);
     }
 
     [Fact]
@@ -825,7 +615,7 @@ public sealed class PromptSessionOptionsTests
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), entry.Point, It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin", ForkedAt = "message" });
         Mock<IPromptSession> opened = new();
         opened.SetupGet(mock => mock.Configuration).Returns(new PromptSessionSettings(Record(), []));
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(opened.Object);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(opened.Object);
 
         IPromptSession fork = await session.Fork(entry);
 
@@ -847,7 +637,6 @@ public sealed class PromptSessionOptionsTests
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
-        session.Configuration.IsPersistent = true;
         await session.Request("one");
         PromptHistoryEntry entry = Entry();
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), entry.Point, It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "earlier" });
@@ -861,56 +650,51 @@ public sealed class PromptSessionOptionsTests
     }
 
     [Fact]
-    public async Task AttachTo_ContinuesTheGivenProviderSessionStoresItAndEndsTheProcessThatHeldTheOldOne()
-    {
-        engine.SetupGet(mock => mock.CanPersist).Returns(true);
-        PromptSession session = Session(Record(builder => { builder.AiSessionId = "old"; builder.ForkedFrom = null; }));
-        session.Configuration.IsPersistent = true;
-        engine.Setup(mock => mock.HasSession("other")).Returns(true);
-        await session.Request("one");
-
-        await session.AttachTo("other");
-        await session.Request("two");
-
-        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == "other" && link.ForkedFrom == null && link.ForkedAt == null), It.IsAny<CancellationToken>()), Times.Once);
-        runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.Is<PromptEngineStart>(start => start.AiSessionId == "other")), Times.Once);
-        process.Verify(mock => mock.Stop(), Times.Once);
-    }
-
-    [Fact]
-    public async Task AttachTo_AWorkspacePath_StoresItAsTheWorkingFolderSetsTheWorkspaceAndStartsTheNextProcessThere()
+    public async Task Move_AWorkspacePath_StoresItAsTheWorkingFolderKeepsTheConversationAndStartsTheNextProcessThere()
     {
         engine.SetupGet(mock => mock.CanPersist).Returns(true);
         using TempFolder folder = new();
         PromptSession session = Session(Record(builder => builder.AiSessionId = "old"));
-        session.Configuration.IsPersistent = true;
         await session.Request("one");
 
-        await session.AttachTo(null, new PromptSessionOptions { WorkspacePath = folder.Path, Sandbox = false });
+        await session.Move(folder.Path);
         await session.Request("two");
 
-        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == null && link.WorkingFolder == folder.Path && link.WorkspacePath == folder.Path && !link.Sandbox), It.IsAny<CancellationToken>()), Times.Once);
-        Assert.Equal(folder.Path, Assert.IsAssignableFrom<IDiskStore>(session.Configuration.Workspace).Path);
-        runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.Is<PromptEngineStart>(start => start.WorkingFolder == folder.Path && start.AiSessionId == null)), Times.Once);
+        engine.Verify(mock => mock.MoveSession("old", folder.Path, It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == "old" && link.WorkingFolder == folder.Path && link.WorkspacePath == folder.Path), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(folder.Path, session.WorkspacePath);
+        runner.Verify(mock => mock.Open(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.Is<PromptEngineStart>(start => start.WorkingFolder == folder.Path && start.AiSessionId == "old")), Times.Once);
         process.Verify(mock => mock.Stop(), Times.Once);
     }
 
     [Fact]
-    public async Task AttachTo_NoWorkspace_GoesBackToAnEmptyFolderOfTheSessionAndClearsTheWorkspace()
+    public async Task Move_KeepsTheSandboxOfTheSession()
+    {
+        using TempFolder folder = new();
+        PromptSession session = Session(Record(builder => builder.AiSessionId = "old") with { IsSandboxed = false });
+
+        await session.Move(folder.Path);
+
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => !link.IsSandboxed), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Move_ToNull_MakesTheAutomaticFolderOfTheSessionAgainAndLeavesTheCallersFolderAlone()
     {
         using TempFolder folder = new();
         PromptSessionRecord record = Record(builder => builder.AiSessionId = "old") with { WorkingFolder = folder.Path, WorkspacePath = folder.Path };
         PromptSession session = Session(record);
-        session.Configuration.Workspace = IStore.FromDisk(folder.Path);
         string scratch = Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{record.Id:N}");
 
         try
         {
-            await session.AttachTo();
+            await session.Move(null);
 
-            store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == null && link.WorkingFolder == scratch && link.WorkspacePath == null), It.IsAny<CancellationToken>()), Times.Once);
+            engine.Verify(mock => mock.MoveSession("old", scratch, It.IsAny<CancellationToken>()), Times.Once);
+            store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == "old" && link.WorkingFolder == scratch && link.WorkspacePath == null), It.IsAny<CancellationToken>()), Times.Once);
             Assert.True(Directory.Exists(scratch));
-            Assert.Null(session.Configuration.Workspace);
+            Assert.Equal(scratch, session.WorkspacePath);
+            Assert.True(Directory.Exists(folder.Path));
         }
         finally
         {
@@ -919,59 +703,155 @@ public sealed class PromptSessionOptionsTests
     }
 
     [Fact]
-    public async Task AttachTo_WithAnApiKey_IsRefusedBecauseTheSessionKeepsItsKey()
+    public async Task Move_AwayFromTheAutomaticFolder_DeletesIt()
     {
-        PromptSession session = Session();
+        using TempFolder target = new();
+        using TempFolder automatic = new();
+        await File.WriteAllTextAsync(automatic.Combine("kept.txt"), "x");
+        PromptSession session = Session(Record(builder => builder.AiSessionId = "old") with { WorkingFolder = automatic.Path, WorkspacePath = null });
 
-        await Assert.ThrowsAsync<ArgumentException>(() => session.AttachTo("other", new PromptSessionOptions { ApiKey = "new-key" }));
+        await session.Move(target.Path);
 
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.False(Directory.Exists(automatic.Path));
+        Assert.Equal(target.Path, session.WorkspacePath);
     }
 
     [Fact]
-    public async Task AttachTo_AWorkspaceThatDoesNotExist_FailsAndChangesNothing()
+    public async Task Move_AwayFromAFolderTheCallerGave_LeavesItWithItsFiles()
     {
-        PromptSession session = Session(Record(builder => builder.AiSessionId = "old"));
+        using TempFolder target = new();
+        using TempFolder given = new();
+        await File.WriteAllTextAsync(given.Combine("mine.txt"), "x");
+        PromptSession session = Session(Record(builder => builder.AiSessionId = "old") with { WorkingFolder = given.Path, WorkspacePath = given.Path });
 
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => session.AttachTo("old", new PromptSessionOptions { WorkspacePath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}") }));
+        await session.Move(target.Path);
 
-        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
-        Assert.Null(session.Configuration.Workspace);
+        Assert.True(File.Exists(given.Combine("mine.txt")));
     }
 
     [Fact]
-    public async Task AttachTo_ALazyBranch_DropsItsOriginAndPoint()
+    public async Task Move_ToNullWhileAlreadyInTheAutomaticFolder_KeepsItsFiles()
     {
+        using TempFolder automatic = new();
+        PromptSessionRecord record = Record(builder => builder.AiSessionId = "old") with { WorkingFolder = Path.Combine(Path.GetTempPath(), "x"), WorkspacePath = null };
+        record = record with { WorkingFolder = Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{record.Id:N}") };
+        Directory.CreateDirectory(record.WorkingFolder);
+        await File.WriteAllTextAsync(Path.Combine(record.WorkingFolder, "kept.txt"), "x");
+        PromptSession session = Session(record);
+
+        try
+        {
+            await session.Move(null);
+
+            Assert.True(File.Exists(Path.Combine(record.WorkingFolder, "kept.txt")));
+        }
+        finally
+        {
+            Directory.Delete(record.WorkingFolder, true);
+        }
+    }
+
+    [Fact]
+    public async Task Move_ALazyBranch_MovesTheConversationItWasBranchedFrom()
+    {
+        using TempFolder folder = new();
         PromptSession session = Session(Record(builder => { builder.ForkedFrom = "origin"; builder.ForkedAt = "message"; }));
-        engine.Setup(mock => mock.HasSession("other")).Returns(true);
 
-        await session.AttachTo("other");
+        await session.Move(folder.Path);
 
-        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.AiSessionId == "other" && link.ForkedFrom == null && link.ForkedAt == null), It.IsAny<CancellationToken>()), Times.Once);
+        engine.Verify(mock => mock.MoveSession("origin", folder.Path, It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(mock => mock.Save(It.Is<PromptSessionLink>(link => link.ForkedFrom == "origin" && link.ForkedAt == "message"), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task AttachTo_ASessionTheProviderDoesNotHave_FailsAndChangesNothing()
+    public async Task Move_ASessionWithoutAConversation_AsksTheEngineForNothing()
+    {
+        using TempFolder folder = new();
+        PromptSession session = Session();
+
+        await session.Move(folder.Path);
+
+        engine.Verify(mock => mock.MoveSession(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(folder.Path, session.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task Move_AWorkspaceThatDoesNotExist_FailsAndChangesNothing()
     {
         PromptSession session = Session(Record(builder => builder.AiSessionId = "old"));
 
-        PromptSessionNotFoundException exception = await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => session.AttachTo("nothing"));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => session.Move(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}")));
 
-        Assert.Equal("nothing", exception.Id);
         store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal("/work", session.WorkspacePath);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("  ")]
-    public async Task AttachTo_ABlankIdentifierOrADisposedSession_Fails(string id)
+    [Fact]
+    public async Task Move_WhenTheEngineCannotBringTheConversationAlong_FailsAndChangesNothing()
+    {
+        using TempFolder folder = new();
+        PromptSession session = Session(Record(builder => builder.AiSessionId = "old"));
+        engine.Setup(mock => mock.MoveSession("old", folder.Path, It.IsAny<CancellationToken>())).ThrowsAsync(new PromptSessionException("gone"));
+
+        await Assert.ThrowsAsync<PromptSessionException>(() => session.Move(folder.Path));
+
+        store.Verify(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal("/work", session.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task Move_ToNullWhenTheEngineFails_LeavesNoAutomaticFolderBehind()
+    {
+        using TempFolder given = new();
+        PromptSessionRecord record = Record(builder => builder.AiSessionId = "old") with { WorkingFolder = given.Path, WorkspacePath = given.Path };
+        PromptSession session = Session(record);
+        string automatic = Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{record.Id:N}");
+        engine.Setup(mock => mock.MoveSession("old", automatic, It.IsAny<CancellationToken>())).ThrowsAsync(new PromptSessionException("gone"));
+
+        await Assert.ThrowsAsync<PromptSessionException>(() => session.Move(null));
+
+        Assert.False(Directory.Exists(automatic));
+        Assert.Equal(given.Path, session.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task Move_WhenTheLinkCannotBeStored_ChangesNothingAndLeavesNoAutomaticFolderBehind()
+    {
+        using TempFolder given = new();
+        PromptSessionRecord record = Record(builder => builder.AiSessionId = "old") with { WorkingFolder = given.Path, WorkspacePath = given.Path };
+        PromptSession session = Session(record);
+        string automatic = Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{record.Id:N}");
+        store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Returns(Task.FromException(new IOException("disk full")));
+
+        await Assert.ThrowsAsync<IOException>(() => session.Move(null));
+
+        Assert.Equal(given.Path, session.WorkspacePath);
+        Assert.False(Directory.Exists(automatic));
+        Assert.True(Directory.Exists(given.Path));
+    }
+
+    [Fact]
+    public async Task Move_ADisposedSession_Fails()
     {
         PromptSession session = Session();
-        engine.Setup(mock => mock.HasSession("other")).Returns(true);
-
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => session.AttachTo(id));
         await session.DisposeAsync();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.AttachTo("other"));
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Move(null));
+    }
+
+    [Fact]
+    public async Task Rewind_WhenTheLinkCannotBeStored_KeepsTheConversationItHad()
+    {
+        PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
+        PromptHistoryEntry entry = Entry();
+        engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), entry.Point, It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "earlier" });
+        store.Setup(mock => mock.Save(It.IsAny<PromptSessionLink>(), It.IsAny<CancellationToken>())).Returns(Task.FromException(new IOException("disk full")));
+
+        await Assert.ThrowsAsync<IOException>(() => session.Rewind(entry));
+        await session.Request("again");
+
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin")), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.AiSessionId == "earlier")), Times.Never);
     }
 
     [Fact]
@@ -996,31 +876,4 @@ public sealed class PromptSessionOptionsTests
         await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Rewind(Entry()));
     }
 
-    [Fact]
-    public async Task RetryWhen_DecidesWhichFailuresAreRetriedInsteadOfTheUsualRule()
-    {
-        PromptSession session = Session();
-        runner.SetupSequence(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Returns(Events(Event(PromptEngineEventKind.Failed, "never mind")))
-            .Returns(Events(Event(PromptEngineEventKind.Failed, "try again")))
-            .Returns(Events(Event(PromptEngineEventKind.Reply, "fine")));
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 3, InitialDelay = TimeSpan.FromMilliseconds(1), ShouldRetry = exception => exception.Message == "try again" } };
-
-        PromptSessionException refused = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("go"));
-        Assert.Equal("never mind", refused.Message);
-
-        Assert.Equal("fine", await session.Request("go"));
-    }
-
-    [Fact]
-    public async Task OneAttempt_IsNoRetryAtAll()
-    {
-        PromptSession session = Session();
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Failed, "rate limited")));
-        session.Configuration.Limits = session.Configuration.Limits with { Retry = new PromptRetry { MaxAttempts = 1, InitialDelay = TimeSpan.FromMilliseconds(1) } };
-
-        await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("go"));
-
-        runner.Verify(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
-    }
 }

@@ -38,12 +38,6 @@ public sealed class OpenAiImageCatalogTests
         Assert.Equal(("http://localhost:9000/v1/models", "sk-local"), (request.RequestUri!.ToString(), request.Headers.Authorization!.Parameter));
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task TheFactoryRefusesAnEmptyKey(string key)
-        => await Assert.ThrowsAsync<ArgumentException>(() => IPromptImageGenerator.OpenAiModels(key));
-
     [Fact]
     public async Task List_KeepsOnlyTheImageModelsInTheOrderOfTheirNames()
     {
@@ -155,18 +149,9 @@ public sealed class OpenAiImageCatalogTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Catalog().List(cancellation.Token));
     }
 
-    [Fact]
-    public async Task TheFactoryListsWithoutTouchingTheNetworkWhenAlreadyCancelled()
-    {
-        using CancellationTokenSource cancellation = new();
-        await cancellation.CancelAsync();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => IPromptImageGenerator.OpenAiModels("sk-test", null, cancellation.Token));
-    }
-
     [Theory]
-    [InlineData("GPT-IMAGE-2", PromptImageFeatures.None)]
-    [InlineData("gpt-image-20", PromptImageFeatures.Transparency)]
-    public void GetFeatures_MatchesTheNameOfTheModelThatRefusesTransparency(string model, PromptImageFeatures expected)
-        => Assert.Equal(expected, Catalog().GetFeatures(model));
+    [InlineData("GPT-IMAGE-2", (int)PromptImageFeatures.None)]
+    [InlineData("gpt-image-20", (int)PromptImageFeatures.Transparency)]
+    public void GetFeatures_MatchesTheNameOfTheModelThatRefusesTransparency(string model, int expected)
+        => Assert.Equal((PromptImageFeatures)expected, Catalog().GetFeatures(model));
 }

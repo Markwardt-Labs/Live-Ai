@@ -4,11 +4,9 @@ public sealed class PromptFetchToolTests
 {
     private Func<HttpRequestMessage, HttpResponseMessage> answer = _ => new HttpResponseMessage(HttpStatusCode.NotFound);
 
-    private Func<Uri, CancellationToken, Task<bool>> blocked = (_, _) => Task.FromResult(false);
-
     private async Task<string> Run(string json)
     {
-        PromptTool tool = new PromptLibraryTools(new Answering(request => answer(request))).CreateFetch((address, cancellation) => blocked(address, cancellation));
+        PromptTool tool = new PromptLibraryTools(new Answering(request => answer(request))).CreateFetch();
         return await tool.Handler(JsonDocument.Parse(json).RootElement, CancellationToken.None);
     }
 
@@ -18,7 +16,7 @@ public sealed class PromptFetchToolTests
     [Fact]
     public void Create_IsNamedAfterTheReservedName()
     {
-        PromptTool tool = new PromptLibraryTools().CreateFetch((_, _) => Task.FromResult(false));
+        PromptTool tool = new PromptLibraryTools().CreateFetch();
 
         Assert.Equal("fetch_url", tool.Name);
         Assert.Equal("fetch_url", new PromptLibraryTools().FetchName);
@@ -62,49 +60,22 @@ public sealed class PromptFetchToolTests
     }
 
     [Fact]
-    public async Task Run_AsksTheFilterForTheAddressAndDoesNotSendARequestToABlockedOne()
+    public async Task Run_ReadsAnyAddressWithoutRestrictionAndFollowsARedirectToOneOnThisMachine()
     {
         List<string> asked = [];
-        int sent = 0;
-        answer = _ =>
+        answer = request =>
         {
-            sent++;
-            return Page("text/plain", "secret");
-        };
-        blocked = (address, _) =>
-        {
-            asked.Add(address.ToString());
-            return Task.FromResult(address.Host == "internal.example");
+            asked.Add(request.RequestUri!.ToString());
+            return request.RequestUri.AbsolutePath == "/start"
+                ? new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri("http://127.0.0.1:8080/secret") } }
+                : Page("text/plain", "reached");
         };
 
-        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Run("""{"url":"http://internal.example/admin"}"""));
-        string allowed = await Run("""{"url":"https://example.com/ok"}""");
+        string local = await Run("""{"url":"http://192.168.1.10/admin"}""");
+        string redirected = await Run("""{"url":"https://example.com/start"}""");
 
-        Assert.Contains("blocked", refused.Message, StringComparison.Ordinal);
-        Assert.Equal(["http://internal.example/admin", "https://example.com/ok"], asked);
-        Assert.Equal((1, "secret"), (sent, allowed));
-    }
-
-    [Fact]
-    public async Task Run_AsksTheFilterForEveryAddressARedirectLeadsTo()
-    {
-        List<string> asked = [];
-        answer = request => request.RequestUri!.AbsolutePath switch
-        {
-            "/start" => new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri("/hop", UriKind.Relative) } },
-            "/hop" => new HttpResponseMessage(HttpStatusCode.MovedPermanently) { Headers = { Location = new Uri("http://127.0.0.1/meta") } },
-            _ => Page("text/plain", "reached")
-        };
-        blocked = (address, _) =>
-        {
-            asked.Add(address.ToString());
-            return Task.FromResult(address.Host == "127.0.0.1");
-        };
-
-        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Run("""{"url":"https://example.com/start"}"""));
-
-        Assert.Equal(["https://example.com/start", "https://example.com/hop", "http://127.0.0.1/meta"], asked);
-        Assert.Contains("127.0.0.1", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(("reached", "reached"), (local, redirected));
+        Assert.Equal(["http://192.168.1.10/admin", "https://example.com/start", "http://127.0.0.1:8080/secret"], asked);
     }
 
     [Fact]

@@ -18,10 +18,11 @@ public sealed class TempFolder : IDisposable
         return frame.RootElement.GetProperty("message").GetProperty("content").GetString()!;
     }
 
-    public string Script(string name, string body)
+    public string Script(string name, string body, bool guarded = true)
     {
         string path = Combine(name);
-        File.WriteAllText(path, $"#!/bin/sh\n{body.Replace("$PWD", Path)}\n");
+        string guard = name == "claude" && guarded ? "case \" $* \" in *\" --model \"*) ;; *\" --input-format \"*) exit 0 ;; esac\n" : string.Empty;
+        File.WriteAllText(path, $"#!/bin/sh\n{guard}{body.Replace("$PWD", Path)}\n");
 
         if (!OperatingSystem.IsWindows())
         {

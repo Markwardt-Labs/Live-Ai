@@ -15,7 +15,7 @@ public sealed class MemoryStoreTests : IAsyncLifetime
 
     [Fact]
     public async Task FromMemory_WithoutFiles_StartsEmpty()
-        => Assert.Empty(await IStore.FromMemory().List(string.Empty).ToListAsync());
+        => Assert.Empty(await new MemoryStore().List(string.Empty).ToListAsync());
 
     [Fact]
     public async Task List_ShowsTheEntriesOfAFolderAndNoneBeyondIt()
@@ -156,8 +156,8 @@ public sealed class MemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task FromMemory_Instances_AreIndependent()
     {
-        IStore first = IStore.FromMemory();
-        IStore second = IStore.FromMemory();
+        IStore first = new MemoryStore();
+        IStore second = new MemoryStore();
 
         await first.WriteText("only-here.txt", "x");
 
@@ -167,7 +167,7 @@ public sealed class MemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task Calls_AtTheSameTime_NeverLoseAWrite()
     {
-        IStore memory = IStore.FromMemory();
+        IStore memory = new MemoryStore();
 
         await Task.WhenAll(Enumerable.Range(0, 200).Select(index => Task.Run(async () =>
         {
@@ -180,16 +180,15 @@ public sealed class MemoryStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ItWorksAsAMountAndWithCopyAndReadOnly()
+    public async Task ItWorksAsAMountAndWithCopy()
     {
-        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["mem"] = store, ["ref"] = (await TestStoreExtensions.Memory(new Dictionary<string, string> { ["guide.md"] = "the guide" })).AsReadOnly() });
+        MountedStore mounted = new(null, new Dictionary<string, IStore> { ["mem"] = store, ["ref"] = await TestStoreExtensions.Memory(new Dictionary<string, string> { ["guide.md"] = "the guide" }) });
 
         await mounted.Copy("ref/guide.md", "mem/guide-copy.md");
         await mounted.Move("mem/dir", "mem/folder");
 
         Assert.Equal("the guide", await store.ReadText("guide-copy.md"));
         Assert.Equal("C", await store.ReadText("folder/deep/c.txt"));
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => mounted.WriteText("ref/new.md", "x"));
     }
 
     [Fact]

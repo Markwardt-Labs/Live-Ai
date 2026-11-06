@@ -113,7 +113,7 @@ public sealed class StoreExtensionsTests
     [Fact]
     public async Task WriteText_WritesUtf8WithoutAByteOrderMarkAndReadTextReadsItBack()
     {
-        IStore memory = IStore.FromMemory();
+        IStore memory = new MemoryStore();
 
         await memory.WriteText("a/b.txt", "héllo wörld ✓\r\nnext");
 
@@ -127,7 +127,7 @@ public sealed class StoreExtensionsTests
     [Fact]
     public async Task WriteText_OfNothing_CreatesAnEmptyFile()
     {
-        IStore memory = IStore.FromMemory();
+        IStore memory = new MemoryStore();
 
         await memory.WriteText("empty.txt", string.Empty);
 
@@ -138,7 +138,7 @@ public sealed class StoreExtensionsTests
     [Fact]
     public async Task ReadText_DecodesTheEncodingOfAByteOrderMark()
     {
-        IStore memory = IStore.FromMemory();
+        IStore memory = new MemoryStore();
         foreach ((string name, byte[] bytes) in new[] { ("utf8.txt", new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes("bom ✓")).ToArray()), ("utf16.txt", new byte[] { 0xFF, 0xFE }.Concat(Encoding.Unicode.GetBytes("wide ✓")).ToArray()) })
         {
             using MemoryStream source = new(bytes);
@@ -152,7 +152,7 @@ public sealed class StoreExtensionsTests
     [Fact]
     public async Task ReadText_OfBytesThatAreNotUtf8_ReplacesWhatItCannotDecode()
     {
-        IStore memory = IStore.FromMemory();
+        IStore memory = new MemoryStore();
         using MemoryStream source = new([0x61, 0xFF, 0x62]);
         await memory.WriteFrom("bad.dat", source);
 
@@ -161,7 +161,7 @@ public sealed class StoreExtensionsTests
 
     [Fact]
     public async Task ReadText_OfAMissingFile_Throws()
-        => await Assert.ThrowsAsync<FileNotFoundException>(() => IStore.FromMemory().ReadText("nope.txt"));
+        => await Assert.ThrowsAsync<FileNotFoundException>(() => new MemoryStore().ReadText("nope.txt"));
 
     [Fact]
     public async Task ReadText_And_WriteText_PassTheCancellationToken()
@@ -178,8 +178,8 @@ public sealed class StoreExtensionsTests
     public async Task Copy_CopiesBinaryFilesByteForByteAcrossStores()
     {
         byte[] bytes = [0, 255, 10, 13, 0xEF, 0xBB, 0xBF, 128, 0, 1, 0xFF, 0xFE];
-        IStore from = IStore.FromMemory();
-        IStore to = IStore.FromMemory();
+        IStore from = new MemoryStore();
+        IStore to = new MemoryStore();
         using MemoryStream source = new(bytes);
         await from.WriteFrom("tree/deep/blob.dat", source);
         MountedStore mounted = new(null, new Dictionary<string, IStore> { ["from"] = from, ["to"] = to });

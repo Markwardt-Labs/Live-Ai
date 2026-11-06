@@ -6,26 +6,6 @@ namespace Markwardt.LiveAi;
 public sealed record PromptTool
 {
     /// <summary>
-    /// Gets the name the AI calls the tool by: letters, digits, underscores and hyphens, at most 64 characters, unique among a session's tools.
-    /// </summary>
-    public required string Name { get; init; }
-
-    /// <summary>
-    /// Gets what the tool does and when to use it, which is all the AI knows about it besides its input.
-    /// </summary>
-    public required string Description { get; init; }
-
-    /// <summary>
-    /// Gets the JSON Schema of the tool's input, whose root must be an object.
-    /// </summary>
-    public required JsonElement InputSchema { get; init; }
-
-    /// <summary>
-    /// Gets the function that runs the tool, from the arguments the AI gave (an object that is only valid during the call) to the text it gets back. An exception becomes an error result that the AI sees, so it can react.
-    /// </summary>
-    public required Func<JsonElement, CancellationToken, Task<string>> Handler { get; init; }
-
-    /// <summary>
     /// Creates a tool from typed input and output: the input schema is built from <typeparamref name="TInput" />, the arguments are read into it, and the output is written back as JSON text (a string is returned as it is).
     /// </summary>
     /// <typeparam name="TInput">The type of the arguments; it must be written as a JSON object.</typeparam>
@@ -50,4 +30,25 @@ public sealed record PromptTool
             return output is string text ? text : JsonSerializer.Serialize(output, PromptJson.Options);
         }
         };
+
+    /// <summary>
+    /// Gets the name the AI calls the tool by: letters, digits, underscores and hyphens, at most 64 characters, unique among a session's tools.
+    /// </summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Gets what the tool does and when to use it, which is all the AI knows about it besides its input.
+    /// </summary>
+    public required string Description { get; init; }
+
+    /// <summary>
+    /// Gets the JSON Schema of the tool's input, whose root must be an object.
+    /// </summary>
+    public required JsonElement InputSchema { get; init; }
+
+    /// <summary>
+    /// Gets the function that runs the tool, from the arguments the AI gave (an object that is only valid during the call) to the text it gets back. An exception becomes an error result that the AI sees, so it can react.
+    /// </summary>
+    public required Func<JsonElement, CancellationToken, Task<string>> Handler { get; init; }
+
 }

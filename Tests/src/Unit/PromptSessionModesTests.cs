@@ -20,14 +20,16 @@ public sealed class PromptSessionModesTests
 
     public PromptSessionModesTests()
     {
+        store.Setup(mock => mock.GetWorkspaceFolder(It.IsAny<Guid>())).Returns((Guid id) => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}"));
         engine.SetupGet(mock => mock.Identifier).Returns("Fake");
+        provider.Setup(mock => mock.Select(It.IsAny<PromptCapability>(), It.IsAny<PromptEffort>(), It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync((TestModels.Model, new Dictionary<string, string> { ["effort"] = "medium" }));
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput input) => input.Text);
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
-        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<bool>())).Returns([]);
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(() => Server().Object);
+        libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns([]);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(() => Server().Object);
     }
 
     private PromptSession Session(string? aiSessionId = null, ILogger? logger = null)
@@ -87,32 +89,33 @@ public sealed class PromptSessionModesTests
         => runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), prompt, It.IsAny<CancellationToken>())).Returns(answer);
 
     [Fact]
-    public async Task ADirectRequest_PutsTheSessionInTheRespondingStateAndOutputReportsTheStatesAndWhatTheAiSays()
+    public async Task ADirectRequest_PutsTheSessionInTheRespondingStateAndTheEventsReportTheStatesAndWhatTheAiSays()
     {
         PromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
         Answers("hi", () => Replying("hello"));
         Assert.Equal(PromptSessionState.Waiting, session.State);
 
         string reply = await session.Request("hi");
-        await recorder.Until(values => values.Count >= 3);
+        await recorder.Until(values => values.Count(output => output is not PromptDescriptorsEvent) >= 3);
+        PromptEvent[] events = [.. recorder.Values.Where(output => output is not PromptDescriptorsEvent)];
 
         Assert.Equal("hello", reply);
         Assert.Equal(PromptSessionState.Waiting, session.State);
         Assert.Equal([PromptSessionState.Responding, PromptSessionState.Waiting], recorder.Values.OfType<PromptStateEvent>().Select(change => change.State));
         Assert.Equal(["hello"], recorder.Values.OfType<PromptMessageEvent>().Select(message => message.Text));
-        Assert.IsType<PromptStateEvent>(recorder.Values[0]);
-        Assert.IsType<PromptMessageEvent>(recorder.Values[1]);
-        Assert.IsType<PromptStateEvent>(recorder.Values[2]);
+        Assert.IsType<PromptStateEvent>(events[0]);
+        Assert.IsType<PromptMessageEvent>(events[1]);
+        Assert.IsType<PromptStateEvent>(events[2]);
     }
 
     [Fact]
-    public async Task Send_WhileWaiting_StartsWorkWhoseOutputIsOnOutput()
+    public async Task Send_WhileWaiting_StartsWorkWhoseEventsAreReported()
     {
         PromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
         Answers("hello", () => Replying("working on it"));
 
         await session.Send("hello");
@@ -193,7 +196,7 @@ public sealed class PromptSessionModesTests
         await session.Send("one");
         await Eventually(() => Volatile.Read(ref started) == 1);
 
-        await Assert.ThrowsAsync<IOException>(() => session.Send("two", new PromptOptions { Notes = ["keep"] }));
+        await Assert.ThrowsAsync<IOException>(() => session.Send("two", new PromptSendOptions { Notes = ["keep"] }));
         release.SetResult();
         await Eventually(() => session.State == PromptSessionState.Waiting);
         await session.Send("three");
@@ -218,10 +221,10 @@ public sealed class PromptSessionModesTests
             return Working(release.Task, () => Interlocked.Increment(ref started));
         });
         process.Setup(mock => mock.Steer(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Callback<PromptInput, CancellationToken>((input, _) => steers.Add(input)).ReturnsAsync(true);
-        await session.Send("one", new PromptOptions { Notes = ["a"] });
+        await session.Send("one", new PromptSendOptions { Notes = ["a"] });
         await Eventually(() => Volatile.Read(ref started) == 1);
 
-        await session.Send("two", new PromptOptions { Notes = ["b"] });
+        await session.Send("two", new PromptSendOptions { Notes = ["b"] });
 
         Assert.Equal(["a"], Assert.Single(runs).Notes);
         Assert.Equal(["b"], Assert.Single(steers).Notes);
@@ -291,7 +294,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), "bad", It.IsAny<CancellationToken>())).Returns(() => FailedTurn());
         Answers("good", () => Replying("fine"));
 
@@ -309,7 +312,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), "bad", It.IsAny<CancellationToken>())).Returns(() => FailedTurn());
 
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("bad"));
@@ -321,11 +324,11 @@ public sealed class PromptSessionModesTests
     }
 
     [Fact]
-    public async Task Output_CompletesWhenTheSessionIsDisposed()
+    public async Task TheEvents_CompleteWhenTheSessionIsDisposed()
     {
         PromptSession session = Session();
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         await session.DisposeAsync();
         await recorder.Ended();
@@ -334,14 +337,14 @@ public sealed class PromptSessionModesTests
     }
 
     [Fact]
-    public async Task Output_DoesNotReplayAnythingToAWatcherThatArrivesLate()
+    public async Task TheEvents_AreNotReplayedToAWatcherThatArrivesLate()
     {
         PromptSession session = Session();
         Answers("hi", () => Replying("hello"));
         await session.Request("hi");
         Recorder<PromptEvent> late = new();
 
-        session.Output.Subscribe(late);
+        session.Subscribe(late);
 
         Assert.Empty(late.Values);
     }
@@ -352,10 +355,10 @@ public sealed class PromptSessionModesTests
         PromptSession session = Session("origin");
         PromptSession fork = Session();
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(fork);
+        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(fork);
         Answers("side question", () => Replying("side answer"));
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         string reply = await session.Request("side question", new PromptRequestOptions { Mode = PromptRequestMode.Fork });
 
@@ -371,7 +374,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session("origin");
         engine.Setup(mock => mock.Branch(It.IsAny<PromptEngineStart>(), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { ForkedFrom = "origin" });
-        opener.SetupSequence(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>(), It.IsAny<PromptModel?>())).Returns(Session()).Returns(Session());
+        opener.SetupSequence(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptProvider>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns(Session()).Returns(Session());
         TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int started = 0;
         Answers("work", () => Blocked(release.Task, () => Interlocked.Increment(ref started)));
@@ -390,7 +393,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session();
         IReadOnlyList<PromptTool>? offered = null;
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Callback<IReadOnlyList<PromptTool>, IPromptToolHooks?>((tools, _) => offered = tools).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Callback<IReadOnlyList<PromptTool>>(tools => offered = tools).Returns(Server().Object);
         string? seen = null;
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns((IPromptEngine _, ProcessStartInfo _, string text, CancellationToken token) =>
         {
@@ -413,7 +416,7 @@ public sealed class PromptSessionModesTests
     {
         PromptSession session = Session();
         Answers("question", () => Replying("I will think about it"));
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.Is<string>(text => text.Contains("question")), It.IsAny<CancellationToken>())).Returns(() => Replying("I will think about it"));
 
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("question", new PromptRequestOptions { Mode = PromptRequestMode.Mixed }));
@@ -428,7 +431,7 @@ public sealed class PromptSessionModesTests
         IReadOnlyList<PromptTool>? offered = null;
         string? identifier = null;
         TaskCompletionSource<Exception> refused = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>(), It.IsAny<IPromptToolHooks?>())).Callback<IReadOnlyList<PromptTool>, IPromptToolHooks?>((tools, _) => offered = tools).Returns(Server().Object);
+        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Callback<IReadOnlyList<PromptTool>>(tools => offered = tools).Returns(Server().Object);
         runner.Setup(mock => mock.Run(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns((IPromptEngine _, ProcessStartInfo _, string text, CancellationToken token) => Refusing(offered!, text, refused, id => identifier = id, token));
 
         Task<Answer> asking = session.Request<Answer>("rate it", new PromptRequestOptions { Mode = PromptRequestMode.Mixed });

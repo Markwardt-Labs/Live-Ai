@@ -16,14 +16,14 @@ public sealed class PromptLibraryToolsTests
 
     private async Task<string> Run(string name, string json)
     {
-        PromptTool tool = library.Create(files, [], false).Single(candidate => candidate.Name == name);
+        PromptTool tool = library.Create(files).Single(candidate => candidate.Name == name);
         return await tool.Handler(JsonDocument.Parse(json).RootElement, CancellationToken.None);
     }
 
     [Fact]
     public void Create_ProvidesTheNamedTools()
     {
-        IReadOnlyList<PromptTool> tools = library.Create(files, [], false);
+        IReadOnlyList<PromptTool> tools = library.Create(files);
 
         Assert.Equal(library.Names, tools.Select(tool => tool.Name));
     }
@@ -31,7 +31,7 @@ public sealed class PromptLibraryToolsTests
     [Fact]
     public void Create_DescribesTheInputsInSnakeCase()
     {
-        PromptTool edit = library.Create(files, [], false).Single(tool => tool.Name == "edit_file");
+        PromptTool edit = library.Create(files).Single(tool => tool.Name == "edit_file");
 
         JsonElement properties = edit.InputSchema.GetProperty("properties");
         Assert.True(properties.TryGetProperty("old_string", out JsonElement _));
@@ -68,7 +68,7 @@ public sealed class PromptLibraryToolsTests
     {
         IStore mounted = new MountedStore(null, new Dictionary<string, IStore> { ["work"] = files });
         Task<string> Call(string name, string json)
-            => library.Create(mounted, ["work"], false).Single(candidate => candidate.Name == name).Handler(JsonDocument.Parse(json).RootElement, default);
+            => library.Create(mounted).Single(candidate => candidate.Name == name).Handler(JsonDocument.Parse(json).RootElement, default);
 
         await Assert.ThrowsAsync<FileNotFoundException>(() => Call("read_file", $$"""{"path":"{{path}}"}"""));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Call("write_file", $$"""{"path":"{{path}}","content":"x"}"""));
@@ -84,7 +84,7 @@ public sealed class PromptLibraryToolsTests
         Mock<IStore> store = new();
         store.Setup(mock => mock.Open(path, StoreOpenMode.Read, It.IsAny<CancellationToken>())).ThrowsAsync(new UnauthorizedAccessException("the store refuses"));
 
-        UnauthorizedAccessException exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => library.Create(store.Object, [], true).Single(candidate => candidate.Name == "read_file").Handler(JsonDocument.Parse($$"""{"path":"{{path}}"}""").RootElement, default));
+        UnauthorizedAccessException exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => library.Create(store.Object).Single(candidate => candidate.Name == "read_file").Handler(JsonDocument.Parse($$"""{"path":"{{path}}"}""").RootElement, default));
 
         Assert.Equal("the store refuses", exception.Message);
     }
@@ -313,33 +313,21 @@ public sealed class PromptLibraryToolsTests
     }
 
     [Fact]
-    public void Create_WithMounts_NamesThemInTheDescriptionsThatNeedToKnow()
+    public void Create_WithAWorkspace_SaysThatPathsAreRelativeToItExceptInTheCache()
     {
-        IReadOnlyList<PromptTool> tools = library.Create(files, ["docs", "data"], false);
-
-        Assert.Contains("The mounted folders are: docs, data.", tools.Single(tool => tool.Name == "list_directory").Description);
-        Assert.Contains("docs, data", tools.Single(tool => tool.Name == "copy_file").Description);
-        Assert.Contains("docs, data", tools.Single(tool => tool.Name == "move_file").Description);
-        Assert.DoesNotContain("The mounted folders are", library.Create(files, [], false).Single(tool => tool.Name == "list_directory").Description);
-    }
-
-    [Fact]
-    public void Create_WithAWorkspace_SaysThatPathsAreRelativeToItExceptInsideTheMounts()
-    {
-        IReadOnlyList<PromptTool> tools = library.Create(files, ["my/docs"], true);
+        IReadOnlyList<PromptTool> tools = library.Create(files);
 
         string listing = tools.Single(tool => tool.Name == "list_directory").Description;
         Assert.Contains("relative to the workspace", listing);
-        Assert.Contains("my/docs", listing);
-        Assert.Contains("list the workspace", listing);
-        Assert.DoesNotContain("Paths start with the path of a mounted folder", listing);
+        Assert.Contains("except that one starting with CACHE: is in the cache", listing);
+        Assert.Contains("list the workspace and CACHE:", listing);
+        Assert.DoesNotContain("Every path starts with", listing);
         Assert.Contains("relative to the workspace", tools.Single(tool => tool.Name == "move_file").Description);
-        Assert.DoesNotContain("my/docs", library.Create(files, [], true).Single(tool => tool.Name == "list_directory").Description);
     }
 
     private async Task<string> RunMounted(FakeStore docs, string name, string json)
     {
-        PromptTool tool = library.Create(new MountedStore(null, new Dictionary<string, IStore> { ["docs"] = docs, ["other"] = new FakeStore() }), ["docs", "other"], false).Single(candidate => candidate.Name == name);
+        PromptTool tool = library.Create(new MountedStore(null, new Dictionary<string, IStore> { ["docs"] = docs, ["other"] = new FakeStore() })).Single(candidate => candidate.Name == name);
         return await tool.Handler(JsonDocument.Parse(json).RootElement, CancellationToken.None);
     }
 

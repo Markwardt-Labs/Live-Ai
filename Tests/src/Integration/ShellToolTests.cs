@@ -1,5 +1,6 @@
 namespace Markwardt.LiveAi.Tests.Integration;
 
+[Collection("Processes")]
 public sealed class ShellToolTests : IDisposable
 {
     private readonly TempFolder temp = new();

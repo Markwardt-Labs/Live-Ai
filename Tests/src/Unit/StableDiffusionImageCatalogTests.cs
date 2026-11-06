@@ -139,13 +139,4 @@ public sealed class StableDiffusionImageCatalogTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Catalog().List(cancellation.Token));
     }
-
-    [Fact]
-    public async Task TheFactoryListsWithoutTouchingTheNetworkWhenAlreadyCancelled()
-    {
-        using CancellationTokenSource cancellation = new();
-        await cancellation.CancelAsync();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => IPromptImageGenerator.StableDiffusionModels(null, cancellation.Token));
-    }
 }

@@ -9,7 +9,7 @@ public sealed class PersistentSessionTests : IDisposable
         => temp.Dispose();
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private string Reply(string text, string session = "persistent-session")
         => $$$"""
@@ -38,7 +38,6 @@ public sealed class PersistentSessionTests : IDisposable
         IPromptEngine provider = new ClaudeEngine(temp.Script("claude", $"printf '%s\\n' \"$@\" > \"$PWD/args.txt\"\necho $$ >> \"$PWD/pids.txt\"\n{prefix}\nn=0\nwhile IFS= read -r line; do\nn=$((n+1))\nprintf '%s\\n' \"$line\" >> \"$PWD/frames.txt\"\n{controls ?? Controls}\n{body}\ndone"), temp.Combine("claude-state"));
 
         IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
-        session.Configuration.IsPersistent = true;
         return session;
     }
 
@@ -52,7 +51,7 @@ public sealed class PersistentSessionTests : IDisposable
         echo '{"type":"result","is_error":false,"session_id":"persistent-session"}'
         """);
         Recorder<PromptEvent> recorder = new();
-        session.Output.Subscribe(recorder);
+        session.Subscribe(recorder);
 
         await session.Send("first");
         await WaitFor(() => session.State == PromptSessionState.Working && File.Exists(temp.Combine("frames.txt")));
@@ -181,23 +180,6 @@ public sealed class PersistentSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task IsPersistent_WhenSetToFalse_EndsTheProcessInTheBackground()
-    {
-        await using IPromptSession session = await Session(Reply("hi"));
-        await session.Request("first");
-        int pid = (await Pids())[0];
-
-        session.Configuration.IsPersistent = false;
-
-        await WaitFor(() => !Alive(pid));
-        Assert.False(Alive(pid));
-        await session.Request("second");
-        int[] pids = await Pids();
-        Assert.Equal(2, pids.Length);
-        Assert.NotEqual(pid, pids[1]);
-    }
-
-    [Fact]
     public async Task DisposeAsync_EndsTheProcess()
     {
         IPromptSession session = await Session(Reply("hi"));
@@ -288,8 +270,8 @@ public sealed class PersistentSessionTests : IDisposable
         await using IPromptSession session = await Session(Reply("hi"));
         await session.Request("first");
 
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
-        session.Configuration.ModelSettings["effort"] = "low";
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.Low;
         await session.Request("second");
 
         Assert.Single(await Pids());
@@ -353,7 +335,7 @@ public sealed class PersistentSessionTests : IDisposable
         await using IPromptSession session = await Session(Reply("hi"), controls: refusing);
         await session.Request("first");
 
-        session.Configuration.Model = new PromptModel { Id = "opus", Settings = [] };
+        session.Configuration.Capability = PromptCapability.Strong;
         PromptSessionException exception = await Assert.ThrowsAsync<PromptSessionException>(() => session.Request("second"));
 
         Assert.Equal("no such model", exception.Message);
@@ -403,7 +385,7 @@ public sealed class PersistentSessionTests : IDisposable
     {
         await using IPromptSession session = await Session(Reply("hi"));
 
-        await session.Send("go", new PromptOptions { Notes = ["the build passes"] });
+        await session.Send("go", new PromptSendOptions { Notes = ["the build passes"] });
         await WaitFor(() => session.State == PromptSessionState.Waiting && File.Exists(temp.Combine("frames.txt")));
 
         JsonElement content = JsonDocument.Parse((await File.ReadAllLinesAsync(temp.Combine("frames.txt")))[0]).RootElement.GetProperty("message").GetProperty("content");
@@ -411,21 +393,18 @@ public sealed class PersistentSessionTests : IDisposable
         Assert.Equal("go", content[1].GetProperty("text").GetString());
     }
 
-    [Theory]
-    [InlineData(true, 1)]
-    [InlineData(false, 2)]
-    public async Task Ask_WithCodex_KeepsOneAppServerForEveryPromptOnlyWhenPersistent(bool persistent, int processes)
+    [Fact]
+    public async Task Ask_WithCodex_KeepsOneAppServerForEveryPrompt()
     {
         IPromptEngine provider = new CodexEngine(new FakeCodex(temp).Script(reply: "hi"), temp.Combine("codex-state"));
         await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
-        session.Configuration.IsPersistent = persistent;
 
         await session.Request("first");
         await session.Request("second");
 
         int[] pids = await Pids();
-        Assert.Equal(processes, pids.Length);
-        Assert.Equal(persistent, Alive(pids[0]));
+        Assert.Single(pids);
+        Assert.True(Alive(pids[0]));
     }
 
     [Fact]
@@ -434,17 +413,16 @@ public sealed class PersistentSessionTests : IDisposable
         FakeCodex fake = new(temp);
         IPromptEngine provider = new CodexEngine(fake.Script(reply: "hi"), temp.Combine("codex-state"));
         await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
-        session.Configuration.IsPersistent = true;
         await session.Request("first");
 
-        session.Configuration.Model = new PromptModel { Id = "gpt-other", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high"])] };
-        session.Configuration.ModelSettings["effort"] = "high";
+        session.Configuration.Capability = PromptCapability.Strong;
+        session.Configuration.Effort = PromptEffort.High;
         await session.Request("second");
 
         Assert.Single(await Pids());
         IReadOnlyList<JsonElement> turns = await fake.Parameters("turn/start");
-        Assert.Equal(("test-model", "medium"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
-        Assert.Equal(("gpt-other", "high"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
+        Assert.Equal(("gpt-5.6-terra", "medium"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
+        Assert.Equal(("gpt-5.6-sol", "high"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
     }
 
     [Fact]

@@ -15,8 +15,7 @@ internal interface IPromptToolServer : IAsyncDisposable
 /// <param name="tools">The tools to offer.</param>
 /// <param name="listener">The started listener to serve on.</param>
 /// <param name="endpoint">How the tool reaches the listener.</param>
-/// <param name="hooks">Told of every call, or <see langword="null" /> for none.</param>
-internal sealed class PromptToolServer(IReadOnlyList<PromptTool> tools, HttpListener listener, ToolEndpoint endpoint, IPromptToolHooks? hooks = null) : IPromptToolServer
+internal sealed class PromptToolServer(IReadOnlyList<PromptTool> tools, HttpListener listener, ToolEndpoint endpoint) : IPromptToolServer
 {
     private readonly CancellationTokenSource stopping = new();
 
@@ -167,28 +166,6 @@ internal sealed class PromptToolServer(IReadOnlyList<PromptTool> tools, HttpList
         JsonElement arguments = parameters.TryGetProperty("arguments", out JsonElement given) && given.ValueKind == JsonValueKind.Object ? given : noArguments;
 
         string callId = parameters.TryGetProperty("_meta", out JsonElement meta) && meta.ValueKind == JsonValueKind.Object && meta.TryGetProperty("claudecode/toolUseId", out JsonElement toolUse) && toolUse.ValueKind == JsonValueKind.String ? toolUse.GetString()! : id?.ToString() ?? string.Empty;
-        PromptToolCallEvent call = new() { Id = callId, Server = Endpoint.ServerName, Name = tool.Name, Input = arguments.GetRawText() };
-
-        if (hooks is not null)
-        {
-            PromptToolDecision decision;
-
-            try
-            {
-                decision = await hooks.Before(call, stopping.Token);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                decision = PromptToolDecision.Deny(exception.Message);
-            }
-
-            if (!decision.Allowed)
-            {
-                return Success(id, Content($"The call was not allowed{(string.IsNullOrWhiteSpace(decision.Reason) ? string.Empty : $": {decision.Reason}")}. Do not try to get around this; tell the user what you wanted to do, or choose another way.", true));
-            }
-        }
-
-        Stopwatch watch = Stopwatch.StartNew();
         string output;
         bool failed;
 
@@ -201,17 +178,6 @@ internal sealed class PromptToolServer(IReadOnlyList<PromptTool> tools, HttpList
         {
             output = exception.Message;
             failed = true;
-        }
-
-        if (hooks is not null)
-        {
-            try
-            {
-                await hooks.After(call, new PromptToolResultEvent { Id = callId, Output = output, IsError = failed }, watch.Elapsed, stopping.Token);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-            }
         }
 
         return Success(id, Content(output, failed));

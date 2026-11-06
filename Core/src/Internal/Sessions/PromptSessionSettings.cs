@@ -3,43 +3,29 @@ namespace Markwardt.LiveAi;
 /// <summary>
 /// The settings of a session: values that the caller sets whenever it likes and that the session takes, all at once, when the next prompt starts. Every setter and every change of a collection checks its value at once, and tells the session through <see cref="Changed" /> so that it can end a process that is no longer wanted.
 /// </summary>
-internal sealed class PromptSessionSettings : IPromptSessionConfiguration
+internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IPromptSessionTransientConfiguration
 {
     private readonly object gate = new();
 
     private readonly Regex toolName = new("^[A-Za-z0-9_-]{1,64}$");
 
-    private readonly Regex mountName = new("^(?!\\.\\.?(?:/|$))[^/\\\\]+(?:/(?!\\.\\.?(?:/|$))[^/\\\\]+)*$");
-
     private readonly IReadOnlyList<string> reservedToolNames;
 
     private readonly string reservedServerName = "liveai";
 
-    private PromptModel? model;
+    private PromptCapability capability;
 
-    private bool isPersistent;
+    private PromptEffort effort;
 
-    private bool enableShell;
+    private bool isShellAllowed;
 
-    private bool enableImages;
+    private bool isSandboxed;
 
-    private bool enableWeb;
+    private bool isWebAllowed;
 
-    private bool enableSearch;
+    private PromptImageOptions? imageGeneration;
 
-    private IStore? workspace;
-
-    private Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? beforeToolCall;
-
-    private Func<PromptToolCallEvent, PromptToolResultEvent, TimeSpan, CancellationToken, Task>? afterToolCall;
-
-    private IPromptImageGenerator? imageGenerator;
-
-    private Func<Uri, CancellationToken, Task<bool>>? webFilter;
-
-    private Func<string, CancellationToken, Task<string>>? asker;
-
-    private PromptSessionLimits limits = new();
+    private PromptAsker? asker;
 
     private string? instructions;
 
@@ -53,12 +39,15 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     public PromptSessionSettings(PromptSessionRecord record, IReadOnlyList<string> reservedToolNames)
     {
         this.reservedToolNames = reservedToolNames;
-        model = record.Model;
+        capability = record.Capability;
+        effort = record.Effort;
+        isShellAllowed = record.IsShellAllowed;
+        isSandboxed = record.IsSandboxed;
+        isWebAllowed = record.IsWebAllowed;
+        imageGeneration = record.ImageGeneration;
         instructions = record.Instructions;
         Tools = new GuardedList<PromptTool>(gate, CheckTool, Begin, Notify);
-        Mounts = new GuardedDictionary<IStore>(gate, CheckMount, Begin, Notify, []);
         McpServers = new GuardedDictionary<PromptMcpServer>(gate, CheckServer, Begin, Notify, record.McpServers);
-        ModelSettings = new GuardedDictionary<string>(gate, CheckModelSetting, Begin, Notify, record.ModelSettings);
     }
 
     /// <summary>
@@ -67,165 +56,111 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     public event Action? Changed;
 
     /// <inheritdoc />
-    public PromptModel? Model
+    public PromptCapability Capability
     {
         get
         {
             lock (gate)
             {
-                return model;
+                return capability;
             }
         }
 
-        set => Set(() =>
+        set
         {
-            model = value;
-            ModelSettings.Replace(value is null ? [] : value.Reconcile(ModelSettings.Copy()).Settings);
-        });
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "The capability is not a defined value.");
+            }
+
+            Set(() => capability = value);
+        }
     }
 
     /// <inheritdoc />
-    public bool IsPersistent
+    public PromptEffort Effort
     {
         get
         {
             lock (gate)
             {
-                return isPersistent;
+                return effort;
             }
         }
 
-        set => Set(() => isPersistent = value);
+        set
+        {
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "The effort is not a defined value.");
+            }
+
+            Set(() => effort = value);
+        }
     }
 
     /// <inheritdoc />
-    public bool EnableShell
+    public bool IsShellAllowed
     {
         get
         {
             lock (gate)
             {
-                return enableShell;
+                return isShellAllowed;
             }
         }
 
-        set => Set(() => enableShell = value);
+        set => Set(() => isShellAllowed = value);
     }
 
     /// <inheritdoc />
-    public bool EnableImages
+    public bool IsSandboxed
     {
         get
         {
             lock (gate)
             {
-                return enableImages;
+                return isSandboxed;
             }
         }
 
-        set => Set(() => enableImages = value);
+        set => Set(() => isSandboxed = value);
     }
 
     /// <inheritdoc />
-    public bool EnableWeb
+    public bool IsWebAllowed
     {
         get
         {
             lock (gate)
             {
-                return enableWeb;
+                return isWebAllowed;
             }
         }
 
-        set => Set(() => enableWeb = value);
+        set => Set(() => isWebAllowed = value);
     }
 
     /// <inheritdoc />
-    public bool EnableSearch
+    public PromptImageOptions? ImageGeneration
     {
         get
         {
             lock (gate)
             {
-                return enableSearch;
+                return imageGeneration;
             }
         }
 
-        set => Set(() => enableSearch = value);
-    }
-
-    /// <inheritdoc />
-    public IStore? Workspace
-    {
-        get
+        set
         {
-            lock (gate)
-            {
-                return workspace;
-            }
+            value?.Validate();
+            Set(() => imageGeneration = value);
         }
-
-        set => Set(() => workspace = value);
     }
 
     /// <inheritdoc />
-    public Func<PromptToolCallEvent, CancellationToken, Task<PromptToolDecision>>? BeforeToolCall
-    {
-        get
-        {
-            lock (gate)
-            {
-                return beforeToolCall;
-            }
-        }
-
-        set => Set(() => beforeToolCall = value);
-    }
-
-    /// <inheritdoc />
-    public Func<PromptToolCallEvent, PromptToolResultEvent, TimeSpan, CancellationToken, Task>? AfterToolCall
-    {
-        get
-        {
-            lock (gate)
-            {
-                return afterToolCall;
-            }
-        }
-
-        set => Set(() => afterToolCall = value);
-    }
-
-    /// <inheritdoc />
-    public IPromptImageGenerator? ImageGenerator
-    {
-        get
-        {
-            lock (gate)
-            {
-                return imageGenerator;
-            }
-        }
-
-        set => Set(() => imageGenerator = value);
-    }
-
-    /// <inheritdoc />
-    public Func<Uri, CancellationToken, Task<bool>>? WebFilter
-    {
-        get
-        {
-            lock (gate)
-            {
-                return webFilter;
-            }
-        }
-
-        set => Set(() => webFilter = value);
-    }
-
-    /// <inheritdoc />
-    public Func<string, CancellationToken, Task<string>>? Asker
+    public PromptAsker? Asker
     {
         get
         {
@@ -236,29 +171,6 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
         }
 
         set => Set(() => asker = value);
-    }
-
-    public PromptSessionLimits Limits
-    {
-        get
-        {
-            lock (gate)
-            {
-                return limits;
-            }
-        }
-
-        set
-        {
-            ArgumentNullException.ThrowIfNull(value);
-
-            if (value.Problem is { } problem)
-            {
-                throw new ArgumentException(problem, nameof(value));
-            }
-
-            Set(() => limits = value);
-        }
     }
 
     /// <inheritdoc />
@@ -281,48 +193,13 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     public GuardedList<PromptTool> Tools { get; }
 
     /// <summary>
-    /// Gets the mounted stores by name.
-    /// </summary>
-    public GuardedDictionary<IStore> Mounts { get; }
-
-    /// <summary>
     /// Gets the external MCP servers by name.
     /// </summary>
     public GuardedDictionary<PromptMcpServer> McpServers { get; }
 
-    /// <summary>
-    /// Gets the values of the selected model's settings.
-    /// </summary>
-    public GuardedDictionary<string> ModelSettings { get; }
+    IList<PromptTool> IPromptSessionTransientConfiguration.Tools => Tools;
 
-    /// <inheritdoc />
-    IList<PromptTool> IPromptSessionConfiguration.Tools => Tools;
-
-    /// <inheritdoc />
-    IDictionary<string, IStore> IPromptSessionConfiguration.Mounts => Mounts;
-
-    /// <inheritdoc />
-    IDictionary<string, PromptMcpServer> IPromptSessionConfiguration.McpServers => McpServers;
-
-    IDictionary<string, string> IPromptSessionConfiguration.ModelSettings => ModelSettings;
-
-    /// <summary>
-    /// Gets the limits a request runs under, as the settings say now, with the window limit of a loop added.
-    /// </summary>
-    /// <param name="extra">The limits of a loop, whose window limit is added, or <see langword="null" /> for none.</param>
-    /// <returns>The limits.</returns>
-    public PromptRequestLimits RequestLimits(PromptRequestLimits? extra = null)
-    {
-        PromptSessionSettingsSnapshot snapshot = Snapshot();
-
-        return new PromptRequestLimits
-        {
-            Timeout = snapshot.Limits.Timeout,
-            WindowLimit = snapshot.Limits.WindowLimit,
-            Retry = snapshot.Limits.Retry,
-            MaxToolCalls = snapshot.Limits.MaxToolCalls
-        }.WithWindowOf(extra);
-    }
+    IDictionary<string, PromptMcpServer> IPromptSessionTransientConfiguration.McpServers => McpServers;
 
     /// <summary>
     /// Takes the settings as they are now.
@@ -334,24 +211,16 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
         {
             return new PromptSessionSettingsSnapshot
             {
-                Model = model,
-                ModelSettings = ModelSettings.Copy(),
-                IsPersistent = isPersistent,
-                EnableShell = enableShell,
-                EnableImages = enableImages,
-                EnableWeb = enableWeb,
-                EnableSearch = enableSearch,
-                Workspace = workspace,
-                BeforeToolCall = beforeToolCall,
-                AfterToolCall = afterToolCall,
-                ImageGenerator = imageGenerator,
-                WebFilter = webFilter,
+                Capability = capability,
+                Effort = effort,
+                IsShellAllowed = isShellAllowed,
+                IsSandboxed = isSandboxed,
+                IsWebAllowed = isWebAllowed,
+                ImageGeneration = imageGeneration,
                 Asker = asker,
-                Limits = limits,
                 Instructions = instructions,
                 McpServers = McpServers.Copy(),
-                Tools = Tools.Copy(),
-                Mounts = Mounts.Copy()
+                Tools = Tools.Copy()
             };
         }
     }
@@ -389,39 +258,11 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration
     private void Notify()
         => Changed?.Invoke();
 
-    private void CheckModelSetting(string id, string value)
-    {
-        if (model is null)
-        {
-            throw new PromptSessionModelException("Select a model before changing its settings.");
-        }
-
-        if (model.Settings is null)
-        {
-            return;
-        }
-
-        PromptModelSetting setting = model.Settings.FirstOrDefault(offered => offered.Id == id) ?? throw new ArgumentException($"The model {model.Id} has no setting '{id}'.", nameof(id));
-
-        if (!setting.Accepts(value))
-        {
-            throw new ArgumentException($"The setting '{id}' does not accept '{value}'.", nameof(value));
-        }
-    }
-
     private void CheckTool(PromptTool tool, IReadOnlyList<PromptTool> others)
     {
         if (!toolName.IsMatch(tool.Name) || reservedToolNames.Contains(tool.Name, StringComparer.OrdinalIgnoreCase) || others.Any(other => string.Equals(other.Name, tool.Name, StringComparison.OrdinalIgnoreCase)))
         {
             throw new ArgumentException("Tool names must be 1 to 64 letters, digits, underscores and hyphens, unique, and not the name of a library tool.", nameof(tool));
-        }
-    }
-
-    private void CheckMount(string name, IStore store)
-    {
-        if (!mountName.IsMatch(name))
-        {
-            throw new ArgumentException("A mount path must be names separated by /, none of them empty, . or .., and none containing \\.", nameof(name));
         }
     }
 

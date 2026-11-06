@@ -6,6 +6,24 @@ namespace Markwardt.LiveAi;
 public sealed record PromptMcpServer
 {
     /// <summary>
+    /// Describes a server that is a program talking over its standard input and output.
+    /// </summary>
+    /// <param name="command">The program.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <returns>The server.</returns>
+    public static PromptMcpServer Stdio(string command, params string[] arguments)
+        => new() { Command = command, Arguments = arguments };
+
+    /// <summary>
+    /// Describes a server that is reached over HTTP.
+    /// </summary>
+    /// <param name="url">The address.</param>
+    /// <param name="bearerTokenVariable">The name of the environment variable that holds the bearer token, or <see langword="null" /> for none.</param>
+    /// <returns>The server.</returns>
+    public static PromptMcpServer Http(string url, string? bearerTokenVariable = null)
+        => new() { Url = url, BearerTokenVariable = bearerTokenVariable };
+
+    /// <summary>
     /// Gets the program to start for a server that talks over its standard input and output, or <see langword="null" /> for an HTTP server.
     /// </summary>
     public string? Command { get; init; }
@@ -29,24 +47,6 @@ public sealed record PromptMcpServer
     /// Gets the name of an environment variable that holds the bearer token the HTTP server wants, or <see langword="null" /> for none.
     /// </summary>
     public string? BearerTokenVariable { get; init; }
-
-    /// <summary>
-    /// Describes a server that is a program talking over its standard input and output.
-    /// </summary>
-    /// <param name="command">The program.</param>
-    /// <param name="arguments">Its arguments.</param>
-    /// <returns>The server.</returns>
-    public static PromptMcpServer Stdio(string command, params string[] arguments)
-        => new() { Command = command, Arguments = arguments };
-
-    /// <summary>
-    /// Describes a server that is reached over HTTP.
-    /// </summary>
-    /// <param name="url">The address.</param>
-    /// <param name="bearerTokenVariable">The name of the environment variable that holds the bearer token, or <see langword="null" /> for none.</param>
-    /// <returns>The server.</returns>
-    public static PromptMcpServer Http(string url, string? bearerTokenVariable = null)
-        => new() { Url = url, BearerTokenVariable = bearerTokenVariable };
 
     /// <inheritdoc />
     public bool Equals(PromptMcpServer? other)

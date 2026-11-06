@@ -2,7 +2,7 @@ namespace Markwardt.LiveAi.Tests.Unit;
 
 public sealed class PromptGenerateImageToolTests
 {
-    private readonly IStore store = IStore.FromMemory();
+    private readonly IStore store = new MemoryStore();
 
     private readonly FakeImageGenerator generator = new();
 
@@ -36,12 +36,12 @@ public sealed class PromptGenerateImageToolTests
     }
 
     [Theory]
-    [InlineData(PromptImageFeatures.None, new[] { "prompt", "path", "width", "height", "quality", "count" })]
-    [InlineData(PromptImageFeatures.Transparency, new[] { "prompt", "path", "width", "height", "quality", "count", "transparent" })]
-    [InlineData(PromptImageFeatures.NegativePrompt | PromptImageFeatures.Seed, new[] { "prompt", "path", "width", "height", "quality", "count", "negative_prompt", "seed" })]
-    public void Create_OffersOnlyWhatTheGeneratorCanDo(PromptImageFeatures features, string[] expected)
+    [InlineData((int)(PromptImageFeatures.None), new[] { "prompt", "path", "width", "height", "quality", "count" })]
+    [InlineData((int)(PromptImageFeatures.Transparency), new[] { "prompt", "path", "width", "height", "quality", "count", "transparent" })]
+    [InlineData((int)(PromptImageFeatures.NegativePrompt | PromptImageFeatures.Seed), new[] { "prompt", "path", "width", "height", "quality", "count", "negative_prompt", "seed" })]
+    public void Create_OffersOnlyWhatTheGeneratorCanDo(int features, string[] expected)
     {
-        generator.Features = features;
+        generator.Features = (PromptImageFeatures)features;
 
         Assert.Equal(expected, Tool().InputSchema.GetProperty("properties").EnumerateObject().Select(property => property.Name));
     }
@@ -155,7 +155,7 @@ public sealed class PromptGenerateImageToolTests
     [Fact]
     public async Task Run_SavesIntoAMountedFolderThroughTheStoreOfTheSession()
     {
-        IStore art = IStore.FromMemory();
+        IStore art = new MemoryStore();
         MountedStore mounted = new(null, new Dictionary<string, IStore> { ["art"] = art });
         PromptTool tool = new PromptLibraryTools().CreateGenerateImage(mounted, generator);
 
@@ -231,13 +231,5 @@ public sealed class PromptGenerateImageToolTests
         InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() => Run("""{"prompt":"x","path":"a.png"}"""));
 
         Assert.Equal("The service refused the prompt.", exception.Message);
-    }
-
-    [Fact]
-    public async Task Run_RefusesToSaveWhereTheStoreDoesNotAllowWriting()
-    {
-        PromptTool tool = new PromptLibraryTools().CreateGenerateImage(store.AsReadOnly(), generator);
-
-        await Assert.ThrowsAnyAsync<Exception>(() => Run("""{"prompt":"x","path":"a.png"}""", tool));
     }
 }

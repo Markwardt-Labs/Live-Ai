@@ -9,7 +9,7 @@ public sealed class StructuredSessionTests : IDisposable
         => temp.Dispose();
 
     private IPromptProvider Provider(IPromptEngine engine)
-        => new PromptProvider(engine, temp.Combine("data"));
+        => TestProviders.Make(engine, temp.Combine("data"));
 
     private IPromptEngine Claude(string? claude = null)
         => new ClaudeEngine(temp.Script("claude", claude ?? "printf '%s\\n' \"$@\" > \"$PWD/claude-args.txt\"\nIFS= read -r line; printf '%s' \"$line\" > \"$PWD/claude-stdin.txt\"\necho '{\"type\":\"result\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"x\",\"structured_output\":{\"summary\":\"fine\",\"score\":7,\"details\":{\"note\":\"n\"}}}'"), temp.Combine("claude-state"));
@@ -62,10 +62,13 @@ public sealed class StructuredSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task Codex_ResumesTheThreadWithTheSchema()
+    public async Task Codex_ResumesTheLoadedThreadWithTheSchema()
     {
-        IPromptSession session = await Create(Codex());
-        await session.Request<Answer>("one");
+        IPromptEngine engine = Codex();
+        IPromptSession first = await Create(engine);
+        await first.Request<Answer>("one");
+        await first.DisposeAsync();
+        IPromptSession session = temp.Track(await Provider(engine).Load(first.Id));
 
         await session.Request<Answer>("two");
 

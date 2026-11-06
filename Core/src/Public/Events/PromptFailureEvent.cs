@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// The work of the session failed. The session itself goes on and returns to waiting, so this is reported on <see cref="IPromptSession.Output" /> and does not end it. A request that was asked directly or in a fork also gets the exception.
+/// The work of the session failed. The session itself goes on and returns to waiting, so this is reported on <see cref="IPromptSession" /> and does not end it. A request that was asked directly or in a fork also gets the exception.
 /// </summary>
 public sealed record PromptFailureEvent : PromptEvent
 {

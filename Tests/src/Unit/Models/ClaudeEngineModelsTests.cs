@@ -18,7 +18,7 @@ public sealed class ClaudeEngineModelsTests : IDisposable
         => temp.Dispose();
 
     private ClaudeEngine Engine(string body, TimeSpan? timeout = null)
-        => new(temp.Script("claude", body), temp.Combine("claude-state")) { ModelsTimeout = timeout ?? TimeSpan.FromSeconds(30) };
+        => new(temp.Script("claude", body, false), temp.Combine("claude-state")) { ModelsTimeout = timeout ?? TimeSpan.FromSeconds(30) };
 
     private string Answer(string json)
         => $"IFS= read -r line\nprintf '%s\\n' '{json}'\ncat > /dev/null";

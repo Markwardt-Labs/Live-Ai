@@ -2,7 +2,7 @@ namespace Markwardt.LiveAi.Tests.Unit;
 
 public sealed class PromptImageToolTests
 {
-    private readonly IStore store = IStore.FromMemory();
+    private readonly IStore store = new MemoryStore();
 
     private readonly List<(string Path, PromptAttachment Image)> given = [];
 
@@ -30,6 +30,15 @@ public sealed class PromptImageToolTests
         Assert.Equal("view_image", tool.Name);
         Assert.Equal("view_image", new PromptLibraryTools().ImageName);
         Assert.Contains("path", tool.InputSchema.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_SaysItsPathsAreTheOnesOfTheFileTools()
+    {
+        string description = Tool().Description;
+
+        Assert.Contains("same paths as the file tools", description, StringComparison.Ordinal);
+        Assert.Contains("CACHE:", description, StringComparison.Ordinal);
     }
 
     [Theory]

@@ -177,7 +177,7 @@ public sealed class PromptWebSearchToolTests
     }
 
     [Fact]
-    public async Task Run_IsNotSubjectToAWebFilterBecauseItNeverAsksOne()
+    public async Task Run_ReturnsResultsThatPointToThisMachineToo()
     {
         answer = _ => Page(Result("http://127.0.0.1/internal", "Local", "s"));
 

@@ -3,7 +3,7 @@ namespace Markwardt.LiveAi.Tests;
 /// <summary>
 /// A generator that makes the images a test gives it and keeps what it was asked for.
 /// </summary>
-public sealed class FakeImageGenerator : IPromptImageGenerator
+internal sealed class FakeImageGenerator : IPromptImageGenerator
 {
     /// <summary>
     /// Gets the bytes that start a PNG file, which is enough to be taken for one.

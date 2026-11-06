@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// A file that goes along with a prompt (see <see cref="PromptOptions.Attachments" />). Two attachments are equal when their name, media type and content are. Images (PNG, JPEG, GIF and WebP) are shown to the AI, and so are PDF documents with Claude Code; text files (such as <c>text/plain</c>, <c>text/csv</c> or <c>application/json</c>) are put into the prompt as text, with both providers. Anything else is refused when the prompt is sent, because there is no way to give it to the AI directly: mount it instead and let the AI read it with the file tools.
+/// A file that goes along with a prompt (see <see cref="PromptSendOptions.Attachments" />). Two attachments are equal when their name, media type and content are. Images (PNG, JPEG, GIF and WebP) are shown to the AI, and so are PDF documents with Claude Code; text files (such as <c>text/plain</c>, <c>text/csv</c> or <c>application/json</c>) are put into the prompt as text, with both providers. Anything else is refused when the prompt is sent, because there is no way to give it to the AI directly: put it in the session's <see cref="IPromptSession.Cache" /> instead and let the AI read it with the file tools.
 /// </summary>
 public sealed record PromptAttachment
 {

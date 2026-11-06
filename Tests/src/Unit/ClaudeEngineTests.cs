@@ -335,7 +335,7 @@ public sealed class ClaudeEngineTests
         => tools.Guidance(Record());
 
     private ToolEndpoint Tools()
-        => new() { Url = "http://127.0.0.1:5555/mcp", Token = "secret-token", Names = ["alpha", "beta"] };
+        => new() { Url = "http://127.0.0.1:5555/mcp", Token = "secret-token", Names = ["alpha", "beta"], CacheName = "CACHE:" };
 
     [Fact]
     public void CreateStart_WithTools_PassesAnMcpConfigAndAllowsTheTools()
@@ -366,9 +366,7 @@ public sealed class ClaudeEngineTests
     [Fact]
     public void CreateStart_TellsTheAiHowItCanWorkInAnyCaseOfTools()
     {
-        ToolEndpoint files = Tools() with { HasFiles = true };
-
-        foreach ((ToolEndpoint? tools, string expected) in new[] { ((ToolEndpoint?)null, "You have no tools"), (Tools(), "no access to files"), (files, "file tools of the MCP server named liveai") })
+        foreach ((ToolEndpoint? tools, string expected) in new[] { ((ToolEndpoint?)null, "You have no tools"), (Tools(), "file tools of the MCP server named liveai") })
         {
             ProcessStartInfo once = engine.CreateStart(Record().ToStart(null, null, tools));
             ProcessStartInfo persistent = engine.CreatePersistentStart(Record().ToStart(null, null, tools));

@@ -39,14 +39,14 @@ public sealed class OpenAiImageGeneratorTests
     }
 
     [Theory]
-    [InlineData(PromptImageQuality.Draft, "low")]
-    [InlineData(PromptImageQuality.Standard, "medium")]
-    [InlineData(PromptImageQuality.High, "high")]
-    public async Task Generate_TurnsTheQualityIntoALevelOfTheService(PromptImageQuality quality, string level)
+    [InlineData((int)PromptImageQuality.Draft, "low")]
+    [InlineData((int)PromptImageQuality.Standard, "medium")]
+    [InlineData((int)PromptImageQuality.High, "high")]
+    public async Task Generate_TurnsTheQualityIntoALevelOfTheService(int quality, string level)
     {
         answer = _ => Json($$"""{"data":[{"b64_json":"{{Encoded()}}"}]}""");
 
-        await Generator().Generate(new PromptImageRequest { Prompt = "x", Quality = quality });
+        await Generator().Generate(new PromptImageRequest { Prompt = "x", Quality = (PromptImageQuality)quality });
 
         Assert.Equal(level, bodies.Single().GetProperty("quality").GetString());
     }
@@ -153,37 +153,14 @@ public sealed class OpenAiImageGeneratorTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Generator().Generate(new PromptImageRequest { Prompt = "x" }, cancellation.Token));
     }
 
-    [Fact]
-    public void TheFactoryMakesAGeneratorThatNeedsNoAdvice()
-    {
-        IPromptImageGenerator generator = IPromptImageGenerator.OpenAi("key");
-
-        Assert.Null(generator.PromptGuide);
-    }
-
     [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void TheFactoryRefusesAnEmptyKey(string key)
-        => Assert.Throws<ArgumentException>(() => IPromptImageGenerator.OpenAi(key));
-
-    [Fact]
-    public void TheFactoryUsesTheFlareModelUnlessAnotherIsGiven()
-    {
-        IPromptImageGenerator generator = IPromptImageGenerator.OpenAi("key");
-        IPromptImageGenerator other = IPromptImageGenerator.OpenAi("key", "gpt-image-2");
-
-        Assert.Equal((PromptImageFeatures.Transparency, PromptImageFeatures.None), (generator.Features, other.Features));
-    }
-
-    [Theory]
-    [InlineData("gpt-image-2", PromptImageFeatures.None)]
-    [InlineData("GPT-Image-2-2026-04-21", PromptImageFeatures.None)]
-    [InlineData("gpt-image-2.5-flare", PromptImageFeatures.Transparency)]
-    [InlineData("gpt-image-2.6-sunburst", PromptImageFeatures.Transparency)]
-    [InlineData("gpt-image-1.5", PromptImageFeatures.Transparency)]
-    [InlineData("gpt-image-1-mini", PromptImageFeatures.Transparency)]
-    [InlineData("some-other-model", PromptImageFeatures.Transparency)]
-    public void Features_OfferTransparencyExceptWhereTheApiRefusesIt(string model, PromptImageFeatures expected)
-        => Assert.Equal(expected, Generator(model: model).Features);
+    [InlineData("gpt-image-2", (int)PromptImageFeatures.None)]
+    [InlineData("GPT-Image-2-2026-04-21", (int)PromptImageFeatures.None)]
+    [InlineData("gpt-image-2.5-flare", (int)PromptImageFeatures.Transparency)]
+    [InlineData("gpt-image-2.6-sunburst", (int)PromptImageFeatures.Transparency)]
+    [InlineData("gpt-image-1.5", (int)PromptImageFeatures.Transparency)]
+    [InlineData("gpt-image-1-mini", (int)PromptImageFeatures.Transparency)]
+    [InlineData("some-other-model", (int)PromptImageFeatures.Transparency)]
+    public void Features_OfferTransparencyExceptWhereTheApiRefusesIt(string model, int expected)
+        => Assert.Equal((PromptImageFeatures)expected, Generator(model: model).Features);
 }

@@ -126,7 +126,7 @@ public sealed class PromptEverydayToolTests
             ["a.txt"] = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n",
             ["b.txt"] = "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nnine\nten\nextra\n"
         });
-        PromptTool tool = new PromptLibraryTools().Create(store, [], true).Single(created => created.Name == "diff_files");
+        PromptTool tool = new PromptLibraryTools().Create(store).Single(created => created.Name == "diff_files");
 
         string diff = await Run(tool, """{"path_a":"a.txt","path_b":"b.txt","context_lines":1}""");
 
@@ -137,7 +137,7 @@ public sealed class PromptEverydayToolTests
     public async Task DiffFiles_SaysWhenTheFilesAreTheSameAndIgnoresLineEndings()
     {
         IStore store = await TestStoreExtensions.Memory(new Dictionary<string, string> { ["a.txt"] = "x\r\ny\r\n", ["b.txt"] = "x\ny\n", ["c.txt"] = "x\ny" });
-        PromptTool tool = new PromptLibraryTools().Create(store, [], true).Single(created => created.Name == "diff_files");
+        PromptTool tool = new PromptLibraryTools().Create(store).Single(created => created.Name == "diff_files");
 
         Assert.Equal("The files are identical.", await Run(tool, """{"path_a":"a.txt","path_b":"b.txt"}"""));
         Assert.Equal("The files are identical.", await Run(tool, """{"path_a":"b.txt","path_b":"c.txt"}"""));
@@ -147,7 +147,7 @@ public sealed class PromptEverydayToolTests
     public async Task DiffFiles_RefusesMissingPathsBinaryFilesAndFilesThatAreNotThere()
     {
         IStore store = await TestStoreExtensions.Memory(new Dictionary<string, string> { ["a.txt"] = "x", ["bin.dat"] = "a\0b" });
-        PromptTool tool = new PromptLibraryTools().Create(store, [], true).Single(created => created.Name == "diff_files");
+        PromptTool tool = new PromptLibraryTools().Create(store).Single(created => created.Name == "diff_files");
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => Run(tool, """{"path_a":"a.txt"}"""));
         await Assert.ThrowsAsync<InvalidOperationException>(() => Run(tool, """{"path_a":"a.txt","path_b":"bin.dat"}"""));
@@ -164,7 +164,7 @@ public sealed class PromptEverydayToolTests
             ["c.txt"] = string.Join('\n', Enumerable.Range(0, 900).Select(number => $"old line {number} with a long tail to make the diff long enough to be cut {new string('x', 30)}")),
             ["d.txt"] = string.Join('\n', Enumerable.Range(0, 900).Select(number => $"new line {number} with a long tail to make the diff long enough to be cut {new string('y', 30)}"))
         });
-        PromptTool tool = new PromptLibraryTools().Create(store, [], true).Single(created => created.Name == "diff_files");
+        PromptTool tool = new PromptLibraryTools().Create(store).Single(created => created.Name == "diff_files");
 
         InvalidOperationException tooMany = await Assert.ThrowsAsync<InvalidOperationException>(() => Run(tool, """{"path_a":"a.txt","path_b":"b.txt"}"""));
         string cut = await Run(tool, """{"path_a":"c.txt","path_b":"d.txt"}""");
@@ -179,6 +179,6 @@ public sealed class PromptEverydayToolTests
         PromptLibraryTools tools = new();
 
         Assert.Contains("diff_files", tools.Names);
-        Assert.Contains("diff_files", tools.Create(IStore.FromMemory(), [], true).Select(tool => tool.Name));
+        Assert.Contains("diff_files", tools.Create(new MemoryStore()).Select(tool => tool.Name));
     }
 }

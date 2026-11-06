@@ -8,10 +8,11 @@ internal static class LibraryToolMocks
     extension(Mock<IPromptLibraryTools> tools)
     {
         /// <summary>
-        /// Names and builds the tools that are offered in every session: the time, the search of tools and the delegation, besides the search of the web.
+        /// Names and builds the tools that are offered in every session: the time, the search of tools and the delegation, besides the search of the web, and names the cache.
         /// </summary>
         public void OfferTheEverydayTools()
         {
+            tools.SetupGet(mock => mock.CacheName).Returns("CACHE:");
             tools.SetupGet(mock => mock.SearchName).Returns("search_web");
             tools.SetupGet(mock => mock.GenerateImageName).Returns("generate_image");
             tools.SetupGet(mock => mock.TimeName).Returns("current_time");

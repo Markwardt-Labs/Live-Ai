@@ -5,13 +5,29 @@ namespace Markwardt.LiveAi;
 /// </summary>
 /// <param name="root">The full path of the folder.</param>
 /// <param name="sandbox">Whether only paths inside the folder are accepted.</param>
-internal sealed class DiskStore(string root, bool sandbox = true) : IDiskStore, IStoreTransfer
+internal sealed class DiskStore(string root, bool sandbox = true) : IStore, IStoreTransfer
 {
+    /// <summary>
+    /// Makes a store of an existing folder.
+    /// </summary>
+    /// <param name="path">The folder, relative to the current directory or absolute.</param>
+    /// <param name="sandbox">Whether only paths inside the folder are accepted.</param>
+    /// <returns>The store.</returns>
+    /// <exception cref="DirectoryNotFoundException">The folder does not exist.</exception>
+    public static DiskStore Open(string path, bool sandbox = true)
+        => Directory.Exists(Path.GetFullPath(path)) ? new DiskStore(Path.GetFullPath(path), sandbox) : throw new DirectoryNotFoundException($"The folder '{path}' does not exist.");
+
     private string? canonicalRoot;
 
-    string IDiskStore.Path => root;
+    /// <summary>
+    /// Gets the full path of the folder.
+    /// </summary>
+    public string Folder => root;
 
-    bool IDiskStore.IsSandboxed => sandbox;
+    /// <summary>
+    /// Gets a value indicating whether only paths inside the folder are accepted.
+    /// </summary>
+    public bool IsSandboxed => sandbox;
 
     private string Root => canonicalRoot ??= Canonical(Path.GetFullPath(root));
 

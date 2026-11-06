@@ -31,28 +31,18 @@ internal sealed record ToolEndpoint
     public required IReadOnlyList<string> Names { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether the tools include the library's file tools, which decides what the AI is told about its access.
+    /// Gets the first part of a path in the session's cache (<c>CACHE:</c>), which the AI is told about.
     /// </summary>
-    public bool HasFiles { get; init; }
+    public string CacheName { get; init; } = string.Empty;
 
     /// <summary>
     /// Gets a value indicating whether the tools include the shell tool, which decides what the AI is told about its access.
     /// </summary>
     public bool HasShell { get; init; }
 
-    /// <summary>
-    /// Gets a value indicating whether the file tools have a workspace that relative paths are relative to, which decides what the AI is told about its paths.
-    /// </summary>
-    public bool HasWorkspace { get; init; }
-
-    /// <summary>
-    /// Gets a value indicating whether the shell starts in the workspace and not in an empty scratch folder, which decides what the AI is told about it.
-    /// </summary>
-    public bool ShellInWorkspace { get; init; }
-
     /// <inheritdoc />
     public bool Equals(ToolEndpoint? other)
-        => other is not null && Url == other.Url && Token == other.Token && HasFiles == other.HasFiles && HasShell == other.HasShell && HasWorkspace == other.HasWorkspace && ShellInWorkspace == other.ShellInWorkspace && Names.SequenceEqual(other.Names);
+        => other is not null && Url == other.Url && Token == other.Token && HasShell == other.HasShell && Names.SequenceEqual(other.Names);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -64,6 +54,9 @@ internal sealed record ToolEndpoint
 /// </summary>
 internal static class ToolEndpointExtensions
 {
+    private static string Paths(ToolEndpoint endpoint)
+        => $"A path you give the file tools is relative to your workspace, your working directory, unless it starts with {endpoint.CacheName}, the cache: temporary storage for this session that is lost when the session ends (for example {endpoint.CacheName}/notes.txt); list_directory with no path shows the workspace and {endpoint.CacheName}.";
+
     extension(ToolEndpoint? tools)
     {
         /// <summary>
@@ -78,10 +71,8 @@ internal static class ToolEndpointExtensions
             {
                 null when record.McpServers.Count == 0 => "You have no tools: you cannot read or change files or run programs, so answer from what you know.",
                 null => $"You have no access to files of your own and cannot run programs.{external} Use only those tools.",
-                { HasFiles: false, HasShell: false } => $"You have no access to files and cannot run programs. Use only the tools of the MCP server named {tools.ServerName}.{external}",
-                { HasFiles: false } => $"You can run commands on this machine only with the shell tool of the MCP server named {tools.ServerName}, which starts in an empty scratch folder, so give it a working_directory or use absolute paths. You have no other access to files. Use only the tools of that MCP server.{external}",
-                { HasShell: true } => $"You have a shell tool and file tools, both in the MCP server named {tools.ServerName}, and no other way to reach this machine. {(tools.ShellInWorkspace ? "The shell tool starts in your workspace." : "The shell tool starts in an empty scratch folder that is not your workspace.")} {Paths(tools)}{external}",
-                _ => $"You have no shell and no direct access to this machine{(record.WorkspacePath is null ? ", and the folder you run in is empty and is not your workspace" : string.Empty)}. Your only way to work with files is the file tools of the MCP server named {tools.ServerName}. {Paths(tools)}{external}"
+                { HasShell: true } => $"You have a shell tool and file tools, both in the MCP server named {tools.ServerName}, and no other way to reach this machine. The shell tool starts in your workspace. {Paths(tools)}{external}",
+                _ => $"You have no shell and no direct access to this machine. Your only way to work with files is the file tools of the MCP server named {tools.ServerName}. {Paths(tools)}{external}"
             };
 
             access = record.NativeSearch ? $"{access} You can also search the web with your own web search tool." : access;
@@ -90,8 +81,4 @@ internal static class ToolEndpointExtensions
         }
     }
 
-    private static string Paths(ToolEndpoint endpoint)
-        => endpoint.HasWorkspace
-            ? "A path you give the file tools is relative to your workspace, your working directory, unless it starts with the path of a mounted folder, which it is then inside; list_directory with no path shows the workspace."
-            : "Every path you give the file tools starts with the path of a mounted folder; list_directory with no path shows the mounted folders.";
 }

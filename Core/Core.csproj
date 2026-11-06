@@ -13,7 +13,7 @@
   <PropertyGroup>
     <PackageId>Markwardt.LiveAi</PackageId>
     <Authors>Chris Markwardt</Authors>
-    <Description>Runs live AI coding sessions on the Claude Code, OpenAI Codex and OpenCode (for local models) command line tools. A session is created from a PromptProvider over an engine (ClaudeEngine, CodexEngine, OpenCodeEngine or your own), an optional workspace folder and an optional API key, is identified by a GUID that the library stores and links to the tool's own session, and can be resumed from that GUID later.</Description>
+    <Description>Runs live AI coding sessions on the Claude Code, OpenAI Codex and OpenCode (for local models) command line tools. A Prompter creates a session from options for the tool (an optional workspace folder and API key among them), picks the model from a capability and an effort, stores the session with its configuration under a GUID, and loads it again from that GUID alone.</Description>
     <PackageTags>ai;claude;claude-code;codex;openai;opencode;ollama;local-models;image-generation;stable-diffusion;agent;session</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>

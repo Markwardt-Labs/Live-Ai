@@ -6,7 +6,7 @@ namespace Markwardt.LiveAi;
 public sealed record PromptHistoryEntry
 {
     /// <summary>
-    /// Gets what the entry is, in the same vocabulary as the events of <see cref="IPromptSession.Output" />: a <see cref="PromptInputEvent" /> for a prompt or message the AI was given, a <see cref="PromptMessageEvent" /> for what it wrote, a <see cref="PromptToolCallEvent" /> and its <see cref="PromptToolResultEvent" /> for a tool it used.
+    /// Gets what the entry is, in the same vocabulary as the events of <see cref="IPromptSession" />: a <see cref="PromptInputEvent" /> for a prompt or message the AI was given, a <see cref="PromptMessageEvent" /> for what it wrote, a <see cref="PromptToolCallEvent" /> and its <see cref="PromptToolResultEvent" /> for a tool it used.
     /// </summary>
     public required PromptEvent Event { get; init; }
 

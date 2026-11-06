@@ -26,7 +26,7 @@ public sealed class PromptHistoryPointTests
     [Fact]
     public async Task TheSessionTakesAPointAndTheExtensionsTakeAnEntry()
     {
-        FakePromptSession session = new FakePromptSession(new PromptProvider(new ClaudeEngine())).Reply("a").Reply("b");
+        FakePromptSession session = new FakePromptSession().Reply("a").Reply("b");
         await session.Request("first");
         await session.Request("second");
         IReadOnlyList<PromptHistoryEntry> history = await session.GetHistory().Take(100).ToListAsync();

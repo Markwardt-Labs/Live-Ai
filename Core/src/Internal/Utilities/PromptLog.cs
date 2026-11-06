@@ -41,21 +41,6 @@ internal interface IPromptLog
     void WorkFailed(string sessionId, Exception exception);
 
     /// <summary>
-    /// Reports that a prompt is tried again.
-    /// </summary>
-    /// <param name="attempt">The number of the try that failed.</param>
-    /// <param name="attempts">How many tries there are in all.</param>
-    /// <param name="delay">How long the retry waits.</param>
-    /// <param name="exception">The failure.</param>
-    void Retrying(int attempt, int attempts, TimeSpan delay, Exception exception);
-
-    /// <summary>
-    /// Reports that a request was stopped by one of its limits.
-    /// </summary>
-    /// <param name="limit">The limit.</param>
-    void LimitReached(PromptLimit limit);
-
-    /// <summary>
     /// Reports that a session was branched, rewound or attached to another conversation.
     /// </summary>
     /// <param name="sessionId">The identifier of the session.</param>
@@ -101,14 +86,6 @@ internal sealed partial class PromptLog : IPromptLog
     /// <inheritdoc />
     [LoggerMessage(EventId = 5, Level = LogLevel.Warning, Message = "Work of session {SessionId} failed.")]
     public partial void WorkFailed(string sessionId, Exception exception);
-
-    /// <inheritdoc />
-    [LoggerMessage(EventId = 6, Level = LogLevel.Warning, Message = "Try {Attempt} of {Attempts} failed; trying again in {Delay}.")]
-    public partial void Retrying(int attempt, int attempts, TimeSpan delay, Exception exception);
-
-    /// <inheritdoc />
-    [LoggerMessage(EventId = 7, Level = LogLevel.Information, Message = "A request was stopped by its {Limit} limit.")]
-    public partial void LimitReached(PromptLimit limit);
 
     /// <inheritdoc />
     [LoggerMessage(EventId = 8, Level = LogLevel.Information, Message = "Session {SessionId}: {What}.")]

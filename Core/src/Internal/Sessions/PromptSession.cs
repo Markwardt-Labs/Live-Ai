@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <inheritdoc />
-internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptExecutor, IPromptToolHooks
+internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptExecutor
 {
     private readonly string? apiKey;
 
@@ -31,7 +31,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private int notesInFlight;
 
-    private readonly Broadcast<PromptEvent> output = new(false);
+    private readonly Broadcast<PromptEvent> output = new();
 
     private readonly List<Queued> queued = [];
 
@@ -61,7 +61,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptTool? generateTool;
 
-    private IPromptImageGenerator? generateWith;
+    private PromptImageOptions? generateWith;
+
+    private readonly Func<PromptImageOptions, IPromptImageGenerator> generators;
+
+    private IPromptImageGenerator? imageGenerator;
 
     private PromptTool? timeTool;
 
@@ -83,7 +87,13 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private ToolEndpoint? spawnedTools;
 
-    private IReadOnlyDictionary<string, IStore>? fileToolMounts;
+    private IReadOnlyDictionary<string, string> descriptors;
+
+    private DiskStore workspaceStore;
+
+    private IStore cache = new MemoryStore();
+
+    private bool ownsCache = true;
 
     private PromptTool[]? fileTools;
 
@@ -91,7 +101,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private string? shellFolder;
 
-    private IStore? fileToolWorkspace;
+    private DiskStore? fileToolWorkspace;
 
     private IPromptToolServer? toolServer;
 
@@ -129,7 +139,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptSessionRecord persisted;
 
-    private PromptModel? asked;
+    private (PromptCapability Capability, PromptEffort Effort)? selected;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PromptSession" /> class.
@@ -145,8 +155,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <param name="opener">Opens the sessions that branches are made into.</param>
     /// <param name="logger">The caller's logger, or <see langword="null" /> for none.</param>
     /// <param name="time">The clock the timeouts, retries and schedules of the session run on, or <see langword="null" /> for the system's.</param>
-    public PromptSession(PromptSessionRecord record, string? apiKey, IPromptSessionStore store, IPromptProvider provider, IPromptEngine engine, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, IPromptSessionOpener opener, ILogger? logger = null, TimeProvider? time = null)
+    /// <param name="generators">Makes the generator for image options, or <see langword="null" /> to make it by the type of the options.</param>
+    public PromptSession(PromptSessionRecord record, string? apiKey, IPromptSessionStore store, IPromptProvider provider, IPromptEngine engine, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, IPromptSessionOpener opener, ILogger? logger = null, TimeProvider? time = null, Func<PromptImageOptions, IPromptImageGenerator>? generators = null)
     {
+        this.generators = generators ?? (options => options.CreateGenerator());
         current = record;
         persisted = record;
         log = new PromptLog(logger);
@@ -159,19 +171,59 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         this.toolHost = toolHost;
         this.libraryTools = libraryTools;
         this.opener = opener;
-        requester = new PromptRequester(this, log, Time);
+        requester = new PromptRequester(this);
         settings = new PromptSessionSettings(record, [.. libraryTools.GetReservedNames(), respondName]);
         settings.Changed += OnSettingsChanged;
+        workspaceStore = new DiskStore(Path.GetFullPath(record.WorkingFolder), record.IsSandboxed);
+        descriptors = Describe(record);
     }
 
     /// <inheritdoc />
     public TimeProvider Time { get; }
 
     /// <inheritdoc />
+    public string WorkspacePath
+    {
+        get
+        {
+            lock (gate)
+            {
+                return current.WorkingFolder;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public IStore Cache
+    {
+        get
+        {
+            lock (gate)
+            {
+                return cache;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the store the AI's file tools work on: the workspace, if there is one, with the cache at its place in the top level.
+    /// </summary>
+    internal IStore Files
+    {
+        get
+        {
+            lock (gate)
+            {
+                SyncWorkspace(settings.IsSandboxed);
+                return new MountedStore(workspaceStore, new Dictionary<string, IStore> { [libraryTools.CacheName] = cache });
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public string Id => current.Id.ToString("N");
 
     /// <inheritdoc />
-    public IPromptProvider Provider => provider;
 
     /// <inheritdoc />
     public PromptUsage Usage
@@ -189,6 +241,26 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     public IPromptSessionConfiguration Configuration => settings;
 
     /// <inheritdoc />
+    public IPromptSessionTransientConfiguration Transient => settings;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, string> Descriptors
+    {
+        get
+        {
+            lock (gate)
+            {
+                return descriptors;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the settings, with the tools, the external servers and the asker.
+    /// </summary>
+    internal PromptSessionSettings Settings => settings;
+
+    /// <inheritdoc />
     public PromptSessionState State
     {
         get
@@ -199,9 +271,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             }
         }
     }
-
-    /// <inheritdoc />
-    public IObservable<PromptEvent> Output => output;
 
     private bool Stale
     {
@@ -239,20 +308,22 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
-    public async Task<string> Request(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default)
-        => (await Collect(input, options, null, cancellation)).Text;
+    public IDisposable Subscribe(IObserver<PromptEvent> observer)
+        => output.Subscribe(observer);
 
     /// <inheritdoc />
-    public Task<PromptResult> Collect(object input, PromptRequestOptions? options = null, PromptRequestLimits? limits = null, CancellationToken cancellation = default)
+    public async Task<string> Request(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default)
+        => (await Collect(input, options, cancellation)).Text;
+
+    /// <inheritdoc />
+    public Task<PromptResult> Collect(object input, PromptRequestOptions? options = null, CancellationToken cancellation = default)
     {
-        RequireModel();
-        return requester.Collect(input, options ?? new(), settings.RequestLimits(limits), cancellation);
+        return requester.Collect(input, options ?? new(), cancellation);
     }
 
     /// <inheritdoc />
     public IAsyncEnumerable<PromptEvent> Execute(PromptRun run, CancellationToken cancellation = default)
     {
-        RequireModel();
 
         return run.Mode switch
         {
@@ -264,10 +335,9 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
-    public async Task Send(object input, PromptOptions? options = null, CancellationToken cancellation = default)
+    public async Task Send(object input, PromptSendOptions? options = null, CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(input);
-        RequireModel();
 
         foreach (string note in options?.Notes ?? [])
         {
@@ -438,10 +508,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<PromptWindow>> GetWindows(CancellationToken cancellation = default)
-        => engine.GetWindows(cancellation);
-
-    /// <inheritdoc />
     public Task<IPromptSession> Fork(PromptHistoryPoint? at = null, CancellationToken cancellation = default)
         => Branch(at, cancellation);
 
@@ -472,7 +538,17 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             PromptBranch branch = await engine.Branch(source.ToStart(apiKey, null, null), to, linked.Token);
 
             Update(record => record with { AiSessionId = branch.AiSessionId, ForkedFrom = branch.ForkedFrom, ForkedAt = branch.ForkedAt });
-            await Persist(linked.Token);
+
+            try
+            {
+                await Persist(linked.Token);
+            }
+            catch
+            {
+                Update(record => record with { AiSessionId = source.AiSessionId, ForkedFrom = source.ForkedFrom, ForkedAt = source.ForkedAt });
+                throw;
+            }
+
             await Release(true);
             log.Moved(Id, "rewound");
         }
@@ -483,21 +559,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
-    public async Task AttachTo(string? aiSessionId = null, PromptSessionOptions? options = null, CancellationToken cancellation = default)
+    public async Task Move(string? workspacePath, CancellationToken cancellation = default)
     {
-        if (options?.ApiKey is not null)
-        {
-            throw new ArgumentException("A session keeps its API key; it cannot be changed by attaching it elsewhere.", nameof(options));
-        }
-
-        string? workspacePath = options?.WorkspacePath;
-        bool sandbox = options?.Sandbox ?? true;
-
-        if (aiSessionId is not null)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(aiSessionId);
-        }
-
         ObjectDisposedException.ThrowIf(Disposed, this);
 
         string? workspace = workspacePath is null ? null : Path.GetFullPath(workspacePath);
@@ -514,26 +577,63 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             ObjectDisposedException.ThrowIf(Disposed, this);
 
-            if (aiSessionId is not null && !engine.HasSession(aiSessionId))
-            {
-                throw new PromptSessionNotFoundException(aiSessionId, $"The {engine.Identifier} session {aiSessionId} does not exist.");
-            }
-
-            string folder = workspace ?? Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{current.Id:N}");
+            string folder = workspace ?? store.GetWorkspaceFolder(current.Id);
+            bool made = !Directory.Exists(folder);
             Directory.CreateDirectory(folder);
 
-            Update(record => record with { AiSessionId = aiSessionId, ForkedFrom = null, ForkedAt = null, WorkingFolder = folder, WorkspacePath = workspace, Sandbox = sandbox });
+            PromptSessionRecord source;
 
             lock (gate)
             {
-                instructionsKnown = false;
-                knownInstructions = null;
+                source = current;
             }
 
-            await Persist(linked.Token);
+            try
+            {
+                if ((source.AiSessionId ?? source.ForkedFrom) is { } origin)
+                {
+                    await engine.MoveSession(origin, folder, linked.Token);
+                }
+
+                Update(record => record with { WorkingFolder = folder, WorkspacePath = workspace });
+
+                lock (gate)
+                {
+                    workspaceStore = new DiskStore(folder, settings.IsSandboxed);
+                }
+
+                await Persist(linked.Token);
+            }
+            catch
+            {
+                Update(record => record with { WorkingFolder = source.WorkingFolder, WorkspacePath = source.WorkspacePath });
+
+                lock (gate)
+                {
+                    workspaceStore = new DiskStore(source.WorkingFolder, settings.IsSandboxed);
+                }
+
+                if (made)
+                {
+                    Directory.Delete(folder, true);
+                }
+
+                throw;
+            }
+
             await Release(true);
-            log.Moved(Id, "attached to another conversation or workspace");
-            Configuration.Workspace = workspace is null ? null : IStore.FromDisk(workspace, sandbox);
+            log.Moved(Id, "moved to another workspace");
+
+            if (source.WorkspacePath is null && workspace is not null && source.WorkingFolder != folder && Directory.Exists(source.WorkingFolder))
+            {
+                try
+                {
+                    Directory.Delete(source.WorkingFolder, true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
         }
         finally
         {
@@ -700,7 +800,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <param name="cancellation">Cancels the wait.</param>
     /// <returns>One message with the answer.</returns>
     /// <exception cref="PromptSessionStateException">The session is responding.</exception>
-    /// <exception cref="NotSupportedException">The request has a tool or mount of its own, which the turn it is mixed into does not take.</exception>
+    /// <exception cref="NotSupportedException">The request has a tool of its own, which the turn it is mixed into does not take.</exception>
     private async IAsyncEnumerable<PromptEvent> Mixed(PromptRun run, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
         ObjectDisposedException.ThrowIf(Disposed, this);
@@ -965,19 +1065,21 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private Task GiveImage(string path, PromptAttachment image, CancellationToken cancellation = default)
     {
-        _ = RequireModel();
         _ = new[] { image }.Prepare(string.Empty, engine);
         return Deliver(new Queued($"Here is the image {path} you asked to see.", [image], null, [imageNote]), true, cancellation);
     }
 
     /// <summary>
-    /// Makes this session the helper of another, which cannot hand tasks on.
+    /// Makes this session the helper of another, which cannot hand tasks on and works in the cache of the other.
     /// </summary>
-    internal void BecomeHelper()
+    /// <param name="shared">The cache of the session the helper works for, which the helper does not clear when it ends.</param>
+    internal void BecomeHelper(IStore shared)
     {
         lock (gate)
         {
             isHelper = true;
+            cache = shared;
+            ownsCache = false;
         }
     }
 
@@ -1003,11 +1105,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                     source = current;
                 }
 
-                helper = await provider.Create(new PromptSessionOptions { ApiKey = apiKey, Model = snapshot.Model, WorkspacePath = source.WorkspacePath, Sandbox = source.Sandbox }, cancellation) as PromptSession ?? throw new InvalidOperationException("A session of the provider is a session of the same kind.");
+                helper = await provider.Create(new PromptProviderOptions { ApiKey = apiKey, Options = source.Options, WorkspacePath = source.WorkingFolder }, cancellation) as PromptSession ?? throw new InvalidOperationException("A session of the provider is a session of the same kind.");
 
                 try
                 {
-                    snapshot.CopyTo(helper.Configuration);
+                    snapshot.CopyTo(helper.settings);
                 }
                 catch
                 {
@@ -1016,7 +1118,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 }
             }
 
-            helper.BecomeHelper();
+            helper.BecomeHelper(Cache);
             string asked;
 
             lock (gate)
@@ -1026,7 +1128,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
             try
             {
-                helper.Configuration.IsPersistent = false;
                 string answer = await helper.Request(shareContext ? $"{sharedNote}\n\nThe request the other AI is working on now:\n{asked}\n\nYour task:\n{task}" : $"{delegatedNote}\n\n{task}", null, cancellation);
 
                 lock (gate)
@@ -1057,23 +1158,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
         catch (Exception exception) when (exception is PromptSessionException or ArgumentException or IOException)
         {
-        }
-    }
-
-    private async Task<bool> IsBlocked(Uri address, CancellationToken cancellation)
-    {
-        if (settings.WebFilter is not { } filter)
-        {
-            return false;
-        }
-
-        try
-        {
-            return await filter(address, cancellation);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return true;
         }
     }
 
@@ -1129,11 +1213,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     {
         try
         {
-            await Verify(running);
             PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
-            CheckBudget(snapshot.Limits.Budget);
+            await Select(snapshot, running);
             Update(record => Merge(record, snapshot));
-            await PersistModel(running);
+            await PersistConfiguration(running);
 
             PromptSessionRecord effective;
             List<string> given;
@@ -1152,7 +1235,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 }
             }
 
-            return new TurnStart(effective, run.Schema is { } formatted ? engine.FormatSchema(formatted) : null, await Serve(snapshot, running), snapshot.IsPersistent, given, told);
+            return new TurnStart(effective, run.Schema is { } formatted ? engine.FormatSchema(formatted) : null, await Serve(snapshot, running), engine.CanPersist, given, told);
         }
         catch (OperationCanceledException) when (running.IsCancellationRequested && !persisting.IsCancellationRequested)
         {
@@ -1187,7 +1270,9 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 await Release(false);
             }
 
+            IPromptProcess? before = live;
             IPromptProcess process = keep ? await Open(start.Record, start.Schema, start.Endpoint) : Launch(start.Record, start.Schema, start.Endpoint);
+            bool reused = keep && before is not null && ReferenceEquals(before, process);
             (string? folder, IReadOnlyList<string> files) = engine.NeedsFiles && attachments.Count > 0 ? await WriteFiles(attachments, cancellation) : (null, []);
             lock (gate)
             {
@@ -1219,15 +1304,40 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 workProcess = process;
             }
 
+            PromptInput sent = files.Count > 0 ? prompting with { Attachments = [], Files = files } : prompting;
+            IAsyncEnumerator<PromptEngineEvent> events = process.Run(sent, cancellation).GetAsyncEnumerator(cancellation);
+
             try
             {
-                await foreach (PromptEngineEvent output in process.Run(files.Count > 0 ? prompting with { Attachments = [], Files = files } : prompting, cancellation))
+                bool first = true;
+
+                while (await events.MoveNextAsync())
                 {
+                    PromptEngineEvent output = events.Current;
+
+                    if (first && reused && output.Kind == PromptEngineEventKind.Failed && !process.IsRunning && !cancellation.IsCancellationRequested)
+                    {
+                        await events.DisposeAsync();
+                        process = await Open(start.Record, start.Schema, start.Endpoint);
+                        lock (gate)
+                        {
+                            active = process;
+                            workProcess = process;
+                        }
+
+                        events = process.Run(sent, cancellation).GetAsyncEnumerator(cancellation);
+                        reused = false;
+                        continue;
+                    }
+
+                    first = false;
                     yield return output;
                 }
             }
             finally
             {
+                await events.DisposeAsync();
+
                 lock (gate)
                 {
                     workProcess = null;
@@ -1278,7 +1388,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private async Task<(string Folder, IReadOnlyList<string> Files)> WriteFiles(IReadOnlyList<PromptAttachment> attachments, CancellationToken cancellation = default)
     {
-        string folder = Path.Combine(current.WorkspacePath is null ? current.WorkingFolder : Path.GetTempPath(), $"attachments-{Guid.NewGuid():N}");
+        string folder = Path.Combine(Path.GetTempPath(), $"attachments-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         List<string> files = [];
 
@@ -1343,13 +1453,26 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
             PromptBranch branch = (source.AiSessionId ?? source.ForkedFrom) is null ? new PromptBranch() : await engine.Branch(source.ToStart(apiKey, null, null), at, linked.Token);
             Guid id = Guid.NewGuid();
-            string folder = source.WorkspacePath ?? Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}");
+            string folder = source.WorkspacePath ?? store.GetWorkspaceFolder(id);
             Directory.CreateDirectory(folder);
 
-            PromptSessionLink link = new() { Id = id, Created = Time.GetUtcNow(), Provider = source.Engine.Identifier, WorkingFolder = folder, WorkspacePath = source.WorkspacePath, Sandbox = source.Sandbox, AiSessionId = branch.AiSessionId, ForkedFrom = branch.ForkedFrom, ForkedAt = branch.ForkedAt, Model = source.Model?.Id, ModelSettings = source.Model is null ? null : new Dictionary<string, string>(source.ModelSettings) };
-            await store.Save(link, linked.Token);
+            PromptSessionLink link = source.ToLink() with { Id = id, Created = Time.GetUtcNow(), WorkingFolder = folder, AiSessionId = branch.AiSessionId, ForkedFrom = branch.ForkedFrom, ForkedAt = branch.ForkedAt };
+            IPromptSession fork;
 
-            IPromptSession fork = opener.Open(link, provider, engine, apiKey);
+            try
+            {
+                await store.Save(link, linked.Token);
+                fork = opener.Open(link, provider, engine, apiKey);
+            }
+            catch
+            {
+                if (source.WorkspacePath is null && Directory.Exists(folder))
+                {
+                    Directory.Delete(folder, true);
+                }
+
+                throw;
+            }
 
             if (fork is PromptSession inheriting)
             {
@@ -1359,7 +1482,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 }
             }
 
-            snapshot.CopyTo(fork.Configuration);
+            if (fork.Configuration is PromptSessionSettings target)
+            {
+                snapshot.CopyTo(target);
+            }
+
             log.Moved(Id, $"forked into session {fork.Id}");
 
             return fork;
@@ -1385,8 +1512,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             throw new NotSupportedException($"{engine.Identifier} cannot do this.");
         }
-
-        RequireModel();
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation, closing.Token);
         await turn.WaitAsync(linked.Token);
 
@@ -1394,8 +1519,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             ObjectDisposedException.ThrowIf(Disposed, this);
 
-            await Verify(linked.Token);
             PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
+            await Select(snapshot, linked.Token);
             Update(record => Merge(record, snapshot));
 
             PromptSessionRecord effective;
@@ -1406,14 +1531,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             }
 
             ToolEndpoint? endpoint = await Serve(snapshot, linked.Token);
-            bool keep = snapshot.IsPersistent;
-
-            if (!keep)
-            {
-                await Release(false);
-            }
-
-            IPromptProcess process = keep ? await Open(effective, null, endpoint) : Launch(effective, null, endpoint);
+            IPromptProcess process = await Open(effective, null, endpoint);
             active = process;
 
             try
@@ -1423,11 +1541,6 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             finally
             {
                 active = null;
-
-                if (!keep)
-                {
-                    await process.DisposeAsync();
-                }
             }
         }
         finally
@@ -1436,13 +1549,22 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
     }
 
+    private IReadOnlyDictionary<string, string> Describe(PromptSessionRecord record)
+        => PromptDescriptors.Describe(engine.Identifier, record.Model, record.ModelSettings);
+
+    private void SyncWorkspace(bool isSandboxed)
+    {
+        if (workspaceStore.IsSandboxed != isSandboxed)
+        {
+            workspaceStore = new DiskStore(workspaceStore.Folder, isSandboxed);
+        }
+    }
+
     private async Task<ToolEndpoint?> Serve(PromptSessionSettingsSnapshot snapshot, CancellationToken cancellation = default)
     {
         PromptTool[] exposed;
-        bool hasFiles;
         bool hasShell;
-        bool inWorkspace;
-        IStore? workspace;
+        DiskStore workspace;
         PromptTool? images;
         PromptTool? fetch;
         PromptTool? search;
@@ -1451,15 +1573,14 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
         lock (gate)
         {
-            Dictionary<string, IStore> available = new(snapshot.Mounts);
-            workspace = snapshot.Workspace;
-            hasFiles = workspace is not null || available.Count > 0;
-            hasShell = snapshot.EnableShell;
-            inWorkspace = workspace is IDiskStore;
+            SyncWorkspace(snapshot.IsSandboxed);
+            workspace = workspaceStore;
+            hasShell = snapshot.IsShellAllowed;
+            IStore everything = Files;
 
             if (hasShell)
             {
-                string folder = workspace is IDiskStore disk ? disk.Path : current.WorkingFolder;
+                string folder = workspace.Folder;
 
                 if (shellTool is null || shellFolder != folder)
                 {
@@ -1468,26 +1589,26 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 }
             }
 
-            if (fileToolMounts is null || fileToolWorkspace != workspace || fileToolMounts.Count != snapshot.Mounts.Count || snapshot.Mounts.Any(mount => !fileToolMounts.TryGetValue(mount.Key, out IStore? existing) || existing != mount.Value))
+            if (fileToolWorkspace != workspace)
             {
                 fileTools = null;
                 imageTool = null;
                 generateTool = null;
-                fileToolMounts = snapshot.Mounts;
                 fileToolWorkspace = workspace;
             }
 
-            PromptTool[] files = !hasFiles ? [] : fileTools ??= libraryTools.Create(new MountedStore(workspace, available), available.Keys.ToArray(), workspace is not null).ToArray();
-            images = hasFiles && snapshot.EnableImages && snapshot.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(new MountedStore(workspace, available), GiveImage) : null;
-            fetch = snapshot.EnableWeb ? fetchTool ??= libraryTools.CreateFetch(IsBlocked) : null;
-            if (generateWith != snapshot.ImageGenerator)
+            PromptTool[] files = fileTools ??= libraryTools.Create(everything).ToArray();
+            images = current.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(everything, GiveImage) : null;
+            fetch = snapshot.IsWebAllowed ? fetchTool ??= libraryTools.CreateFetch() : null;
+            if (generateWith != snapshot.ImageGeneration)
             {
                 generateTool = null;
-                generateWith = snapshot.ImageGenerator;
+                generateWith = snapshot.ImageGeneration;
+                imageGenerator = snapshot.ImageGeneration is { } options ? generators(options) : null;
             }
 
-            generate = hasFiles && snapshot.ImageGenerator is { } generator ? generateTool ??= libraryTools.CreateGenerateImage(new MountedStore(workspace, available), generator) : null;
-            search = snapshot.EnableSearch && !engine.NativeSearch ? searchTool ??= libraryTools.CreateSearch() : null;
+            generate = imageGenerator is { } generator ? generateTool ??= libraryTools.CreateGenerateImage(everything, generator) : null;
+            search = snapshot.IsWebAllowed && !engine.NativeSearch ? searchTool ??= libraryTools.CreateSearch() : null;
             timeTool ??= libraryTools.CreateTime();
             toolSearchTool ??= libraryTools.CreateToolSearch(() => servedTools);
             delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate);
@@ -1504,36 +1625,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         if (toolServer is null || !exposed.SequenceEqual(servedTools))
         {
             await StopTools();
-            toolServer = toolHost.Start(exposed, this);
+            toolServer = toolHost.Start(exposed);
             servedTools = exposed;
             log.ToolServerStarted(Id, exposed.Length);
         }
 
-        return toolServer.Endpoint with { HasFiles = hasFiles, HasShell = hasShell, HasWorkspace = workspace is not null, ShellInWorkspace = hasShell && inWorkspace };
-    }
-
-    /// <inheritdoc />
-    public Task<PromptToolDecision> Before(PromptToolCallEvent call, CancellationToken cancellation = default)
-        => settings.BeforeToolCall is { } hook ? hook(call, cancellation) : Task.FromResult(PromptToolDecision.Allow);
-
-    /// <inheritdoc />
-    public Task After(PromptToolCallEvent call, PromptToolResultEvent result, TimeSpan duration, CancellationToken cancellation = default)
-        => settings.AfterToolCall is { } hook ? hook(call, result, duration, cancellation) : Task.CompletedTask;
-
-    private void CheckBudget(PromptBudget? limit)
-    {
-        PromptUsage used;
-
-        lock (gate)
-        {
-            used = usage;
-        }
-
-        if (limit is not null && limit.IsReached(used))
-        {
-            log.LimitReached(PromptLimit.Budget);
-            throw new PromptLimitException(PromptLimit.Budget, "The session has used what its budget allows.");
-        }
+        return toolServer.Endpoint with { HasShell = hasShell, CacheName = libraryTools.CacheName };
     }
 
     private async Task StopTools()
@@ -1579,7 +1676,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
             try
             {
-                if (!settings.IsPersistent)
+                if (!engine.CanPersist)
                 {
                     await Release(false);
                 }
@@ -1632,6 +1729,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         {
             await Release(immediate);
             await StopTools();
+            await ClearCache();
+            await SaveConfiguration();
         }
         finally
         {
@@ -1652,6 +1751,49 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         await teardown;
     }
 
+    private async Task SaveConfiguration()
+    {
+        PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
+        bool changed;
+
+        lock (gate)
+        {
+            current = Merge(current, snapshot);
+            changed = !current.SameStored(persisted);
+        }
+
+        try
+        {
+            if (changed && await store.Find(current.Id) is not null)
+            {
+                await Persist();
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private async Task ClearCache()
+    {
+        IStore owned;
+
+        lock (gate)
+        {
+            if (!ownsCache)
+            {
+                return;
+            }
+
+            owned = cache;
+        }
+
+        foreach (StoreEntry entry in await owned.List(string.Empty).ToListAsync())
+        {
+            await owned.Delete(entry.Path);
+        }
+    }
+
     private void OnSettingsChanged()
     {
         lock (gate)
@@ -1667,7 +1809,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)
-        => record with { Model = snapshot.Model, ModelSettings = snapshot.ModelSettings, Instructions = snapshot.Instructions, NativeSearch = snapshot.EnableSearch && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
+        => record with { Capability = snapshot.Capability, Effort = snapshot.Effort, IsShellAllowed = snapshot.IsShellAllowed, IsSandboxed = snapshot.IsSandboxed, IsWebAllowed = snapshot.IsWebAllowed, ImageGeneration = snapshot.ImageGeneration, Instructions = snapshot.Instructions, NativeSearch = snapshot.IsWebAllowed && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
 
     private void Update(Func<PromptSessionRecord, PromptSessionRecord> change)
     {
@@ -1697,13 +1839,13 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
     }
 
-    private async Task PersistModel(CancellationToken cancellation)
+    private async Task PersistConfiguration(CancellationToken cancellation)
     {
         bool changed;
 
         lock (gate)
         {
-            changed = !current.SameModel(persisted);
+            changed = !current.SameStored(persisted);
         }
 
         if (changed)
@@ -1712,38 +1854,35 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
     }
 
-    private PromptModel RequireModel()
-        => settings.Model ?? throw new PromptSessionModelException("No model is selected: set Configuration.Model first.");
-
-    private async Task Verify(CancellationToken cancellation)
+    private async Task Select(PromptSessionSettingsSnapshot snapshot, CancellationToken cancellation)
     {
-        PromptModel model = RequireModel();
-
-        if (model.Settings is not null || ReferenceEquals(model, asked))
+        lock (gate)
         {
-            return;
-        }
-
-        if ((await provider.GetModels(apiKey, cancellation)).Count == 0)
-        {
-            asked = model;
-            return;
-        }
-
-        try
-        {
-            settings.Model = await provider.GetModel(model.Id, apiKey, cancellation);
-        }
-        catch (PromptSessionModelException)
-        {
-            if (ReferenceEquals(settings.Model, model))
+            if (selected == (snapshot.Capability, snapshot.Effort))
             {
-                settings.Model = null;
+                return;
             }
-
-            log.ModelChanged(Id, $"The model {model.Id} is no longer offered by {engine.Identifier}, so the session has none selected");
-            throw new PromptSessionModelException($"The model '{model.Id}' is no longer offered by {engine.Identifier}. Select another with Configuration.Model.");
         }
+
+        (PromptModel model, IReadOnlyDictionary<string, string> chosen) = await provider.Select(snapshot.Capability, snapshot.Effort, apiKey, cancellation);
+        IReadOnlyDictionary<string, string> changed;
+        bool different;
+
+        lock (gate)
+        {
+            selected = (snapshot.Capability, snapshot.Effort);
+            current = current with { Model = model, ModelSettings = chosen };
+            changed = Describe(current);
+            different = !changed.OrderBy(entry => entry.Key, StringComparer.Ordinal).SequenceEqual(descriptors.OrderBy(entry => entry.Key, StringComparer.Ordinal));
+            descriptors = changed;
+        }
+
+        if (different)
+        {
+            output.Publish(new PromptDescriptorsEvent { Descriptors = changed });
+        }
+
+        log.ModelChanged(Id, $"{engine.Identifier} runs {model.Id} for {snapshot.Capability} capability and {snapshot.Effort} effort");
     }
 
     private sealed record Queued(string Text, IReadOnlyList<PromptAttachment> Attachments, string? Request, IReadOnlyList<string> Notes);
