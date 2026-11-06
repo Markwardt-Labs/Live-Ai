@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi.Testing;
 
 /// <summary>
-/// An <see cref="IPrompter" /> for tests that makes <see cref="FakePromptSession" />s and keeps them in memory, so code that creates, loads, lists, deletes and tests sessions can be tried without a command line tool or a data folder. It makes the same kind of session whatever the options are for, and records them.
+/// An <see cref="IPrompter" /> for tests that makes <see cref="FakePromptSession" />s and keeps them in memory, so code that creates, loads, lists, deletes and tests sessions can be tried without a command line tool or a data folder. It makes the same kind of session whatever the setup is for, and records it.
 /// </summary>
 public sealed class FakePrompter : IPrompter
 {
@@ -9,13 +9,20 @@ public sealed class FakePrompter : IPrompter
 
     private readonly List<FakePromptSession> sessions = [];
 
-    private readonly List<PromptSessionOptions> tests = [];
+    private readonly List<PromptSetup> tests = [];
 
-    private readonly List<PromptSessionOptions> created = [];
+    private readonly List<PromptSetup> created = [];
 
     private readonly Dictionary<string, (DateTimeOffset Created, string Provider, string WorkspacePath)> made = [];
 
     private PromptTestResult testResult = new() { IsAvailable = true };
+
+    /// <inheritdoc />
+    public PromptEnvironment Environment
+    {
+        get;
+        set => field = value ?? throw new ArgumentNullException(nameof(value));
+    } = new();
 
     /// <summary>
     /// Gets or sets an action that is called with every session this prompter makes, before it is returned, to script its answers.
@@ -50,9 +57,9 @@ public sealed class FakePrompter : IPrompter
     }
 
     /// <summary>
-    /// Gets the options <see cref="Test" /> was asked with, in order.
+    /// Gets the setups <see cref="Test" /> was asked with, in order.
     /// </summary>
-    public IReadOnlyList<PromptSessionOptions> Tests
+    public IReadOnlyList<PromptSetup> Tests
     {
         get
         {
@@ -64,9 +71,9 @@ public sealed class FakePrompter : IPrompter
     }
 
     /// <summary>
-    /// Gets the options <see cref="Create" /> was asked with, in order.
+    /// Gets the setups <see cref="Create" /> was asked with, in order.
     /// </summary>
-    public IReadOnlyList<PromptSessionOptions> Created
+    public IReadOnlyList<PromptSetup> Created
     {
         get
         {
@@ -103,25 +110,32 @@ public sealed class FakePrompter : IPrompter
     }
 
     /// <inheritdoc />
-    public Task<IPromptSession> Create(PromptSessionOptions options, CancellationToken cancellation = default)
+    public Task<IPromptSession> Create(PromptSetup setup, CancellationToken cancellation = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(setup);
         cancellation.ThrowIfCancellationRequested();
-        (string provider, string? apiKey) = options switch
+        (string provider, string? apiKey) = setup switch
         {
-            ClaudeSessionOptions claude => ("Claude Code", claude.ApiKey),
-            CodexSessionOptions codex => ("Codex", codex.ApiKey),
-            OllamaSessionOptions ollama => ("OpenCode", (string?)null),
-            _ => throw new ArgumentException($"{options.GetType().Name} is not a kind of session options the library knows.", nameof(options))
+            ClaudeSetup claude => ("Claude Code", claude.ApiKey ?? Environment.ClaudeApiKey),
+            CodexSetup codex => ("Codex", codex.ApiKey ?? Environment.CodexApiKey),
+            LocalSetup => ("OpenCode", (string?)null),
+            _ => throw new ArgumentException($"{setup.GetType().Name} is not a kind of session setup the library knows.", nameof(setup))
         };
 
         FakePromptSession session = new(apiKey, Time);
-        session.UseWorkspace(options.WorkspacePath is { } path ? Path.GetFullPath(path) : null);
+        session.UseWorkspace(setup.WorkspacePath is { } path ? Path.GetFullPath(path) : null);
+        session.Configuration.Capability = setup.Capability;
+        session.Configuration.Effort = setup.Effort;
+        session.Configuration.IsShellAllowed = setup.IsShellAllowed;
+        session.Configuration.IsSandboxed = setup.IsSandboxed;
+        session.Configuration.IsWebAllowed = setup.IsWebAllowed;
+        session.Configuration.IsImageGenerationAllowed = setup.IsImageGenerationAllowed;
+        session.Configuration.Instructions = setup.Instructions;
         string workspacePath = session.WorkspacePath;
 
         lock (gate)
         {
-            created.Add(options);
+            created.Add(setup);
             sessions.Add(session);
             made[session.Id] = ((Time ?? TimeProvider.System).GetUtcNow(), provider, workspacePath);
         }
@@ -177,14 +191,14 @@ public sealed class FakePrompter : IPrompter
     }
 
     /// <inheritdoc />
-    public Task<PromptTestResult> Test(PromptSessionOptions options, CancellationToken cancellation = default)
+    public Task<PromptTestResult> Test(PromptSetup setup, CancellationToken cancellation = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(setup);
         cancellation.ThrowIfCancellationRequested();
 
         lock (gate)
         {
-            tests.Add(options);
+            tests.Add(setup);
             return Task.FromResult(testResult);
         }
     }

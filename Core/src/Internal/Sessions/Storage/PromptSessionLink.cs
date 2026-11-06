@@ -51,9 +51,10 @@ internal sealed record PromptSessionLink
     public string? ForkedAt { get; init; }
 
     /// <summary>
-    /// Gets the options the session was created with, which say which tool runs it and how that tool is found and used, so that loading it needs only its identifier. The API key is among what is stored. A session stored without them cannot be loaded.
+    /// Gets the setup the session was created with, which says which tool runs it and holds what that tool needs of the session (the API key, and for local models the overrides of the server and models), so that loading it needs only its identifier. It is stored under the name <c>options</c>. A session stored without it cannot be loaded.
     /// </summary>
-    public PromptSessionOptions? Options { get; init; }
+    [JsonPropertyName("options")]
+    public PromptSetup? Setup { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the AI has a shell tool.
@@ -71,9 +72,9 @@ internal sealed record PromptSessionLink
     public string? Instructions { get; init; }
 
     /// <summary>
-    /// Gets how images are made for the AI, or <see langword="null" /> when it has no tool for it. Its API key, if any, is stored with it.
+    /// Gets a value indicating whether the AI can make images with the image generation of the environment.
     /// </summary>
-    public PromptImageOptions? ImageGeneration { get; init; }
+    public bool IsImageGenerationAllowed { get; init; }
 
     /// <summary>
     /// Gets how capable the model of the session is. The model itself is chosen again from it when a prompt starts.
@@ -96,13 +97,13 @@ internal sealed record PromptSessionLink
             Id = Id,
             Created = Created,
             Engine = engine,
-            Options = Options,
+            Setup = Setup,
             Capability = Capability,
             Effort = Effort,
             IsShellAllowed = IsShellAllowed,
             IsWebAllowed = IsWebAllowed,
             Instructions = Instructions,
-            ImageGeneration = ImageGeneration,
+            IsImageGenerationAllowed = IsImageGenerationAllowed,
             WorkingFolder = WorkingFolder,
             WorkspacePath = WorkspacePath,
             IsSandboxed = IsSandboxed,

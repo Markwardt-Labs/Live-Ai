@@ -20,6 +20,17 @@ public sealed class OpenCodeEngineTests
         Assert.Empty(await Generic.GetWindows());
     }
 
+    [Fact]
+    public void TheContextSizeOfTheModelIsTheOneOfTheCapabilityAndNoneWhenTheCapabilityHasNone()
+    {
+        IPromptEngine sized = new OpenCodeEngine("opencode", [], null, null, new PromptCapabilityContexts { Fast = 4096, Strong = 32768 });
+
+        Assert.Equal("4096", sized.ModelOverrides(PromptCapability.Fast)!["context"]);
+        Assert.Equal("32768", sized.ModelOverrides(PromptCapability.Strong)!["context"]);
+        Assert.Null(sized.ModelOverrides(PromptCapability.Balanced));
+        Assert.Null(Generic.ModelOverrides(PromptCapability.Fast));
+    }
+
     [Theory]
     [InlineData("liveai", "liveai")]
     [InlineData("my.server", "my_server")]

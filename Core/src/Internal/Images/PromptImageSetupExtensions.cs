@@ -3,9 +3,9 @@ namespace Markwardt.LiveAi;
 /// <summary>
 /// What the library does with the options of an image service.
 /// </summary>
-internal static class PromptImageOptionsExtensions
+internal static class PromptImageSetupExtensions
 {
-    extension(PromptImageOptions options)
+    extension(PromptImageSetup options)
     {
         /// <summary>
         /// Checks the options when they are set.
@@ -15,10 +15,10 @@ internal static class PromptImageOptionsExtensions
         {
             switch (options)
             {
-                case OpenAiImageOptions openAi:
+                case OpenAiImageSetup openAi:
                     ArgumentException.ThrowIfNullOrWhiteSpace(openAi.ApiKey, nameof(options));
                     break;
-                case StableDiffusionImageOptions stable:
+                case LocalImageSetup stable:
                     ArgumentNullException.ThrowIfNull(stable.Server);
 
                     PromptCapabilityModels? models = stable.Models;
@@ -43,8 +43,8 @@ internal static class PromptImageOptionsExtensions
         public IPromptImageGenerator CreateGenerator()
             => options switch
             {
-                OpenAiImageOptions openAi => new OpenAiCapabilityImageGenerator(openAi.ApiKey),
-                StableDiffusionImageOptions stable => new StableDiffusionImageGenerator(stable.Server, stable.Models, 1024, 1024, [8, 20, 35], 7, null, new HttpClient(new SocketsHttpHandler()) { Timeout = TimeSpan.FromMinutes(10) }),
+                OpenAiImageSetup openAi => new OpenAiCapabilityImageGenerator(openAi.ApiKey),
+                LocalImageSetup stable => new StableDiffusionImageGenerator(stable.Server, stable.Models, 1024, 1024, [8, 20, 35], 7, null, new HttpClient(new SocketsHttpHandler()) { Timeout = TimeSpan.FromMinutes(10) }),
                 _ => throw new ArgumentException($"{options.GetType().Name} is not a kind of image options the library knows.", nameof(options))
             };
     }

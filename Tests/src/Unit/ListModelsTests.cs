@@ -13,14 +13,14 @@ public sealed class ListModelsTests
             ] }
             """);
 
-        IReadOnlyList<string> models = await OllamaSessionOptions.ListModels(new Uri(server.Api));
+        IReadOnlyList<string> models = await LocalSetup.ListModels(new Uri(server.Api));
 
         Assert.Equal(["gemma4:26b", "qwen3:8b"], models);
     }
 
     [Fact]
     public async Task Ollama_GivesNoneWhenTheServerCannotBeReached()
-        => Assert.Empty(await OllamaSessionOptions.ListModels(new Uri("http://127.0.0.1:1/v1")));
+        => Assert.Empty(await LocalSetup.ListModels(new Uri("http://127.0.0.1:1/v1")));
 
     [Fact]
     public async Task Ollama_StopsWhenTheCallerCancels()
@@ -29,7 +29,7 @@ public sealed class ListModelsTests
         using CancellationTokenSource cancellation = new();
         await cancellation.CancelAsync();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => OllamaSessionOptions.ListModels(new Uri(server.Api), cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => LocalSetup.ListModels(new Uri(server.Api), cancellation.Token));
     }
 
     [Fact]
@@ -37,7 +37,7 @@ public sealed class ListModelsTests
     {
         using FakeModelServer server = new FakeModelServer().Answer("/api/tags", """{ "models": [{ "name": "gemma4:26b", "capabilities": ["tools"] }] }""");
 
-        string name = Assert.Single(await OllamaSessionOptions.ListModels(new Uri(server.Api)));
+        string name = Assert.Single(await LocalSetup.ListModels(new Uri(server.Api)));
 
         PromptCapabilityModels models = PromptCapabilityModels.All(name);
         Assert.Equal("gemma4:26b", models.For(PromptCapability.Max));
@@ -53,7 +53,7 @@ public sealed class ListModelsTests
             ]
             """);
 
-        IReadOnlyList<string> models = await StableDiffusionImageOptions.ListModels(new Uri(server.Root));
+        IReadOnlyList<string> models = await LocalImageSetup.ListModels(new Uri(server.Root));
 
         Assert.Equal(["animePastel.safetensors [aa11bb22cc]", "v1-5-pruned.safetensors [6ce0161689]"], models.Order());
     }
@@ -63,7 +63,7 @@ public sealed class ListModelsTests
     {
         using FakeModelServer server = new();
 
-        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() => StableDiffusionImageOptions.ListModels(new Uri(server.Root)));
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() => LocalImageSetup.ListModels(new Uri(server.Root)));
 
         Assert.False(string.IsNullOrWhiteSpace(exception.Message));
     }
@@ -73,8 +73,8 @@ public sealed class ListModelsTests
     {
         using FakeModelServer server = new FakeModelServer().Answer("/sdapi/v1/sd-models", """[{"title":"sd_turbo","model_name":"sd_turbo"}]""");
 
-        string title = Assert.Single(await StableDiffusionImageOptions.ListModels(new Uri(server.Root)));
+        string title = Assert.Single(await LocalImageSetup.ListModels(new Uri(server.Root)));
 
-        new StableDiffusionImageOptions { Models = PromptCapabilityModels.All(title) }.Validate();
+        new LocalImageSetup { Models = PromptCapabilityModels.All(title) }.Validate();
     }
 }

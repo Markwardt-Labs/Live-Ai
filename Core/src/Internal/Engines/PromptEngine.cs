@@ -183,9 +183,12 @@ internal interface IPromptEngine
     PromptCapabilityModels? PreferredModels => null;
 
     /// <summary>
-    /// Gets values the caller asked for the settings of the chosen model (the size of the context window, say), or <see langword="null" /> for none. The default is <see langword="null" />.
+    /// Gets the values the caller asked for the settings of the model chosen for a capability (the size of the context window, say).
     /// </summary>
-    IReadOnlyDictionary<string, string>? ModelOverrides => null;
+    /// <param name="capability">The capability the model is chosen for.</param>
+    /// <returns>The values by the identifier of the setting, or <see langword="null" /> for none. The default is <see langword="null" />.</returns>
+    IReadOnlyDictionary<string, string>? ModelOverrides(PromptCapability capability)
+        => null;
 
     /// <summary>
     /// Describes the smallest process that proves the tool works, whose prompt is written to its standard input and whose output is read with <see cref="Parse" />. The engine chooses the cheapest model it can tell of (here: the first one <see cref="GetModels" /> lists) at the lowest setting of each choice, in an empty folder.

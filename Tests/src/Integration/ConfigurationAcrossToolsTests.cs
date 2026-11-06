@@ -3,7 +3,7 @@ namespace Markwardt.LiveAi.Tests.Integration;
 [Collection("Processes")]
 public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
 {
-    public static TheoryData<string> Tools => ["claude", "codex", "ollama"];
+    public static TheoryData<string> Tools => ["claude", "codex", "local"];
 
     private readonly TempFolder temp = new();
 
@@ -17,9 +17,9 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
     {
         server.OnPrompt = _ => server.Reply("ok");
         string claude = temp.Script("claude", "mkdir -p \"$CLAUDE_CONFIG_DIR/projects/p\"\n: > \"$CLAUDE_CONFIG_DIR/projects/p/claude-session.jsonl\"\nIFS= read -r line\necho '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"claude says hi\"}]}}'\necho '{\"type\":\"result\",\"is_error\":false,\"session_id\":\"claude-session\"}'");
-        engines[typeof(ClaudeSessionOptions)] = new ClaudeEngine(claude, temp.Combine("claude-state"));
-        engines[typeof(CodexSessionOptions)] = new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
-        engines[typeof(OllamaSessionOptions)] = new OpenCodeEngine(new FakeOpenCode(temp).Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), 8192) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
+        engines[typeof(ClaudeSetup)] = new ClaudeEngine(claude, temp.Combine("claude-state"));
+        engines[typeof(CodexSetup)] = new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
+        engines[typeof(LocalSetup)] = new OpenCodeEngine(new FakeOpenCode(temp).Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), PromptCapabilityContexts.All(8192)) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
         return Task.CompletedTask;
     }
 
@@ -30,12 +30,12 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         temp.Dispose();
     }
 
-    private PromptSessionOptions Options(string tool, string workspace)
+    private PromptSetup Options(string tool, string workspace)
         => tool switch
         {
-            "claude" => new ClaudeSessionOptions { WorkspacePath = workspace, ApiKey = "key" },
-            "codex" => new CodexSessionOptions { WorkspacePath = workspace, ApiKey = "key" },
-            _ => new OllamaSessionOptions { WorkspacePath = workspace, Models = PromptCapabilityModels.All("gemma4:26b"), Context = 8192 }
+            "claude" => new ClaudeSetup { WorkspacePath = workspace, ApiKey = "key" },
+            "codex" => new CodexSetup { WorkspacePath = workspace, ApiKey = "key" },
+            _ => new LocalSetup { WorkspacePath = workspace, Overrides = new PromptServerSettings { Models = PromptCapabilityModels.All("gemma4:26b"), Contexts = PromptCapabilityContexts.All(8192) } }
         };
 
     private Prompter Prompter()
@@ -49,11 +49,11 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         configuration.IsWebAllowed = variant == 0;
         configuration.IsSandboxed = variant != 0;
         configuration.Instructions = variant == 0 ? "Be brief." : "Be thorough.";
-        configuration.ImageGeneration = variant == 0 ? new OpenAiImageOptions { ApiKey = "sk-test" } : new StableDiffusionImageOptions { Server = new Uri("http://sd:7860/"), Models = new PromptCapabilityModels { Fast = "a", Balanced = "b", Strong = "c", Max = "d" } };
+        configuration.IsImageGenerationAllowed = variant == 0;
     }
 
-    private (PromptCapability, PromptEffort, bool, bool, bool, string?, PromptImageOptions?) Read(IPromptSessionConfiguration configuration)
-        => (configuration.Capability, configuration.Effort, configuration.IsShellAllowed, configuration.IsWebAllowed, configuration.IsSandboxed, configuration.Instructions, configuration.ImageGeneration);
+    private (PromptCapability, PromptEffort, bool, bool, bool, string?, bool) Read(IPromptSessionConfiguration configuration)
+        => (configuration.Capability, configuration.Effort, configuration.IsShellAllowed, configuration.IsWebAllowed, configuration.IsSandboxed, configuration.Instructions, configuration.IsImageGenerationAllowed);
 
     [Theory]
     [MemberData(nameof(Tools))]
@@ -64,10 +64,10 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         IPromptSession created = temp.Track(await prompter.Create(Options(tool, workspace)));
         Configure(created.Configuration, 0);
         Assert.False(string.IsNullOrEmpty(await created.Request("first")));
-        (PromptCapability, PromptEffort, bool, bool, bool, string?, PromptImageOptions?) first = Read(created.Configuration);
+        (PromptCapability, PromptEffort, bool, bool, bool, string?, bool) first = Read(created.Configuration);
 
         Configure(created.Configuration, 1);
-        (PromptCapability, PromptEffort, bool, bool, bool, string?, PromptImageOptions?) second = Read(created.Configuration);
+        (PromptCapability, PromptEffort, bool, bool, bool, string?, bool) second = Read(created.Configuration);
         await created.DisposeAsync();
         IPromptSession loaded = temp.Track(await prompter.Load(created.Id));
 
@@ -90,7 +90,7 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         Prompter prompter = Prompter();
         IPromptSession created = temp.Track(await prompter.Create(Options(tool, Directory.CreateDirectory(temp.Combine("project")).FullName)));
         Configure(created.Configuration, 1);
-        (PromptCapability, PromptEffort, bool, bool, bool, string?, PromptImageOptions?) expected = Read(created.Configuration);
+        (PromptCapability, PromptEffort, bool, bool, bool, string?, bool) expected = Read(created.Configuration);
         await created.DisposeAsync();
 
         IPromptSession loaded = temp.Track(await prompter.Load(created.Id));

@@ -37,7 +37,7 @@ internal static class TestProviders
     /// <param name="engines">Makes the engine for options.</param>
     /// <param name="dataFolder">The folder that holds the stored sessions.</param>
     /// <returns>The prompter.</returns>
-    public static Prompter MakePrompter(Func<PromptSessionOptions, IPromptEngine> engines, string dataFolder)
+    public static Prompter MakePrompter(Func<PromptSetup, IPromptEngine> engines, string dataFolder)
     {
         IPromptSessionStore store = new PromptSessionStore(dataFolder);
         ITurnRunner runner = new TurnRunner();

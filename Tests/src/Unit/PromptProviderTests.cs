@@ -441,7 +441,7 @@ public sealed class PromptProviderTests
     [InlineData(PromptCapability.Balanced, "ollama/medium")]
     [InlineData(PromptCapability.Strong, "ollama/large")]
     [InlineData(PromptCapability.Max, "ollama/huge")]
-    public async Task Select_RunsTheModelTheOptionsMapToTheCapability(PromptCapability capability, string expected)
+    public async Task Select_RunsTheModelTheSetupMapToTheCapability(PromptCapability capability, string expected)
     {
         engine.Setup(mock => mock.GetModels(It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync([Model("ollama/huge"), Model("ollama/large"), Model("ollama/medium"), Model("ollama/small")]);
         engine.SetupGet(mock => mock.PreferredModels).Returns(new PromptCapabilityModels { Fast = "small", Balanced = "medium", Strong = "large", Max = "huge" });
@@ -456,11 +456,26 @@ public sealed class PromptProviderTests
     {
         engine.Setup(mock => mock.GetModels(It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync([Model("a"), new PromptModel { Id = "ollama/gemma", Settings = [PromptModelSetting.Count("context", "Context", 1024, 65536, 4096)] }]);
         engine.SetupGet(mock => mock.PreferredModels).Returns(PromptCapabilityModels.All("gemma"));
-        engine.SetupGet(mock => mock.ModelOverrides).Returns(new Dictionary<string, string> { ["context"] = "16384" });
+        engine.Setup(mock => mock.ModelOverrides(PromptCapability.Fast)).Returns(new Dictionary<string, string> { ["context"] = "16384" });
 
         (PromptModel model, IReadOnlyDictionary<string, string> settings) = await Subject().Select(PromptCapability.Fast, PromptEffort.Low);
 
         Assert.Equal(("ollama/gemma", "16384"), (model.Id, settings["context"]));
+    }
+
+    [Fact]
+    public async Task Select_AsksTheEngineForTheOverridesOfTheCapabilityItChoosesFor()
+    {
+        engine.Setup(mock => mock.GetModels(It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync([new PromptModel { Id = "ollama/gemma", Settings = [PromptModelSetting.Count("context", "Context", 1024, 65536, 4096)] }]);
+        engine.SetupGet(mock => mock.PreferredModels).Returns(PromptCapabilityModels.All("gemma"));
+        engine.Setup(mock => mock.ModelOverrides(PromptCapability.Fast)).Returns(new Dictionary<string, string> { ["context"] = "8192" });
+        engine.Setup(mock => mock.ModelOverrides(PromptCapability.Max)).Returns(new Dictionary<string, string> { ["context"] = "32768" });
+
+        (_, IReadOnlyDictionary<string, string> fast) = await Subject().Select(PromptCapability.Fast, PromptEffort.Low);
+        (_, IReadOnlyDictionary<string, string> max) = await Subject().Select(PromptCapability.Max, PromptEffort.Low);
+        (_, IReadOnlyDictionary<string, string> balanced) = await Subject().Select(PromptCapability.Balanced, PromptEffort.Low);
+
+        Assert.Equal(("8192", "32768", "4096"), (fast["context"], max["context"], balanced["context"]));
     }
 
     private async IAsyncEnumerable<PromptEngineEvent> Finished()

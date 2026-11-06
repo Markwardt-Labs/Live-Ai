@@ -11,7 +11,7 @@ public sealed record PromptSessionInfo
     public required string Id { get; init; }
 
     /// <summary>
-    /// Gets the name of the tool the session runs on, such as <c>Claude Code</c>, <c>Codex</c> or <c>OpenCode</c> (which runs the models of Ollama).
+    /// Gets the name of the tool the session runs on, such as <c>Claude Code</c>, <c>Codex</c> or <c>OpenCode</c> (which runs the local models).
     /// </summary>
     public required string Provider { get; init; }
 

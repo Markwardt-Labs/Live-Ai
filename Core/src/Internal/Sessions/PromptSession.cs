@@ -61,9 +61,11 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptTool? generateTool;
 
-    private PromptImageOptions? generateWith;
+    private PromptImageSetup? generateWith;
 
-    private readonly Func<PromptImageOptions, IPromptImageGenerator> generators;
+    private readonly Func<PromptImageSetup, IPromptImageGenerator> generators;
+
+    private readonly Func<PromptImageSetup?> imageSetups;
 
     private IPromptImageGenerator? imageGenerator;
 
@@ -155,10 +157,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <param name="opener">Opens the sessions that branches are made into.</param>
     /// <param name="logger">The caller's logger, or <see langword="null" /> for none.</param>
     /// <param name="time">The clock the timeouts, retries and schedules of the session run on, or <see langword="null" /> for the system's.</param>
-    /// <param name="generators">Makes the generator for image options, or <see langword="null" /> to make it by the type of the options.</param>
-    public PromptSession(PromptSessionRecord record, string? apiKey, IPromptSessionStore store, IPromptProvider provider, IPromptEngine engine, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, IPromptSessionOpener opener, ILogger? logger = null, TimeProvider? time = null, Func<PromptImageOptions, IPromptImageGenerator>? generators = null)
+    /// <param name="generators">Makes the generator for an image setup, or <see langword="null" /> to make it by the type of the setup.</param>
+    /// <param name="images">Gives the image generation setup of the environment as it is when a prompt starts, or <see langword="null" /> for an environment without one.</param>
+    public PromptSession(PromptSessionRecord record, string? apiKey, IPromptSessionStore store, IPromptProvider provider, IPromptEngine engine, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, IPromptSessionOpener opener, ILogger? logger = null, TimeProvider? time = null, Func<PromptImageSetup, IPromptImageGenerator>? generators = null, Func<PromptImageSetup?>? images = null)
     {
         this.generators = generators ?? (options => options.CreateGenerator());
+        imageSetups = images ?? (() => null);
         current = record;
         persisted = record;
         log = new PromptLog(logger);
@@ -1105,7 +1109,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                     source = current;
                 }
 
-                helper = await provider.Create(new PromptProviderOptions { ApiKey = apiKey, Options = source.Options, WorkspacePath = source.WorkingFolder }, cancellation) as PromptSession ?? throw new InvalidOperationException("A session of the provider is a session of the same kind.");
+                helper = await provider.Create(new PromptProviderOptions { ApiKey = apiKey, Setup = source.Setup, WorkspacePath = source.WorkingFolder }, cancellation) as PromptSession ?? throw new InvalidOperationException("A session of the provider is a session of the same kind.");
 
                 try
                 {
@@ -1560,6 +1564,20 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
     }
 
+    private IPromptImageGenerator Generator(PromptImageSetup setup)
+    {
+        try
+        {
+            setup.Validate();
+        }
+        catch (ArgumentException exception)
+        {
+            throw new PromptSessionException($"The session allows image generation, but the image generation of the environment cannot be used: {exception.Message}", exception);
+        }
+
+        return generators(setup);
+    }
+
     private async Task<ToolEndpoint?> Serve(PromptSessionSettingsSnapshot snapshot, CancellationToken cancellation = default)
     {
         PromptTool[] exposed;
@@ -1600,11 +1618,13 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             PromptTool[] files = fileTools ??= libraryTools.Create(everything).ToArray();
             images = current.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(everything, GiveImage) : null;
             fetch = snapshot.IsWebAllowed ? fetchTool ??= libraryTools.CreateFetch() : null;
-            if (generateWith != snapshot.ImageGeneration)
+            PromptImageSetup? imageSetup = snapshot.IsImageGenerationAllowed ? imageSetups() : null;
+
+            if (generateWith != imageSetup)
             {
                 generateTool = null;
-                generateWith = snapshot.ImageGeneration;
-                imageGenerator = snapshot.ImageGeneration is { } options ? generators(options) : null;
+                generateWith = imageSetup;
+                imageGenerator = imageSetup is { } options ? Generator(options) : null;
             }
 
             generate = imageGenerator is { } generator ? generateTool ??= libraryTools.CreateGenerateImage(everything, generator) : null;
@@ -1809,7 +1829,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)
-        => record with { Capability = snapshot.Capability, Effort = snapshot.Effort, IsShellAllowed = snapshot.IsShellAllowed, IsSandboxed = snapshot.IsSandboxed, IsWebAllowed = snapshot.IsWebAllowed, ImageGeneration = snapshot.ImageGeneration, Instructions = snapshot.Instructions, NativeSearch = snapshot.IsWebAllowed && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
+        => record with { Capability = snapshot.Capability, Effort = snapshot.Effort, IsShellAllowed = snapshot.IsShellAllowed, IsSandboxed = snapshot.IsSandboxed, IsWebAllowed = snapshot.IsWebAllowed, IsImageGenerationAllowed = snapshot.IsImageGenerationAllowed, Instructions = snapshot.Instructions, NativeSearch = snapshot.IsWebAllowed && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
 
     private void Update(Func<PromptSessionRecord, PromptSessionRecord> change)
     {

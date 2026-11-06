@@ -34,7 +34,7 @@ public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncD
     PromptSessionState State { get; }
 
     /// <summary>
-    /// Gets the settings of the session that are stored with it: the capability and effort, the shell, image and web switches, the image generation options and the instructions. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
+    /// Gets the settings of the session that are stored with it: the capability and effort, the shell, image generation and web switches and the instructions. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
     /// </summary>
     IPromptSessionConfiguration Configuration { get; }
 

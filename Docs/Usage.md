@@ -7,7 +7,7 @@ Runnable examples of `IPrompter` and `IPromptSession` in different situations.
 ```csharp
 IPrompter prompter = new Prompter();
 
-IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });   // or CodexSessionOptions
+IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });   // or CodexSetup
 
 Console.WriteLine(await session.Request("Summarize what is in this folder."));
 ```
@@ -42,24 +42,26 @@ void Show(PromptEvent output)
 ## Choosing capability and effort, and letting the AI change files
 
 ```csharp
-IPromptSession session = await prompter.Create(new CodexSessionOptions { WorkspacePath = "/path/to/project" });
+IPromptSession session = await prompter.Create(new CodexSetup { WorkspacePath = "/path/to/project" });
 session.Configuration.Capability = PromptCapability.Strong;
 session.Configuration.Effort = PromptEffort.High;
 
 await session.Request("Add a unit test for the parser and make it pass.");
 ```
 
+The setup can give the configuration its starting values (`Capability`, `Effort`, `IsShellAllowed`, `IsSandboxed`, `IsWebAllowed`, `IsImageGenerationAllowed` and `Instructions`), as in `new CodexSetup { Capability = PromptCapability.Strong, Effort = PromptEffort.High }`. They are used when the session is created; after that the session's configuration holds the values, and a loaded session has the ones it was left with.
+
 The AI never asks for permission and may create, edit and delete in its workspace and the cache, so point it only at a folder it may change. A relative path the AI uses is relative to the workspace, like in a shell. Which model runs is the library's business, see "How a model is chosen".
 
 ## A session with an API key
 
 ```csharp
-IPromptSession session = await prompter.Create(new ClaudeSessionOptions { ApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") });
+IPromptSession session = await prompter.Create(new ClaudeSetup { ApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") });
 
 Console.WriteLine(await session.Request("Say hello."));
 ```
 
-The key is stored with the session, in plain text in its file in the data folder (readable by the current user only on Linux and macOS), so a session that is loaded later runs on the same key.
+The key is stored with the session, in plain text in its file in the data folder (readable by the current user only on Linux and macOS), so a session that is loaded later runs on the same key. To give every new Claude Code or Codex session the same key, set it once on the environment (`prompter.Environment = prompter.Environment with { ClaudeApiKey = key }`, `CodexApiKey` for Codex): a setup without a key of its own gets it, and the session stores the key it was created with.
 
 ## Resuming later
 
@@ -72,7 +74,7 @@ IPromptSession resumed = await prompter.Load(id);
 Console.WriteLine(await resumed.Request("What did I ask you before?"));
 ```
 
-`Load` needs only the identifier: the stored link holds the options the session was created with, so the tool and where it is found are read from it. The session comes back with its workspace and its whole configuration (capability, effort, the shell, image and web switches, the image generation options and the instructions); the tools, MCP servers, asker and cache belong to the session object and are set again. The prompter that loads must use the same data folder as the one that created the session, and a tool configured with another configuration folder than the one that made the session cannot find it.
+`Load` needs only the identifier: the stored link holds the options the session was created with, so the tool and where it is found are read from it. The session comes back with its workspace and its whole configuration (capability, effort, the shell, image generation and web switches and the instructions); the tools, MCP servers, asker and cache belong to the session object and are set again. The prompter that loads must use the same data folder as the one that created the session, and a tool configured with another configuration folder than the one that made the session cannot find it.
 
 ## Changing capability and effort mid-conversation
 
@@ -103,11 +105,11 @@ An object as the input writes the prompt as JSON, and that is the whole prompt, 
 
 ```csharp
 // The AI reads and edits only the workspace and the cache, only through the library's file tools, with no shell (see the shell example).
-await using IPromptSession project = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+await using IPromptSession project = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 Console.WriteLine(project.WorkspacePath);
 
 // IsSandboxed = false lets the AI use any path on the machine.
-await using IPromptSession open = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+await using IPromptSession open = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 open.Configuration.IsSandboxed = false;
 ```
 
@@ -116,7 +118,7 @@ The workspace path is the folder the tool runs in, so Claude Code, Codex and Ope
 ## A working directory that can reach the machine
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+await using IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 session.Configuration.IsSandboxed = false;
 session.Configuration.IsShellAllowed = true;
 
@@ -128,7 +130,7 @@ With `IsSandboxed = false` (a stored setting, true by default, that can be chang
 ## Giving the AI data and collecting what it makes
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await using IPromptSession session = await prompter.Create(new ClaudeSetup());
 await session.Cache.WriteText("todo.md", "- write the report");
 
 await session.Request("Add three items to CACHE:/todo.md and put a summary in CACHE:/summary.md.");
@@ -144,7 +146,7 @@ Console.WriteLine(await session.Cache.ReadText("summary.md"));
 public sealed record Lookup(string Name);
 public sealed record Customer(string Name, string Plan, int Seats);
 
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await using IPromptSession session = await prompter.Create(new ClaudeSetup());
 
 session.Transient.Tools.Add(
     PromptTool.Create<Lookup, Customer>("find_customer", "Finds a customer by name and returns its plan and seats.", async (input, cancellation) => await customers.Find(input.Name, cancellation)));
@@ -157,7 +159,7 @@ The AI calls `find_customer` itself when it needs it, and the call runs in your 
 ## Letting the AI ask the user
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await using IPromptSession session = await prompter.Create(new ClaudeSetup());
 session.Transient.Asker = async (question, cancellation) =>
 {
     Console.WriteLine($"The AI asks: {question}");
@@ -172,7 +174,7 @@ Console.WriteLine(await session.Request("Rename the project folder to whatever I
 ## Letting the AI run commands
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await using IPromptSession session = await prompter.Create(new ClaudeSetup());
 session.Configuration.IsShellAllowed = true;
 
 Console.WriteLine(await session.Request("Run the unit tests in /path/to/project and tell me which ones fail."));
@@ -205,18 +207,19 @@ Four more tools are offered to every session, with no switch: `current_time` (th
 ## Making images
 
 ```csharp
-session.Configuration.ImageGeneration = new OpenAiImageOptions { ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") };
+prompter.Environment = prompter.Environment with { ImageGeneration = new OpenAiImageSetup { ApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") } };
 // or a Stable Diffusion server on this machine (AUTOMATIC1111 or Forge, started with its API on):
-// session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Server = new Uri("http://localhost:7860"), Models = new PromptCapabilityModels { Fast = "turbo.safetensors", Balanced = "base.safetensors", Strong = "base.safetensors", Max = "refined.safetensors" } };
+// prompter.Environment = prompter.Environment with { ImageGeneration = new LocalImageSetup { Server = new Uri("http://localhost:7860"), Models = new PromptCapabilityModels { Fast = "turbo.safetensors", Balanced = "base.safetensors", Strong = "base.safetensors", Max = "refined.safetensors" } } };
 
+IPromptSession session = await prompter.Create(new ClaudeSetup { IsImageGenerationAllowed = true });   // or session.Configuration.IsImageGenerationAllowed = true
 await session.Request("Make three draft icons of a lighthouse, 256x256, save them as art/icons/lighthouse, then tell me which one is best after you look at them.");
 ```
 
-While `ImageGeneration` is set, the AI has a `generate_image` tool. It gives a description and a path, and optionally a size, a quality (`draft`, `standard` or `high`) and a count of 1 to 4; the image is saved as a file where the AI says, with the extension of what was made, numbered when there are several, and a file that is there is never replaced. What else the AI can ask for depends on the service: OpenAI can make a transparent background (not with `gpt-image-2`, which the API refuses it for, so the tool does not offer it there); Stable Diffusion takes a negative prompt and a seed and reports the seed it used. The tool does not show the AI the image: the AI can look at it with `view_image`.
+While the session allows it and the environment has an `ImageGeneration` setup, the AI has a `generate_image` tool. It gives a description and a path, and optionally a size, a quality (`draft`, `standard` or `high`) and a count of 1 to 4; the image is saved as a file where the AI says, with the extension of what was made, numbered when there are several, and a file that is there is never replaced. What else the AI can ask for depends on the service: OpenAI can make a transparent background (not with `gpt-image-2`, which the API refuses it for, so the tool does not offer it there); Stable Diffusion takes a negative prompt and a seed and reports the seed it used. The tool does not show the AI the image: the AI can look at it with `view_image`.
 
-The AI chooses how capable the image model is, for each task, with the `capability` argument of `generate_image`: with OpenAI `fast` is the mini model, `balanced` the flare model and `strong` or `max` the sunburst model, the newest of that kind the key can use (a fixed model of each kind when the service cannot be asked), and with Stable Diffusion it is the checkpoint you mapped to that capability in `Models` (`Models` is required; give one checkpoint for all capabilities with `PromptCapabilityModels.All(...)` and the AI is not offered the choice). Models differ in price and in what they can do, so the AI uses a fast one for sketches and many variants and a strong one for a final image. The options are stored with the session, the key included, so a `Load` brings the service back ready to use.
+The AI chooses how capable the image model is, for each task, with the `capability` argument of `generate_image`: with OpenAI `fast` is the mini model, `balanced` the flare model and `strong` or `max` the sunburst model, the newest of that kind the key can use (a fixed model of each kind when the service cannot be asked), and with Stable Diffusion it is the checkpoint you mapped to that capability in `Models` (`Models` is required; give one checkpoint for all capabilities with `PromptCapabilityModels.All(...)` and the AI is not offered the choice). Models differ in price and in what they can do, so the AI uses a fast one for sketches and many variants and a strong one for a final image. Only the switch is stored with the session; the service and its key come from the environment of the prompter that loads it, and a change of the environment reaches the next prompt.
 
-An image costs money or a graphics card for a while. The key is given by your code (read it from where you keep secrets), is stored with the session like the other options, and is never logged. The options only say how to reach the service. What to draw, the size, the quality, the count, a negative prompt and a seed are for the AI to ask for through the tool, and the user does not prompt the generator directly. For Stable Diffusion the quality becomes a number of steps the library chooses (8, 20 and 35), so a turbo model that wants fewer is not tuned for; A checkpoint is named by the title the server lists, which `StableDiffusionImageOptions.ListModels()` returns (pass the server's address for another server; it throws `InvalidOperationException` with the reason when the server cannot be asked).
+An image costs money or a graphics card for a while. The key is given by your code (read it from where you keep secrets), lives in the environment and is not stored with sessions, and is never logged. The setup only says how to reach the service. What to draw, the size, the quality, the count, a negative prompt and a seed are for the AI to ask for through the tool, and the user does not prompt the generator directly. For Stable Diffusion the quality becomes a number of steps the library chooses (8, 20 and 35), so a turbo model that wants fewer is not tuned for; A checkpoint is named by the title the server lists, which `LocalImageSetup.ListModels()` returns (pass the server's address for another server; it throws `InvalidOperationException` with the reason when the server cannot be asked).
 
 ## Sending images and files with a prompt
 
@@ -235,7 +238,7 @@ The image is shown to the AI, the markdown file is put into the prompt as text, 
 ## Disposing a session
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+await using IPromptSession session = await prompter.Create(new ClaudeSetup());
 
 await session.Request("Read the project and remember its layout.");
 await session.Request("Which folder holds the tests?");
@@ -288,7 +291,7 @@ The configuration and the tools belong to the session and apply from the next pr
 ## Reading the subscription status
 
 ```csharp
-PromptTestResult result = await prompter.Test(new ClaudeSessionOptions());   // the same shape for Codex
+PromptTestResult result = await prompter.Test(new ClaudeSetup());   // the same shape for Codex
 IReadOnlyList<PromptWindow> windows = result.Windows ?? [];
 
 foreach (PromptWindow window in windows)
@@ -297,7 +300,8 @@ foreach (PromptWindow window in windows)
     Console.WriteLine($"{window.Name}: {window.Used:P0} of {window.Length.TotalHours} hours, resets {window.ResetsAt}, pace {window.Pace:0.0}");
 }
 
-PromptTestResult other = await prompter.Test(new ClaudeSessionOptions { ConfigFolder = "/accounts/second" });   // another account
+prompter.Environment = prompter.Environment with { ClaudeConfigFolder = "/accounts/second" };
+PromptTestResult other = await prompter.Test(new ClaudeSetup());   // another account
 ```
 
 `Pace` is how fast a window was being used when it was read: 1 uses all of it exactly when it resets, 2 would use it up halfway, and it is `null` when the reset time is not known or the window had only just started. Windows need a subscription login, so they are `null` on an API key, for OpenCode and when the tool cannot be read. The read costs nothing beyond the test prompt.
@@ -305,7 +309,7 @@ PromptTestResult other = await prompter.Test(new ClaudeSessionOptions { ConfigFo
 ## Checking that a tool works
 
 ```csharp
-PromptTestResult result = await prompter.Test(new CodexSessionOptions { ApiKey = Environment.GetEnvironmentVariable("CODEX_API_KEY") });
+PromptTestResult result = await prompter.Test(new CodexSetup { ApiKey = Environment.GetEnvironmentVariable("CODEX_API_KEY") });
 Console.WriteLine(result.IsAvailable ? "Codex works." : $"Codex is not available: {result.Error}");
 ```
 
@@ -339,7 +343,7 @@ An entry of the history is a point: the conversation is kept up to the end of th
 ## Moving a session to another folder
 
 ```csharp
-await using IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+await using IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 
 await session.Move("/path/to/other-project");   // the same conversation, now working in another folder
 await session.Move(null);                       // back to a folder the library makes for the session in its data folder (empty)
@@ -492,12 +496,14 @@ The logger receives what the library does, not what the AI says: state changes, 
 
 ```csharp
 // ollama pull gemma4:26b
-await using IPromptSession session = await prompter.Create(new OllamaSessionOptions { Models = PromptCapabilityModels.All("gemma4:26b"), Context = 16384, WorkspacePath = "/path/to/project" });   // finds Ollama on http://localhost:11434/v1
+prompter.Environment = new PromptEnvironment { LocalSettings = new PromptServerSettings { Models = PromptCapabilityModels.All("gemma4:26b"), Contexts = PromptCapabilityContexts.All(16384) } };   // finds Ollama on http://localhost:11434/v1
+
+await using IPromptSession session = await prompter.Create(new LocalSetup { WorkspacePath = "/path/to/project" });
 
 Console.WriteLine(await session.Request("Which file holds the entry point?"));
 ```
 
-`OllamaSessionOptions.ListModels()` lists the names a server offers for `Models` (the ones that can call tools; pass the server's address as an argument for another server), and it is empty when the server cannot be reached. `OllamaSessionOptions` drives OpenCode 2.x (`opencode` on the `PATH`, or its path as `Command`) over the model server named by `Server` (Ollama on this machine by default; LM Studio, llama.cpp and vLLM speak the same protocol). `Models` is required and says which model runs: `PromptCapabilityModels.All("gemma4:26b")` runs one model whatever the capability is, and `new PromptCapabilityModels { Fast = "small", Balanced = "medium", Strong = "large", Max = "huge" }` runs a different one for each capability of the session, so changing `Configuration.Capability` between prompts switches models. `Context` is the size of the context window, which OpenCode needs to know to compact in time and which the server has to run the model with (the default is what a loaded model reports, and otherwise Ollama's own default of 4096). The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool, and `Test` waits for it). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
+`LocalSetup.ListModels()` lists the names a server offers for `Models` (the ones that can call tools; pass the server's address as an argument for another server), and it is empty when the server cannot be reached. Local sessions drive OpenCode 2.x (`opencode` on the `PATH`, or its path as `LocalCommand` of the environment) over the model server named by `Server` (Ollama on this machine by default; LM Studio, llama.cpp and vLLM speak the same protocol). The server, the models and the context sizes are set once for the environment in `Environment.LocalSettings` and can be overridden for one session in `LocalSetup.Overrides` (a part that is set replaces the environment's); the models must be set by one of them and say which model runs: `PromptCapabilityModels.All("gemma4:26b")` runs one model whatever the capability is, and `new PromptCapabilityModels { Fast = "small", Balanced = "medium", Strong = "large", Max = "huge" }` runs a different one for each capability of the session, so changing `Configuration.Capability` between prompts switches models. `Contexts` is the size of the context window of each capability (`PromptCapabilityContexts.All(16384)` for one size, or a size per capability, with none meaning the default), which OpenCode needs to know to compact in time and which the server has to run the model with (the default is what a loaded model reports, and otherwise Ollama's own default of 4096). The AI works only through the tools of the session (the file tools, `shell` when enabled, your own tools and `ask_user`), exactly as with the other tools. How well it does depends on the model: it must call tools reliably, and a small or heavily quantized model will often not; and on modest hardware a large model is slow (a 26B model that mostly runs on the processor can take minutes for a prompt that calls one tool, and `Test` waits for it). Input sent while a prompt runs is steered into it at its next step, and a conversation can be branched or rewound to any earlier point.
 
 ## How a model is chosen
 
@@ -532,8 +538,13 @@ Cancelling ends the tool's process and everything it started.
 ## Tools that are not on the PATH
 
 ```csharp
-Prompter prompter = new("/var/lib/my-app/ai");
+Prompter prompter = new("/var/lib/my-app/ai")
+{
+    Environment = new PromptEnvironment { ClaudeCommand = "/opt/claude/bin/claude", ClaudeConfigFolder = "/var/lib/my-app/claude" }
+};
 
-IPromptSession session = await prompter.Create(new ClaudeSessionOptions { Command = "/opt/claude/bin/claude", ConfigFolder = "/var/lib/my-app/claude" });
+IPromptSession session = await prompter.Create(new ClaudeSetup());
 IPromptSession resumed = await prompter.Load(session.Id);
 ```
+
+The environment is the prompter's and is not stored with the sessions, so a prompter that loads a session finds the tool where its own environment says (`CodexCommand`, `CodexConfigFolder` and `LocalCommand` are the others).

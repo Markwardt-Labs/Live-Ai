@@ -71,7 +71,7 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_WithoutOptions_StartsAReadOnlyClaudeSessionThatRunsInAnAutomaticWorkspaceOfItsOwn()
+    public async Task Create_WithoutSetup_StartsAReadOnlyClaudeSessionThatRunsInAnAutomaticWorkspaceOfItsOwn()
     {
         IPromptSession session = await Create(Claude);
 
@@ -284,7 +284,7 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_WithAKeyButNoOptions_StoresNoKeyBecauseOnlyTheOptionsCarryIt()
+    public async Task Create_WithAKeyButNoSetup_StoresNoKeyBecauseOnlyTheSetupCarryIt()
     {
         IPromptSession session = await Create(Claude, "very-secret");
         await session.Request("hi");
@@ -325,20 +325,20 @@ public sealed class ProviderTests : IDisposable
     public async Task ThePrompter_StoresTheWholeConfigurationAndTheKeyWithTheSessionAndLoadsThemBackFromTheIdentifierAlone()
     {
         Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
-        IPromptSession created = temp.Track(await prompter.Create(new ClaudeSessionOptions { ApiKey = "very-secret" }));
+        IPromptSession created = temp.Track(await prompter.Create(new ClaudeSetup { ApiKey = "very-secret" }));
         created.Configuration.Capability = PromptCapability.Strong;
         created.Configuration.Effort = PromptEffort.High;
         created.Configuration.IsShellAllowed = true;
         created.Configuration.IsSandboxed = false;
         created.Configuration.IsWebAllowed = true;
         created.Configuration.Instructions = "Be brief.";
-        created.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
+        created.Configuration.IsImageGenerationAllowed = true;
         await created.DisposeAsync();
 
         IPromptSession loaded = temp.Track(await prompter.Load(created.Id));
 
         Assert.Equal((PromptCapability.Strong, PromptEffort.High, true, false, true, "Be brief."), (loaded.Configuration.Capability, loaded.Configuration.Effort, loaded.Configuration.IsShellAllowed, loaded.Configuration.IsSandboxed, loaded.Configuration.IsWebAllowed, loaded.Configuration.Instructions));
-        Assert.Equal(new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") }, loaded.Configuration.ImageGeneration);
+        Assert.True(loaded.Configuration.IsImageGenerationAllowed);
         Assert.Contains("very-secret", await Stored(), StringComparison.Ordinal);
         await loaded.Request("again");
         Assert.Equal("very-secret", await File.ReadAllTextAsync(temp.Combine("claude-key.txt")));
@@ -348,7 +348,7 @@ public sealed class ProviderTests : IDisposable
     public async Task ThePrompter_StoresAChangeOfTheConfigurationWhenThePromptStartsAndWhenTheSessionIsDisposed()
     {
         Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
-        IPromptSession session = temp.Track(await prompter.Create(new ClaudeSessionOptions()));
+        IPromptSession session = temp.Track(await prompter.Create(new ClaudeSetup()));
         session.Configuration.Instructions = "First.";
         await session.Request("go");
         Assert.Contains("First.", await Stored());
@@ -360,10 +360,10 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task ThePrompter_ListsAndDeletesBySessionIdentifierWithoutOptions()
+    public async Task ThePrompter_ListsAndDeletesBySessionIdentifierWithoutSetup()
     {
         Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
-        IPromptSession session = temp.Track(await prompter.Create(new ClaudeSessionOptions()));
+        IPromptSession session = temp.Track(await prompter.Create(new ClaudeSetup()));
         await session.Request("go");
         await session.DisposeAsync();
 

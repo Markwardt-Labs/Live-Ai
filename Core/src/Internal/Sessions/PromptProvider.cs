@@ -119,7 +119,12 @@ internal sealed class PromptProvider : IPromptProvider
             throw new DirectoryNotFoundException($"The workspace folder '{workspacePath}' does not exist.");
         }
 
-        PromptSessionLink link = new() { Id = id, Created = time.GetUtcNow(), Provider = engine.Identifier, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Options = options?.Options };
+        PromptSessionLink link = new() { Id = id, Created = time.GetUtcNow(), Provider = engine.Identifier, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Setup = options?.Setup };
+
+        if (options?.Setup is { } given)
+        {
+            link = link with { Capability = given.Capability, Effort = given.Effort, IsShellAllowed = given.IsShellAllowed, IsSandboxed = given.IsSandboxed, IsWebAllowed = given.IsWebAllowed, IsImageGenerationAllowed = given.IsImageGenerationAllowed, Instructions = given.Instructions };
+        }
 
         try
         {
@@ -238,7 +243,7 @@ internal sealed class PromptProvider : IPromptProvider
         }
 
         PromptModel model = models.ChooseFor(capability, engine.PreferredModels?.For(capability));
-        return (model, model.SettingsFor(effort, engine.ModelOverrides));
+        return (model, model.SettingsFor(effort, engine.ModelOverrides(capability)));
     }
 
     private async Task<(IReadOnlyList<PromptModel> Models, bool Cached)> Models(string? apiKey, bool fresh, CancellationToken cancellation)

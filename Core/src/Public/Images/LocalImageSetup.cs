@@ -3,7 +3,7 @@ namespace Markwardt.LiveAi;
 /// <summary>
 /// Image generation with a Stable Diffusion server on this machine or the network that has the AUTOMATIC1111 API (AUTOMATIC1111 itself or Forge, started with its API on, or another server with that API such as the server of stable-diffusion.cpp). Only how to reach the server is set here: what to draw, the size, the quality, a negative prompt and a seed are for the AI to ask for through its tool.
 /// </summary>
-public sealed record StableDiffusionImageOptions : PromptImageOptions
+public sealed record LocalImageSetup : PromptImageSetup
 {
     /// <summary>
     /// Lists the checkpoints of a Stable Diffusion server that can be used for <see cref="Models" />, by the title the server lists them with.

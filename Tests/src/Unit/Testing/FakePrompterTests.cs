@@ -3,11 +3,11 @@ namespace Markwardt.LiveAi.Tests.Unit.Testing;
 public sealed class FakePrompterTests
 {
     [Fact]
-    public async Task Create_MakesAFakeSessionWithTheKeyAndTheWorkspaceOfTheOptionsAndRecordsThem()
+    public async Task Create_MakesAFakeSessionWithTheKeyAndTheWorkspaceOfTheSetupAndRecordsThem()
     {
         using TempFolder folder = new();
         FakePrompter prompter = new();
-        ClaudeSessionOptions options = new() { ApiKey = "key", WorkspacePath = folder.Path };
+        ClaudeSetup options = new() { ApiKey = "key", WorkspacePath = folder.Path };
 
         FakePromptSession session = (FakePromptSession)await prompter.Create(options);
 
@@ -17,14 +17,26 @@ public sealed class FakePrompterTests
     }
 
     [Fact]
-    public async Task Create_TakesTheKeyOfCodexOptionsAndNoneFromOllamaOptions()
+    public async Task Create_UsesTheKeyOfTheEnvironmentUnlessTheSetupHasItsOwn()
+    {
+        FakePrompter prompter = new() { Environment = new PromptEnvironment { ClaudeApiKey = "claude-env", CodexApiKey = "codex-env" } };
+
+        FakePromptSession claude = (FakePromptSession)await prompter.Create(new ClaudeSetup());
+        FakePromptSession own = (FakePromptSession)await prompter.Create(new ClaudeSetup { ApiKey = "own" });
+        FakePromptSession codex = (FakePromptSession)await prompter.Create(new CodexSetup());
+
+        Assert.Equal(("claude-env", "own", "codex-env"), (claude.ApiKey, own.ApiKey, codex.ApiKey));
+    }
+
+    [Fact]
+    public async Task Create_TakesTheKeyOfCodexSetupAndNoneFromLocalSetup()
     {
         FakePrompter prompter = new();
 
-        FakePromptSession codex = (FakePromptSession)await prompter.Create(new CodexSessionOptions { ApiKey = "k" });
-        FakePromptSession ollama = (FakePromptSession)await prompter.Create(new OllamaSessionOptions { Models = PromptCapabilityModels.All("m") });
+        FakePromptSession codex = (FakePromptSession)await prompter.Create(new CodexSetup { ApiKey = "k" });
+        FakePromptSession local = (FakePromptSession)await prompter.Create(new LocalSetup { Overrides = new PromptServerSettings { Models = PromptCapabilityModels.All("m") } });
 
-        Assert.Equal(("k", null), (codex.ApiKey, ollama.ApiKey));
+        Assert.Equal(("k", null), (codex.ApiKey, local.ApiKey));
         Assert.Equal(["Codex", "OpenCode"], (await prompter.List()).Select(info => info.Provider).Order());
     }
 
@@ -33,13 +45,13 @@ public sealed class FakePrompterTests
     {
         FakePrompter prompter = new() { OnCreate = session => session.Reply("scripted") };
 
-        IPromptSession session = await prompter.Create(new ClaudeSessionOptions());
+        IPromptSession session = await prompter.Create(new ClaudeSetup());
 
         Assert.Equal("scripted", await session.Request("hi"));
     }
 
     [Fact]
-    public async Task Create_RefusesNullAndOptionsOfAKindTheLibraryDoesNotKnow()
+    public async Task Create_RefusesNullAndSetupOfAKindTheLibraryDoesNotKnow()
     {
         FakePrompter prompter = new();
 
@@ -52,9 +64,9 @@ public sealed class FakePrompterTests
     {
         ManualTime clock = new();
         FakePrompter prompter = new() { Time = clock };
-        FakePromptSession first = (FakePromptSession)await prompter.Create(new ClaudeSessionOptions());
+        FakePromptSession first = (FakePromptSession)await prompter.Create(new ClaudeSetup());
         clock.Advance(TimeSpan.FromMinutes(1));
-        await prompter.Create(new ClaudeSessionOptions());
+        await prompter.Create(new ClaudeSetup());
         first.Reply("x");
         await first.Request("go");
 
@@ -70,7 +82,7 @@ public sealed class FakePrompterTests
     public async Task Load_GivesTheSameSessionAndResumesOneThatWasDisposed()
     {
         FakePrompter prompter = new();
-        IPromptSession created = await prompter.Create(new ClaudeSessionOptions());
+        IPromptSession created = await prompter.Create(new ClaudeSetup());
 
         Assert.Same(created, await prompter.Load(created.Id));
         await created.DisposeAsync();
@@ -85,7 +97,7 @@ public sealed class FakePrompterTests
     public async Task Delete_ForgetsTheSessionAndSaysWhetherThereWasOne()
     {
         FakePrompter prompter = new();
-        IPromptSession created = await prompter.Create(new ClaudeSessionOptions());
+        IPromptSession created = await prompter.Create(new ClaudeSetup());
 
         Assert.True(await prompter.Delete(created.Id));
         Assert.False(await prompter.Delete(created.Id));
@@ -93,10 +105,10 @@ public sealed class FakePrompterTests
     }
 
     [Fact]
-    public async Task Test_RecordsTheOptionsAndAnswersWithTheScriptedResult()
+    public async Task Test_RecordsTheSetupAndAnswersWithTheScriptedResult()
     {
         FakePrompter prompter = new();
-        ClaudeSessionOptions options = new();
+        ClaudeSetup options = new();
 
         Assert.True((await prompter.Test(options)).IsAvailable);
         PromptTestResult failed = await prompter.FailTests("not signed in").Test(options);
@@ -111,8 +123,8 @@ public sealed class FakePrompterTests
         using CancellationTokenSource cancellation = new();
         await cancellation.CancelAsync();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FakePrompter().Create(new ClaudeSessionOptions(), cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FakePrompter().Create(new ClaudeSetup(), cancellation.Token));
     }
 
-    private sealed record UnknownOptions : PromptSessionOptions;
+    private sealed record UnknownOptions : PromptSetup;
 }

@@ -31,9 +31,9 @@ internal sealed record PromptSessionSettingsSnapshot
     public required bool IsWebAllowed { get; init; }
 
     /// <summary>
-    /// Gets how images are made for the AI, or <see langword="null" /> when the AI has no tool for it.
+    /// Gets a value indicating whether the AI has a tool to make images, when the environment has an image generation setup.
     /// </summary>
-    public PromptImageOptions? ImageGeneration { get; init; }
+    public required bool IsImageGenerationAllowed { get; init; }
 
     /// <summary>
     /// Gets the function that answers the questions of the AI, or <see langword="null" /> when the AI is offered no tool to ask.
@@ -67,7 +67,7 @@ internal sealed record PromptSessionSettingsSnapshot
         target.IsSandboxed = IsSandboxed;
         target.IsWebAllowed = IsWebAllowed;
         target.Instructions = Instructions;
-        target.ImageGeneration = ImageGeneration;
+        target.IsImageGenerationAllowed = IsImageGenerationAllowed;
         target.Asker = Asker;
         target.McpServers.Clear();
         target.Tools.Clear();

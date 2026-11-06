@@ -1,6 +1,6 @@
 namespace Markwardt.LiveAi.Tests.Unit;
 
-public sealed class PromptSessionOptionsTests
+public sealed class PromptSetupTests
 {
     private readonly Mock<IPromptSessionStore> store = new();
 
@@ -18,7 +18,7 @@ public sealed class PromptSessionOptionsTests
 
     private readonly Mock<IPromptSessionOpener> opener = new();
 
-    public PromptSessionOptionsTests()
+    public PromptSetupTests()
     {
         store.Setup(mock => mock.GetWorkspaceFolder(It.IsAny<Guid>())).Returns((Guid id) => Path.Combine(Path.GetTempPath(), $"markwardt.liveai-{id:N}"));
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);

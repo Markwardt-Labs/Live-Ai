@@ -17,7 +17,7 @@ public sealed class PromptSessionSettingsTests
     [Fact]
     public void ItStartsWithWhatIsStored()
     {
-        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { Capability = PromptCapability.Strong, Effort = PromptEffort.High, ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") } };
+        PromptSessionRecord record = new PromptSessionRecordBuilder { Instructions = "Be brief.", McpServers = new Dictionary<string, PromptMcpServer> { ["db"] = PromptMcpServer.Http("https://example.com") } }.Build(new CodexEngine()) with { Capability = PromptCapability.Strong, Effort = PromptEffort.High, IsImageGenerationAllowed = true };
 
         PromptSessionSettings settings = Settings(record);
 
@@ -25,7 +25,7 @@ public sealed class PromptSessionSettingsTests
         Assert.Equal(["db"], settings.McpServers.Keys);
         Assert.Empty(settings.Tools);
         Assert.Null(settings.Asker);
-        Assert.Equal(new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") }, settings.ImageGeneration);
+        Assert.True(settings.IsImageGenerationAllowed);
     }
 
     [Fact]
@@ -39,24 +39,23 @@ public sealed class PromptSessionSettingsTests
         settings.IsSandboxed = false;
         settings.IsWebAllowed = true;
         settings.Asker = (_, _) => Task.FromResult(string.Empty);
-        settings.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
+        settings.IsImageGenerationAllowed = true;
         settings.Instructions = "y";
 
         Assert.Equal(8, changes);
     }
 
     [Fact]
-    public void TheImageGenerationIsPartOfTheSnapshotAndCopiedToAnotherConfiguration()
+    public void TheImageGenerationSwitchIsPartOfTheSnapshotAndCopiedToAnotherConfiguration()
     {
         PromptSessionSettings settings = Settings();
         PromptSessionSettings other = Settings();
-        PromptImageOptions options = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
-        settings.ImageGeneration = options;
+        settings.IsImageGenerationAllowed = true;
 
         settings.Snapshot().CopyTo(other);
 
-        Assert.Same(options, settings.Snapshot().ImageGeneration);
-        Assert.Same(options, other.ImageGeneration);
+        Assert.True(settings.Snapshot().IsImageGenerationAllowed);
+        Assert.True(other.IsImageGenerationAllowed);
     }
 
     [Fact]

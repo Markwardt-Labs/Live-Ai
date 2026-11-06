@@ -47,7 +47,7 @@ public sealed class PromptSessionStoreTests : IDisposable
         await new PromptSessionStore(temp.Path).Save(link, CancellationToken.None);
 
         JsonElement written = JsonDocument.Parse(await File.ReadAllTextAsync(Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single())).RootElement;
-        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "isSandboxed", "forkedFrom", "forkedAt", "options", "isShellAllowed", "isWebAllowed", "instructions", "imageGeneration", "capability", "effort"], written.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(["id", "created", "provider", "workingFolder", "aiSessionId", "workspacePath", "isSandboxed", "forkedFrom", "forkedAt", "options", "isShellAllowed", "isWebAllowed", "instructions", "isImageGenerationAllowed", "capability", "effort"], written.EnumerateObject().Select(property => property.Name));
         Assert.Equal("Codex", written.GetProperty("provider").GetString());
     }
 
@@ -59,7 +59,7 @@ public sealed class PromptSessionStoreTests : IDisposable
             return;
         }
 
-        await new PromptSessionStore(temp.Path).Save(Link("abc") with { Options = new ClaudeSessionOptions { ApiKey = "key" } }, CancellationToken.None);
+        await new PromptSessionStore(temp.Path).Save(Link("abc") with { Setup = new ClaudeSetup { ApiKey = "key" } }, CancellationToken.None);
 
         string file = Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single();
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));

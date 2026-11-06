@@ -28,8 +28,8 @@ The command of each tool you use must be installed: `claude` and `codex` signed 
 ```csharp
 IPrompter prompter = new Prompter();
 
-// ClaudeSessionOptions, CodexSessionOptions or OllamaSessionOptions (models on this machine) name the tool
-IPromptSession session = await prompter.Create(new ClaudeSessionOptions { WorkspacePath = "/path/to/project" });
+// ClaudeSetup, CodexSetup or LocalSetup (models on this machine or the network) name the tool
+IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 session.Configuration.Capability = PromptCapability.Strong;   // how capable the model should be
 session.Configuration.Effort = PromptEffort.High;             // how hard it should work
 
@@ -42,7 +42,7 @@ await using IPromptSession resumed = await prompter.Load(id);
 Console.WriteLine(await resumed.Request("And what does it do?"));
 ```
 
-The library picks the model and its reasoning level in the background from the capability and the effort, so a caller never lists or names models. The options carry only what their tool needs (an API key, which is stored with the session in plain text in a file only the current user can read, the workspace, where the command is found), and the identifier alone is enough to load or delete a session.
+The library picks the model and its reasoning level in the background from the capability and the effort, so a caller never lists or names models. The setup carries only what a session of the tool needs (an API key, which is stored with the session in plain text in a file only the current user can read, the workspace, and the starting configuration), where the tools are is the `Environment` of the prompter, and the identifier alone is enough to load or delete a session.
 
 ## Documentation
 

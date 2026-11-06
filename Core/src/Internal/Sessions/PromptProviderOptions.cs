@@ -11,9 +11,9 @@ internal sealed record PromptProviderOptions
     public string? ApiKey { get; init; }
 
     /// <summary>
-    /// Gets the options the session is created with, which are stored with it so that it can be loaded by its identifier alone, or <see langword="null" /> when there are none to store.
+    /// Gets the setup the session is created with, which is stored with it so that it can be loaded by its identifier alone, or <see langword="null" /> when there are none to store.
     /// </summary>
-    public PromptSessionOptions? Options { get; init; }
+    public PromptSetup? Setup { get; init; }
 
     /// <summary>
     /// Gets the folder the session works in, or <see langword="null" /> for none.
@@ -28,7 +28,7 @@ internal sealed record PromptProviderOptions
     private bool PrintMembers(StringBuilder builder)
     {
         builder.Append("ApiKey = ").Append(ApiKey is null ? string.Empty : "***");
-        builder.Append(", Options = ").Append(Options);
+        builder.Append(", Setup = ").Append(Setup);
         builder.Append(", WorkspacePath = ").Append(WorkspacePath);
         return true;
     }

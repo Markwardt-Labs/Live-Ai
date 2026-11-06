@@ -38,10 +38,10 @@ public sealed class PromptSessionTests
                 new Dictionary<string, string> { ["effort"] = effort.ToString().ToLowerInvariant() }));
     }
 
-    private PromptSession Session(PromptSessionRecord record, string? apiKey = null, Func<PromptImageOptions, IPromptImageGenerator>? generators = null)
+    private PromptSession Session(PromptSessionRecord record, string? apiKey = null, Func<PromptImageSetup, IPromptImageGenerator>? generators = null, Func<PromptImageSetup?>? images = null)
     {
         engine.Setup(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == apiKey))).Returns(new ProcessStartInfo("tool"));
-        return new PromptSession(record, apiKey, store.Object, provider.Object, engine.Object, runner.Object, toolHost.Object, libraryTools.Object, opener.Object, generators: generators);
+        return new PromptSession(record, apiKey, store.Object, provider.Object, engine.Object, runner.Object, toolHost.Object, libraryTools.Object, opener.Object, generators: generators, images: images);
     }
 
     private async IAsyncEnumerable<PromptEngineEvent> Events(params PromptEngineEvent[] events)
@@ -1248,14 +1248,15 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task ImageGeneration_OffersTheImageToolWhileOneIsSet()
+    public async Task ImageGeneration_OffersTheImageToolWhileTheSessionAllowsItAndTheEnvironmentHasASetup()
     {
         FakeImageGenerator generator = new();
         libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), generator)).Returns(() => Tool("generate_image"));
         Library(Tool("read_file"));
         Plain();
-        PromptSession session = Session(Record(), generators: _ => generator);
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
+        PromptImageSetup setup = new LocalImageSetup { Models = PromptCapabilityModels.All("checkpoint") };
+        PromptSession session = Session(Record(), generators: _ => generator, images: () => setup);
+        session.Configuration.IsImageGenerationAllowed = true;
 
         await session.Messages("one");
 
@@ -1264,20 +1265,56 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task ImageGeneration_ChangedOrClearedBetweenPrompts_ReplacesOrRemovesTheTool()
+    public async Task ImageGeneration_WithoutTheSwitchOrWithoutASetupInTheEnvironment_OffersNoImageTool()
+    {
+        libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
+        Library(Tool("read_file"));
+        Plain();
+        PromptImageSetup setup = new LocalImageSetup { Models = PromptCapabilityModels.All("checkpoint") };
+        PromptSession notAllowed = Session(Record(), generators: _ => new FakeImageGenerator(), images: () => setup);
+        PromptSession noSetup = Session(Record(), generators: _ => new FakeImageGenerator());
+        noSetup.Configuration.IsImageGenerationAllowed = true;
+
+        await notAllowed.Messages("one");
+        await noSetup.Messages("one");
+
+        libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ImageGeneration_WithASetupOfTheEnvironmentThatIsNotValid_FailsOnlyTheSessionThatAllowsIt()
+    {
+        libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
+        Library(Tool("read_file"));
+        Plain();
+        PromptImageSetup broken = new OpenAiImageSetup { ApiKey = " " };
+        PromptSession allowed = Session(Record(), generators: _ => new FakeImageGenerator(), images: () => broken);
+        allowed.Configuration.IsImageGenerationAllowed = true;
+        PromptSession notAllowed = Session(Record(), generators: _ => new FakeImageGenerator(), images: () => broken);
+
+        PromptSessionException failure = await Assert.ThrowsAsync<PromptSessionException>(() => allowed.Messages("one"));
+        await notAllowed.Messages("one");
+
+        Assert.Contains("image generation of the environment cannot be used", failure.Message, StringComparison.Ordinal);
+        Assert.IsAssignableFrom<ArgumentException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task ImageGeneration_ChangedInTheEnvironmentOrSwitchedOffBetweenPrompts_ReplacesOrRemovesTheTool()
     {
         FakeImageGenerator first = new();
         FakeImageGenerator second = new();
         libraryTools.Setup(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), It.IsAny<IPromptImageGenerator>())).Returns(() => Tool("generate_image"));
         Library(Tool("read_file"));
         Plain();
-        PromptSession session = Session(Record(), generators: options => options is StableDiffusionImageOptions { Models.Fast: "a" } ? first : second);
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("a") };
+        PromptImageSetup setup = new LocalImageSetup { Models = PromptCapabilityModels.All("a") };
+        PromptSession session = Session(Record(), generators: options => options is LocalImageSetup { Models.Fast: "a" } ? first : second, images: () => setup);
+        session.Configuration.IsImageGenerationAllowed = true;
         await session.Messages("one");
 
-        session.Configuration.ImageGeneration = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("b") };
+        setup = new LocalImageSetup { Models = PromptCapabilityModels.All("b") };
         await session.Messages("two");
-        session.Configuration.ImageGeneration = null;
+        session.Configuration.IsImageGenerationAllowed = false;
         await session.Messages("three");
 
         libraryTools.Verify(mock => mock.CreateGenerateImage(It.IsAny<IStore>(), first), Times.Once);

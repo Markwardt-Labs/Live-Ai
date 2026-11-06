@@ -46,9 +46,9 @@ internal sealed record PromptSessionRecord
     public string? Instructions { get; init; }
 
     /// <summary>
-    /// Gets the options the session was created with, which are stored.
+    /// Gets the setup the session was created with, which is stored.
     /// </summary>
-    public PromptSessionOptions? Options { get; init; }
+    public PromptSetup? Setup { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the AI has a shell tool, which is stored.
@@ -61,9 +61,9 @@ internal sealed record PromptSessionRecord
     public bool IsWebAllowed { get; init; }
 
     /// <summary>
-    /// Gets how images are made for the AI, or <see langword="null" /> for no tool, which is stored.
+    /// Gets a value indicating whether the AI can make images, which is stored.
     /// </summary>
-    public PromptImageOptions? ImageGeneration { get; init; }
+    public bool IsImageGenerationAllowed { get; init; }
 
     /// <summary>
     /// Gets the external MCP servers, by name.
@@ -134,7 +134,7 @@ internal sealed record PromptSessionRecord
     /// </summary>
     /// <returns>The link.</returns>
     public PromptSessionLink ToLink()
-        => new() { Id = Id, Created = Created, Provider = Engine.Identifier, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSandboxed = IsSandboxed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Options = Options, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, ImageGeneration = ImageGeneration };
+        => new() { Id = Id, Created = Created, Provider = Engine.Identifier, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSandboxed = IsSandboxed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Setup = Setup, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, IsImageGenerationAllowed = IsImageGenerationAllowed };
 
     /// <inheritdoc />
     public bool Equals(PromptSessionRecord? other)

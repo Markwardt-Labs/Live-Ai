@@ -23,7 +23,8 @@ internal interface IPromptSessionOpener
 /// <param name="libraryTools">Builds the library's file tools.</param>
 /// <param name="logger">The caller's logger, or <see langword="null" /> for none.</param>
 /// <param name="time">The clock the sessions run on, or <see langword="null" /> for the system's.</param>
-internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, ILogger? logger = null, TimeProvider? time = null) : IPromptSessionOpener
+/// <param name="images">Gives the image generation setup of the environment as it is when a prompt starts, or <see langword="null" /> for an environment without one.</param>
+internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, ILogger? logger = null, TimeProvider? time = null, Func<PromptImageSetup?>? images = null) : IPromptSessionOpener
 {
     /// <inheritdoc />
     public IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey)
@@ -34,6 +35,6 @@ internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner
         }
 
         PromptSessionRecord record = link.ToRecord(engine);
-        return new PromptSession(record, apiKey, store, provider, engine, runner, toolHost, libraryTools, this, logger, time);
+        return new PromptSession(record, apiKey, store, provider, engine, runner, toolHost, libraryTools, this, logger, time, null, images);
     }
 }

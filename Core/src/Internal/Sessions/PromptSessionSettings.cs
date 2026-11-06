@@ -23,7 +23,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
 
     private bool isWebAllowed;
 
-    private PromptImageOptions? imageGeneration;
+    private bool isImageGenerationAllowed;
 
     private PromptAsker? asker;
 
@@ -44,7 +44,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
         isShellAllowed = record.IsShellAllowed;
         isSandboxed = record.IsSandboxed;
         isWebAllowed = record.IsWebAllowed;
-        imageGeneration = record.ImageGeneration;
+        isImageGenerationAllowed = record.IsImageGenerationAllowed;
         instructions = record.Instructions;
         Tools = new GuardedList<PromptTool>(gate, CheckTool, Begin, Notify);
         McpServers = new GuardedDictionary<PromptMcpServer>(gate, CheckServer, Begin, Notify, record.McpServers);
@@ -142,21 +142,17 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
     }
 
     /// <inheritdoc />
-    public PromptImageOptions? ImageGeneration
+    public bool IsImageGenerationAllowed
     {
         get
         {
             lock (gate)
             {
-                return imageGeneration;
+                return isImageGenerationAllowed;
             }
         }
 
-        set
-        {
-            value?.Validate();
-            Set(() => imageGeneration = value);
-        }
+        set => Set(() => isImageGenerationAllowed = value);
     }
 
     /// <inheritdoc />
@@ -216,7 +212,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
                 IsShellAllowed = isShellAllowed,
                 IsSandboxed = isSandboxed,
                 IsWebAllowed = isWebAllowed,
-                ImageGeneration = imageGeneration,
+                IsImageGenerationAllowed = isImageGenerationAllowed,
                 Asker = asker,
                 Instructions = instructions,
                 McpServers = McpServers.Copy(),

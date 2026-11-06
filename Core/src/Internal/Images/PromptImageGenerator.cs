@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Makes images for the AI of a session, which asks for them with the <c>generate_image</c> tool once image generation is set in the configuration (see <see cref="PromptImageOptions" />).
+/// Makes images for the AI of a session, which asks for them with the <c>generate_image</c> tool once image generation is set in the configuration (see <see cref="PromptImageSetup" />).
 /// </summary>
 internal interface IPromptImageGenerator
 {

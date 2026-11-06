@@ -204,8 +204,7 @@ public sealed class ForkSessionTests : IDisposable
         origin.Configuration.IsShellAllowed = true;
         origin.Configuration.IsSandboxed = false;
         origin.Configuration.IsWebAllowed = true;
-        PromptImageOptions images = new StableDiffusionImageOptions { Models = PromptCapabilityModels.All("checkpoint") };
-        origin.Configuration.ImageGeneration = images;
+        origin.Configuration.IsImageGenerationAllowed = true;
         origin.Configuration.Instructions = "Be brief.";
         origin.Transient.McpServers["db"] = PromptMcpServer.Http("https://example.com/mcp");
         origin.Transient.Tools.Add(tool);
@@ -216,7 +215,7 @@ public sealed class ForkSessionTests : IDisposable
         Assert.True(fork.Configuration.IsShellAllowed);
         Assert.False(fork.Configuration.IsSandboxed);
         Assert.True(fork.Configuration.IsWebAllowed);
-        Assert.Equal(images, fork.Configuration.ImageGeneration);
+        Assert.True(fork.Configuration.IsImageGenerationAllowed);
         Assert.Equal("Be brief.", fork.Configuration.Instructions);
         Assert.Equal(origin.Transient.McpServers["db"], fork.Transient.McpServers["db"]);
         Assert.Equal([tool], fork.Transient.Tools);

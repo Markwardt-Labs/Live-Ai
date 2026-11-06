@@ -7,8 +7,8 @@ namespace Markwardt.LiveAi;
 /// <param name="localServers">The addresses of the OpenAI compatible APIs of the servers on this machine whose models are offered (the identifier of a model is <c>provider/model</c>, with <c>ollama</c> as the provider of Ollama on its usual port), or <see langword="null" /> for Ollama on <c>http://localhost:11434/v1</c>. Give an empty list to offer none. The models are listed when asked, so a server that is started later is found.</param>
 /// <param name="providers">Model providers to add to OpenCode's configuration, besides the servers above and the ones its own configuration files define, or <see langword="null" /> for none. Their models are offered as <c>provider/model</c>.</param>
 /// <param name="preferredModels">The model to run at each capability, or <see langword="null" /> to pick by capability.</param>
-/// <param name="contextSize">The size of the context window to run the model with, or <see langword="null" /> for the size the server runs it with.</param>
-internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<string>? localServers = null, IEnumerable<OpenCodeModelProvider>? providers = null, PromptCapabilityModels? preferredModels = null, int? contextSize = null) : IPromptEngine
+/// <param name="contexts">The size of the context window to run the model of each capability with, or <see langword="null" /> for the size the server runs them with.</param>
+internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<string>? localServers = null, IEnumerable<OpenCodeModelProvider>? providers = null, PromptCapabilityModels? preferredModels = null, PromptCapabilityContexts? contexts = null) : IPromptEngine
 {
     private readonly ITurnRunner turns = new TurnRunner();
 
@@ -52,7 +52,8 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
     public PromptCapabilityModels? PreferredModels => preferredModels;
 
     /// <inheritdoc />
-    public IReadOnlyDictionary<string, string>? ModelOverrides { get; } = contextSize is { } size ? new Dictionary<string, string> { ["context"] = size.ToString(CultureInfo.InvariantCulture) } : null;
+    public IReadOnlyDictionary<string, string>? ModelOverrides(PromptCapability capability)
+        => contexts?.For(capability) is { } size ? new Dictionary<string, string> { ["context"] = size.ToString(CultureInfo.InvariantCulture) } : null;
 
     /// <inheritdoc />
     public bool Accepts(string mediaType)

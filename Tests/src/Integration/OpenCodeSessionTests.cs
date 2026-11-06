@@ -254,13 +254,13 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TwoSessionsWithTheSameOptionsExceptTheContextSizeEachRunWithTheirOwnSize()
+    public async Task TwoSessionsWithTheSameSetupExceptTheContextSizeEachRunWithTheirOwnSize()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        Prompter prompter = TestProviders.MakePrompter(options => new OpenCodeEngine(fake.Script(server), [ollama.Api], null, ((OllamaSessionOptions)options).Models, ((OllamaSessionOptions)options).Context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data"));
-        OllamaSessionOptions small = new() { Models = PromptCapabilityModels.All("gemma4:26b"), Context = 8192, WorkspacePath = temp.Path };
+        Prompter prompter = TestProviders.MakePrompter(options => new OpenCodeEngine(fake.Script(server), [ollama.Api], null, ((LocalSetup)options).Overrides.Models, ((LocalSetup)options).Overrides.Contexts) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data"));
+        LocalSetup small = new() { Overrides = new PromptServerSettings { Models = PromptCapabilityModels.All("gemma4:26b"), Contexts = PromptCapabilityContexts.All(8192) }, WorkspacePath = temp.Path };
         await using IPromptSession first = await prompter.Create(small);
-        await using IPromptSession second = await prompter.Create(small with { Context = 16384 });
+        await using IPromptSession second = await prompter.Create(small with { Overrides = small.Overrides with { Contexts = PromptCapabilityContexts.All(16384) } });
 
         string providerId = new LocalServer(ollama.Api).ProviderId;
         await first.Request("one");
@@ -274,11 +274,29 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         Assert.Equal(16384, (await StoredContext(second)));
     }
 
+    [Fact]
+    public async Task TheContextSizeFollowsTheCapabilityOfTheSessionAtEachPrompt()
+    {
+        server.OnPrompt = _ => server.Reply("ok");
+        OpenCodeEngine engine = new(fake.Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), new PromptCapabilityContexts { Fast = 4096, Strong = 32768 }) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
+        await using IPromptSession session = await TestProviders.Make(engine, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
+        string providerId = new LocalServer(ollama.Api).ProviderId;
+
+        session.Configuration.Capability = PromptCapability.Fast;
+        await session.Request("one");
+        int fast = (await fake.Config()).GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
+        session.Configuration.Capability = PromptCapability.Strong;
+        await session.Request("two");
+        int strong = (await fake.Config()).GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
+
+        Assert.Equal((4096, 32768), (fast, strong));
+    }
+
     private async Task<int> StoredContext(IPromptSession session)
-        => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement.GetProperty("options").GetProperty("context").GetInt32();
+        => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement.GetProperty("options").GetProperty("overrides").GetProperty("contexts").GetProperty("fast").GetInt32();
 
     private async Task<IPromptSession> LocalSession(int context)
-        => await TestProviders.Make(new OpenCodeEngine(fake.Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
+        => await TestProviders.Make(new OpenCodeEngine(fake.Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), PromptCapabilityContexts.All(context)) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
 
     [Fact]
     public async Task AnAnswerToASchemaThatIsNotInACodeFenceIsKeptAsItIs()
