@@ -9,6 +9,8 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
 
     private readonly FakeOpenCode fake;
 
+    private readonly FakeModelServer ollama = new FakeModelServer().Answer("/api/tags", """{ "models": [{ "name": "gemma4:26b", "capabilities": ["completion", "tools"] }] }""");
+
     public OpenCodeSessionTests()
         => fake = new FakeOpenCode(temp);
 
@@ -18,6 +20,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await server.DisposeAsync();
+        ollama.Dispose();
         temp.Dispose();
     }
 
@@ -243,25 +246,27 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         await session.Request("go");
 
         JsonElement config = await fake.Config();
-        Assert.Equal("ollama/gemma4:26b", config.GetProperty("model").GetString());
-        JsonElement description = config.GetProperty("provider").GetProperty("ollama").GetProperty("models").GetProperty("gemma4:26b");
+        string providerId = new LocalServer(ollama.Api).ProviderId;
+        Assert.Equal($"{providerId}/gemma4:26b", config.GetProperty("model").GetString());
+        JsonElement description = config.GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b");
         Assert.Equal((16384, 8192), (description.GetProperty("limit").GetProperty("context").GetInt32(), description.GetProperty("limit").GetProperty("output").GetInt32()));
-        Assert.Equal("http://localhost:11434/v1", config.GetProperty("provider").GetProperty("ollama").GetProperty("options").GetProperty("baseURL").GetString());
+        Assert.Equal(ollama.Api, config.GetProperty("provider").GetProperty(providerId).GetProperty("options").GetProperty("baseURL").GetString());
     }
 
     [Fact]
     public async Task TwoSessionsWithTheSameOptionsExceptTheContextSizeEachRunWithTheirOwnSize()
     {
         server.OnPrompt = _ => server.Reply("ok");
-        Prompter prompter = TestProviders.MakePrompter(options => new OpenCodeEngine(fake.Script(server), ["http://localhost:11434/v1"], null, ((OllamaSessionOptions)options).Models, ((OllamaSessionOptions)options).Context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data"));
+        Prompter prompter = TestProviders.MakePrompter(options => new OpenCodeEngine(fake.Script(server), [ollama.Api], null, ((OllamaSessionOptions)options).Models, ((OllamaSessionOptions)options).Context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data"));
         OllamaSessionOptions small = new() { Models = PromptCapabilityModels.All("gemma4:26b"), Context = 8192, WorkspacePath = temp.Path };
         await using IPromptSession first = await prompter.Create(small);
         await using IPromptSession second = await prompter.Create(small with { Context = 16384 });
 
+        string providerId = new LocalServer(ollama.Api).ProviderId;
         await first.Request("one");
-        int firstSize = (await fake.Config()).GetProperty("provider").GetProperty("ollama").GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
+        int firstSize = (await fake.Config()).GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
         await second.Request("two");
-        int secondSize = (await fake.Config()).GetProperty("provider").GetProperty("ollama").GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
+        int secondSize = (await fake.Config()).GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32();
 
         Assert.Equal((8192, 16384), (firstSize, secondSize));
         Assert.Equal(2, (await File.ReadAllLinesAsync(temp.Combine("pids.txt"))).Length);
@@ -273,7 +278,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement.GetProperty("options").GetProperty("context").GetInt32();
 
     private async Task<IPromptSession> LocalSession(int context)
-        => await TestProviders.Make(new OpenCodeEngine(fake.Script(server), ["http://localhost:11434/v1"], null, PromptCapabilityModels.All("gemma4:26b"), context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
+        => await TestProviders.Make(new OpenCodeEngine(fake.Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), context) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) }, temp.Combine("data")).Create(new PromptProviderOptions { WorkspacePath = temp.Path });
 
     [Fact]
     public async Task AnAnswerToASchemaThatIsNotInACodeFenceIsKeptAsItIs()

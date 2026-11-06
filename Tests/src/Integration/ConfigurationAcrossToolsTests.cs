@@ -11,19 +11,22 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
 
     private readonly Dictionary<Type, IPromptEngine> engines = [];
 
+    private readonly FakeModelServer ollama = new FakeModelServer().Answer("/api/tags", """{ "models": [{ "name": "gemma4:26b", "capabilities": ["completion", "tools"] }] }""");
+
     public Task InitializeAsync()
     {
         server.OnPrompt = _ => server.Reply("ok");
         string claude = temp.Script("claude", "mkdir -p \"$CLAUDE_CONFIG_DIR/projects/p\"\n: > \"$CLAUDE_CONFIG_DIR/projects/p/claude-session.jsonl\"\nIFS= read -r line\necho '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"claude says hi\"}]}}'\necho '{\"type\":\"result\",\"is_error\":false,\"session_id\":\"claude-session\"}'");
         engines[typeof(ClaudeSessionOptions)] = new ClaudeEngine(claude, temp.Combine("claude-state"));
         engines[typeof(CodexSessionOptions)] = new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
-        engines[typeof(OllamaSessionOptions)] = new OpenCodeEngine(new FakeOpenCode(temp).Script(server), ["http://localhost:11434/v1"], null, PromptCapabilityModels.All("gemma4:26b"), 8192) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
+        engines[typeof(OllamaSessionOptions)] = new OpenCodeEngine(new FakeOpenCode(temp).Script(server), [ollama.Api], null, PromptCapabilityModels.All("gemma4:26b"), 8192) { ConnectWait = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) };
         return Task.CompletedTask;
     }
 
     public async Task DisposeAsync()
     {
         await server.DisposeAsync();
+        ollama.Dispose();
         temp.Dispose();
     }
 
