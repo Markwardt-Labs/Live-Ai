@@ -17,6 +17,26 @@ public sealed class EngineFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task Claude_ReadsAMessageGivenWhileTheAiWorkedAsInput()
+    {
+        Write("projects/-p/abc.jsonl",
+            """{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":"start"}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}""",
+            """{"type":"attachment","isSidechain":false,"timestamp":"2026-01-02T03:05:00.000Z","attachment":{"type":"queued_command","prompt":"one more thing","commandMode":"prompt","timestamp":"2026-01-02T03:04:59.000Z"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"  "}}""",
+            """{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"inner"}}""",
+            """{"type":"attachment","attachment":{"type":"date","content":"x"}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}""");
+
+        List<PromptHistoryEntry> newest = await new ClaudeEngine("claude", temp.Path).ReadHistory("abc").ToListAsync();
+        List<PromptHistoryEntry> entries = [.. newest.AsEnumerable().Reverse()];
+
+        Assert.Equal([typeof(PromptInputEvent), typeof(PromptMessageEvent), typeof(PromptInputEvent), typeof(PromptMessageEvent)], entries.Select(entry => entry.Event.GetType()));
+        Assert.Equal(["start", "working", "one more thing", "done"], entries.Select(entry => entry.Text));
+        Assert.Equal(DateTimeOffset.Parse("2026-01-02T03:04:59Z"), entries[2].Time);
+    }
+
+    [Fact]
     public async Task Claude_ReadsTheHistoryWithPromptsRepliesAndToolsAndSkipsTheRest()
     {
         Write("projects/-p/abc.jsonl",

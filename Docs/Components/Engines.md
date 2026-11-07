@@ -85,7 +85,7 @@ A rewind is a branch that the session itself moves to: it stores the new provide
 
 ## History
 
-Both tools store the conversation as JSON lines that the providers read directly. Claude Code's file holds user and assistant entries whose content is text or blocks (text, tool use, tool result, image, document); sub-agent and meta entries are skipped. Codex's holds many record types, and the history uses the user and agent messages and the end of each MCP call (which has the tool, the arguments and the result in one record); its own internal scripting calls are not shown. A line that cannot be read is skipped.
+Both tools store the conversation as JSON lines that the providers read directly. Claude Code's file holds user and assistant entries whose content is text or blocks (text, tool use, tool result, image, document); sub-agent and meta entries are skipped. A message given while the AI worked is stored by the tool as a queued command attachment rather than as a user entry, and the history shows it as input like any other. Codex's holds many record types, and the history uses the user and agent messages and the end of each MCP call (which has the tool, the arguments and the result in one record); its own internal scripting calls are not shown. A line that cannot be read is skipped.
 
 ## History from the end of the file
 

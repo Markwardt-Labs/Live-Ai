@@ -584,6 +584,11 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
             JsonElement root = document.RootElement;
             string? type = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("type", out JsonElement kind) ? kind.GetString() : null;
 
+            if (type == "attachment" && Queued(root) is { } queued)
+            {
+                return [queued];
+            }
+
             if (type is not ("user" or "assistant") || root.TryGetProperty("isSidechain", out JsonElement side) && side.ValueKind == JsonValueKind.True || root.TryGetProperty("isMeta", out JsonElement meta) && meta.ValueKind == JsonValueKind.True || !root.TryGetProperty("message", out JsonElement message) || !message.TryGetProperty("content", out JsonElement content))
             {
                 return [];
@@ -603,6 +608,18 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
         {
             return [];
         }
+    }
+
+    private PromptHistoryEntry? Queued(JsonElement root)
+    {
+        if (root.TryGetProperty("isSidechain", out JsonElement side) && side.ValueKind == JsonValueKind.True || !root.TryGetProperty("attachment", out JsonElement attachment) || attachment.ValueKind != JsonValueKind.Object || !attachment.TryGetProperty("type", out JsonElement kind) || kind.GetString() != "queued_command" || !attachment.TryGetProperty("prompt", out JsonElement prompt) || prompt.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(prompt.GetString()))
+        {
+            return null;
+        }
+
+        JsonElement stamp = attachment.TryGetProperty("timestamp", out JsonElement inner) ? inner : root.TryGetProperty("timestamp", out JsonElement outer) ? outer : default;
+        DateTimeOffset? time = stamp.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(stamp.GetString(), out DateTimeOffset parsed) ? parsed : null;
+        return new PromptHistoryEntry { Event = new PromptInputEvent { Text = prompt.GetString()! }, Time = time };
     }
 
     private PromptEvent Said(bool user, string text)
