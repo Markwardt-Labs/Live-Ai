@@ -1,14 +1,19 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// How a command line tool does the work of a session: how to start it and read what it writes. Only <see cref="Identifier" />, <see cref="CreateStart" /> and <see cref="Parse" /> have to be implemented: the simple form then starts one process per prompt, writes the prompt to its standard input, closes it, and reads the lines it writes until it exits. Everything else has a default that does that and nothing more (no history, no branching, no status, nothing to delete, files written for the length of the prompt). <see cref="ClaudeEngine" />, <see cref="CodexEngine" /> and <see cref="OpenCodeEngine" /> are the three the library has, each with the settings it needs to be found; the <see cref="Prompter" /> makes one from the options a caller gives, and a <see cref="PromptProvider" /> makes the sessions of it.
+/// How a command line tool does the work of a session: how to start it and read what it writes. Only <see cref="Identifier" />, <see cref="CreateStart" /> and <see cref="Parse" /> have to be implemented: the simple form then starts one process per prompt, writes the prompt to its standard input, closes it, and reads the lines it writes until it exits. Everything else has a default that does that and nothing more (no history, no branching, no status, nothing to delete, files written for the length of the prompt). <see cref="ClaudeEngine" />, <see cref="CodexEngine" /> and <see cref="OpenCodeEngine" /> are the three the library has, each with the settings it needs to be found; the <see cref="Prompter" /> makes one from the options a caller gives, and a <see cref="PromptToolService" /> makes the sessions of it.
 /// </summary>
 internal interface IPromptEngine
 {
     /// <summary>
-    /// Gets the name of the tool, such as <c>Gemini CLI</c>, which is used in messages and stored with a session to say which engine made it. A <see cref="PromptProvider" /> only loads and deletes the sessions that carry the identifier of its engine (ignoring case).
+    /// Gets the name of the tool, such as <c>Gemini CLI</c>, which is used in messages and descriptors. A <see cref="PromptToolService" /> only loads and deletes the sessions of the <see cref="Provider" /> of its engine.
     /// </summary>
     string Identifier { get; }
+
+    /// <summary>
+    /// Gets which provider the tool is, which the sessions that run on it report (<see cref="IPromptSession.Provider" />).
+    /// </summary>
+    PromptProvider Provider { get; }
 
     /// <summary>
     /// Gets a value indicating whether the tool can be driven through a process that holds the conversation (<see cref="CreatePersistentStart" /> and <see cref="Attach" />), which is what lets input be given to the AI while it works (<see cref="IPromptProcess.Steer" />) and lets a session keep the process between pieces of work.

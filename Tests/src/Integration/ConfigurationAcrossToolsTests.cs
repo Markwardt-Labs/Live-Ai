@@ -39,7 +39,7 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         };
 
     private Prompter Prompter()
-        => TestProviders.MakePrompter(options => engines[options.GetType()], temp.Combine("data"));
+        => TestServices.MakePrompter(options => engines[options.GetType()], temp.Combine("data"));
 
     private void Configure(IPromptSessionConfiguration configuration, int variant)
     {
@@ -47,13 +47,13 @@ public sealed class ConfigurationAcrossToolsTests : IAsyncLifetime
         configuration.Effort = variant == 0 ? PromptEffort.High : PromptEffort.Low;
         configuration.IsShellAllowed = variant == 0;
         configuration.IsWebAllowed = variant == 0;
-        configuration.IsSandboxed = variant != 0;
+        configuration.IsSystemAccessAllowed = variant == 0;
         configuration.Instructions = variant == 0 ? "Be brief." : "Be thorough.";
         configuration.IsImageGenerationAllowed = variant == 0;
     }
 
     private (PromptCapability, PromptEffort, bool, bool, bool, string?, bool) Read(IPromptSessionConfiguration configuration)
-        => (configuration.Capability, configuration.Effort, configuration.IsShellAllowed, configuration.IsWebAllowed, configuration.IsSandboxed, configuration.Instructions, configuration.IsImageGenerationAllowed);
+        => (configuration.Capability, configuration.Effort, configuration.IsShellAllowed, configuration.IsWebAllowed, configuration.IsSystemAccessAllowed, configuration.Instructions, configuration.IsImageGenerationAllowed);
 
     [Theory]
     [MemberData(nameof(Tools))]

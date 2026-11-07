@@ -34,6 +34,9 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
     public string Identifier => "OpenCode";
 
     /// <inheritdoc />
+    public PromptProvider Provider => PromptProvider.Local;
+
+    /// <inheritdoc />
     public bool CanPersist => true;
 
     /// <inheritdoc />

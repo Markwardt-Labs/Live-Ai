@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// How things run in the environment the library is used in, as opposed to what a session is created with: where each tool is, where it keeps its configuration and the API key that new sessions use by default, the server, models and context sizes of the local models, and the service that makes images. It belongs to the <see cref="IPrompter" />, applies to all of its sessions, and is not stored with them, so a session that is loaded runs with the environment of the prompter that loads it (a folder or command that moved with the machine needs no change to the sessions).
+/// How things run in the environment the library is used in, as opposed to what a session is created with: where each tool is, where it keeps its configuration and the API key that new sessions use by default, the server, models and context sizes of the local models, the service that makes images, and the configuration that new sessions start with. It belongs to the <see cref="IPrompter" /> and applies to all of its sessions. It is not stored with them: a session that is loaded runs with the environment of the prompter that loads it (a folder or command that moved with the machine needs no change to the sessions), except for the API key and the starting configuration, which a session copies when it is created and keeps.
 /// </summary>
 public sealed record PromptEnvironment
 {
@@ -51,6 +51,41 @@ public sealed record PromptEnvironment
     public PromptImageSetup? ImageGeneration { get; init; }
 
     /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.Capability" /> has in a session that is created, <see cref="PromptCapability.Balanced" /> by default. Sessions keep the value they were created with, whatever this is set to later.
+    /// </summary>
+    public PromptCapability Capability { get; init; } = PromptCapability.Balanced;
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.Effort" /> has in a session that is created, <see cref="PromptEffort.High" /> by default.
+    /// </summary>
+    public PromptEffort Effort { get; init; } = PromptEffort.High;
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.IsShellAllowed" /> has in a session that is created, <see langword="false" /> by default.
+    /// </summary>
+    public bool IsShellAllowed { get; init; }
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.IsSystemAccessAllowed" /> has in a session that is created, <see langword="false" /> by default.
+    /// </summary>
+    public bool IsSystemAccessAllowed { get; init; }
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.IsWebAllowed" /> has in a session that is created, <see langword="false" /> by default.
+    /// </summary>
+    public bool IsWebAllowed { get; init; }
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.IsImageGenerationAllowed" /> has in a session that is created, <see langword="false" /> by default. It takes effect with the image generation of the environment (<see cref="ImageGeneration" />).
+    /// </summary>
+    public bool IsImageGenerationAllowed { get; init; }
+
+    /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.Instructions" /> has in a session that is created, <see langword="null" /> (none) by default.
+    /// </summary>
+    public string? Instructions { get; init; }
+
+    /// <summary>
     /// Describes the members for <see cref="object.ToString" />, with the API keys hidden, so they do not end up in a log or a failure message.
     /// </summary>
     /// <param name="builder">Receives the text.</param>
@@ -66,6 +101,13 @@ public sealed record PromptEnvironment
         builder.Append(", LocalCommand = ").Append(LocalCommand);
         builder.Append(", LocalSettings = ").Append(LocalSettings);
         builder.Append(", ImageGeneration = ").Append(ImageGeneration);
+        builder.Append(", Capability = ").Append(Capability);
+        builder.Append(", Effort = ").Append(Effort);
+        builder.Append(", IsShellAllowed = ").Append(IsShellAllowed);
+        builder.Append(", IsSystemAccessAllowed = ").Append(IsSystemAccessAllowed);
+        builder.Append(", IsWebAllowed = ").Append(IsWebAllowed);
+        builder.Append(", IsImageGenerationAllowed = ").Append(IsImageGenerationAllowed);
+        builder.Append(", Instructions = ").Append(Instructions);
         return true;
     }
 }

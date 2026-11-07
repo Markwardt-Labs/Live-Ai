@@ -6,7 +6,7 @@ namespace Markwardt.LiveAi;
 public interface IPrompter
 {
     /// <summary>
-    /// Gets or sets how things run in the environment: where each tool is, where it keeps its configuration, the default API keys, the server and models of the local models, and the image generation service. It applies to every session of this prompter, is not stored with the sessions, and is read at each call, so a change reaches the sessions created, loaded, deleted and tested after it (a session that is open keeps the tool it was started with). It starts as a default <see cref="PromptEnvironment" />, which finds each tool on the <c>PATH</c> and Ollama on its usual address.
+    /// Gets or sets how things run in the environment: where each tool is, where it keeps its configuration, the default API keys, the server and models of the local models, the image generation service, and the configuration that new sessions start with. It applies to every session of this prompter, is not stored with the sessions, and is read at each call, so a change reaches the sessions created, loaded, deleted and tested after it (a session that is open keeps the tool it was started with). It starts as a default <see cref="PromptEnvironment" />, which finds each tool on the <c>PATH</c> and Ollama on its usual address.
     /// </summary>
     /// <exception cref="ArgumentNullException">The value set is <see langword="null" />.</exception>
     PromptEnvironment Environment { get; set; }
@@ -18,12 +18,12 @@ public interface IPrompter
     /// <param name="cancellation">Cancels the creation.</param>
     /// <returns>The new session, which the caller disposes.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="setup" /> is <see langword="null" />.</exception>
-    /// <exception cref="ArgumentException">The setup is of a kind the library does not know, the local models have none named (the environment, <see cref="PromptEnvironment.LocalSettings" />, or the setup, <see cref="LocalSetup.Overrides" />, must name them), or the setup allows image generation (<see cref="PromptSetup.IsImageGenerationAllowed" />) and the image generation of the environment (<see cref="PromptEnvironment.ImageGeneration" />) is not valid (an empty API key, say).</exception>
+    /// <exception cref="ArgumentException">The setup is of a kind the library does not know, the local models have none named (the environment, <see cref="PromptEnvironment.LocalSettings" />, or the setup, <see cref="LocalSetup.Overrides" />, must name them), the capability or the effort of the environment is not a defined value, or the environment allows image generation (<see cref="PromptEnvironment.IsImageGenerationAllowed" />) and its image generation (<see cref="PromptEnvironment.ImageGeneration" />) is not valid (an empty API key, say).</exception>
     /// <exception cref="DirectoryNotFoundException">The workspace folder does not exist.</exception>
     Task<IPromptSession> Create(PromptSetup setup, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Loads a stored session, which continues the same conversation. The session records which tool runs it and the setup it was made with, so its identifier is all it takes; the tool is found as the current <see cref="Environment" /> says, and the key is the one it was created with. Everything in its configuration comes back (the capability and effort, the switches, the instructions and the image generation); the API key is stored with the session, so a session made with one runs on it again. What the caller gave the session object itself (tools, external servers, the asker) is set again.
+    /// Loads a stored session, which continues the same conversation. The session records which tool runs it and the setup it was made with, so its identifier is all it takes; the tool is found as the current <see cref="Environment" /> says, and the key is the one it was created with. Everything in its configuration comes back (the capability and effort, the switches, among them whether image generation is allowed, and the instructions), while the image generation service itself, with its key, is the one of the current environment; the API key is stored with the session, so a session made with one runs on it again. What the caller gave the session object itself (tools, external servers, the asker) is set again.
     /// </summary>
     /// <param name="id">The identifier of the session (<see cref="IPromptSession.Id" />).</param>
     /// <param name="cancellation">Cancels the load.</param>
@@ -35,7 +35,7 @@ public interface IPrompter
     Task<IPromptSession> Load(string id, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Lists the stored sessions of every tool, newest first.
+    /// Lists the stored sessions of every tool, the most recently loaded first (<see cref="PromptSessionInfo.LastLoaded" />).
     /// </summary>
     /// <param name="cancellation">Cancels the listing.</param>
     /// <returns>What is known about each session.</returns>
@@ -49,6 +49,18 @@ public interface IPrompter
     /// <returns><see langword="true" /> when the session was there and is gone, <see langword="false" /> when there was no such session.</returns>
     /// <exception cref="PromptSessionException">The conversation or the folder could not be removed.</exception>
     Task<bool> Delete(string id, CancellationToken cancellation = default);
+
+    /// <summary>
+    /// Moves a stored session to another workspace folder, which is what the library tracks as the place of a workspace, and keeps its conversation, without loading it: the folder it was in may be gone already, for instance because it was moved on disk, which is what loading a session cannot cope with. It does what <see cref="IPromptSession.Move" /> does for a session that is open: the tool's conversation is brought to the new folder where the tool keeps it by folder (Claude Code copies it and leaves the old copy), the folder the library made for a session that had none is removed, and the link is stored with the new folder. The system access switch and every other setting are kept. A session that is open should be disposed first. Nothing on disk is moved: the files of the workspace are the caller's.
+    /// </summary>
+    /// <param name="id">The identifier of the session.</param>
+    /// <param name="workspacePath">The existing folder that is the session's workspace from now on.</param>
+    /// <param name="cancellation">Cancels the move.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="workspacePath" /> is <see langword="null" />.</exception>
+    /// <exception cref="PromptSessionNotFoundException">There is no such session.</exception>
+    /// <exception cref="PromptSessionException">The session was stored without the setup it needs, or the tool's conversation could not be brought to the folder. Nothing has changed.</exception>
+    /// <exception cref="DirectoryNotFoundException">The folder does not exist. Nothing has changed.</exception>
+    Task Move(string id, string workspacePath, CancellationToken cancellation = default);
 
     /// <summary>
     /// Finds out whether a tool is usable, with the cheapest model it has and the smallest prompt that will do. A missing command, a missing sign in and a wrong key all show up as the reason, and not as a failure in the middle of real work. Where the tool says how much of the subscription is used, the result carries that too.
@@ -74,7 +86,7 @@ public sealed class Prompter : IPrompter
 
     private readonly Func<PromptSetup, IPromptEngine>? engines;
 
-    private readonly Dictionary<string, PromptProvider> providers = [];
+    private readonly Dictionary<string, PromptToolService> services = [];
 
     private readonly object gate = new();
 
@@ -132,9 +144,10 @@ public sealed class Prompter : IPrompter
         ArgumentNullException.ThrowIfNull(setup);
         PromptEnvironment environment = Environment;
         Check(setup, environment);
-        CheckImages(setup.IsImageGenerationAllowed, environment);
+        CheckConfiguration(environment);
+        CheckImages(environment.IsImageGenerationAllowed, environment);
         PromptSetup given = WithKey(setup, environment);
-        return Provider(given, environment).Create(new PromptProviderOptions { ApiKey = ApiKey(given), Setup = given, WorkspacePath = given.WorkspacePath }, cancellation);
+        return Service(given, environment).Create(new PromptToolServiceOptions { ApiKey = ApiKey(given), Setup = given, Environment = environment, WorkspacePath = given.WorkspacePath }, cancellation);
     }
 
     /// <inheritdoc />
@@ -145,12 +158,12 @@ public sealed class Prompter : IPrompter
         PromptEnvironment environment = Environment;
         Check(setup, environment);
         CheckImages(link.IsImageGenerationAllowed, environment);
-        return await Provider(setup, environment).Load(id, new PromptProviderOptions { ApiKey = ApiKey(setup) }, cancellation);
+        return await Service(setup, environment).Load(id, new PromptToolServiceOptions { ApiKey = ApiKey(setup) }, cancellation);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<PromptSessionInfo>> List(CancellationToken cancellation = default)
-        => [.. (await store.List(cancellation)).Select(link => new PromptSessionInfo { Id = link.Id.ToString("N"), Provider = link.Provider, Created = link.Created, WorkspacePath = link.WorkingFolder, IsStarted = link.AiSessionId is not null })];
+        => [.. (await store.List(cancellation)).Select(link => new PromptSessionInfo { Id = link.Id.ToString("N"), Provider = link.Provider, LastLoaded = link.LastLoaded, WorkspacePath = link.WorkingFolder })];
 
     /// <inheritdoc />
     public async Task<bool> Delete(string id, CancellationToken cancellation = default)
@@ -160,7 +173,14 @@ public sealed class Prompter : IPrompter
             return false;
         }
 
-        return await Provider(await Stored(id, cancellation), Environment).Delete(id, cancellation);
+        return await Service(await Stored(id, cancellation), Environment).Delete(id, cancellation);
+    }
+
+    /// <inheritdoc />
+    public async Task Move(string id, string workspacePath, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspacePath);
+        await Service(await Stored(id, cancellation), Environment).Move(id, workspacePath, cancellation);
     }
 
     /// <inheritdoc />
@@ -170,7 +190,7 @@ public sealed class Prompter : IPrompter
         PromptEnvironment environment = Environment;
         Check(setup, environment);
         PromptSetup given = WithKey(setup, environment);
-        return Provider(given, environment).Test(ApiKey(given), cancellation);
+        return Service(given, environment).Test(ApiKey(given), cancellation);
     }
 
     private async Task<PromptSessionLink> Linked(string id, CancellationToken cancellation)
@@ -182,18 +202,21 @@ public sealed class Prompter : IPrompter
     private (Uri Server, PromptCapabilityModels? Models, PromptCapabilityContexts? Contexts) Settle(LocalSetup setup, PromptEnvironment environment)
         => (setup.Overrides.Server ?? environment.LocalSettings.Server ?? PromptServerSettings.DefaultServer, setup.Overrides.Models ?? environment.LocalSettings.Models, setup.Overrides.Contexts ?? environment.LocalSettings.Contexts);
 
+    private void CheckConfiguration(PromptEnvironment environment)
+    {
+        if (!Enum.IsDefined(environment.Capability))
+        {
+            throw new ArgumentException("The capability of the environment is not a defined value.", nameof(environment));
+        }
+
+        if (!Enum.IsDefined(environment.Effort))
+        {
+            throw new ArgumentException("The effort of the environment is not a defined value.", nameof(environment));
+        }
+    }
+
     private void Check(PromptSetup setup, PromptEnvironment environment)
     {
-        if (!Enum.IsDefined(setup.Capability))
-        {
-            throw new ArgumentException("The capability is not a defined value.", nameof(setup));
-        }
-
-        if (!Enum.IsDefined(setup.Effort))
-        {
-            throw new ArgumentException("The effort is not a defined value.", nameof(setup));
-        }
-
         if (setup is LocalSetup local)
         {
             PromptCapabilityModels models = Settle(local, environment).Models ?? throw new ArgumentException("Local models need the model to run for each capability, and neither the environment nor the setup of the session name them.", nameof(setup));
@@ -257,18 +280,18 @@ public sealed class Prompter : IPrompter
             _ => throw new ArgumentException($"{setup.GetType().Name} is not a kind of session setup the library knows.", nameof(setup))
         };
 
-    private PromptProvider Provider(PromptSetup setup, PromptEnvironment environment)
+    private PromptToolService Service(PromptSetup setup, PromptEnvironment environment)
     {
         string key = EngineKey(setup, environment);
 
         lock (gate)
         {
-            if (!providers.TryGetValue(key, out PromptProvider? provider))
+            if (!services.TryGetValue(key, out PromptToolService? service))
             {
-                providers[key] = provider = new PromptProvider(engines?.Invoke(setup) ?? CreateEngine(setup, environment), store, opener, runner, time);
+                services[key] = service = new PromptToolService(engines?.Invoke(setup) ?? CreateEngine(setup, environment), store, opener, runner, time);
             }
 
-            return provider;
+            return service;
         }
     }
 }

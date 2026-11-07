@@ -23,7 +23,7 @@ internal interface IPromptSessionStore
     Task<PromptSessionLink?> Find(Guid id, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Reads every stored link, newest first (links without a creation time last). A link that is unreadable is left out.
+    /// Reads every stored link, the most recently loaded first. A link that is unreadable is left out.
     /// </summary>
     /// <param name="cancellation">Cancels the read.</param>
     /// <returns>The links.</returns>
@@ -50,7 +50,9 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
 {
     private readonly string root = Path.GetFullPath(folder ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Markwardt.LiveAi"));
 
-    private readonly JsonSerializerOptions json = new(JsonSerializerDefaults.Web) { WriteIndented = true, Converters = { new JsonStringEnumConverter(), new CompactGuidConverter() } };
+    private readonly JsonSerializerOptions json = new(JsonSerializerDefaults.Web) { WriteIndented = true, Converters = { new JsonStringEnumConverter<PromptProvider>(JsonNamingPolicy.CamelCase), new JsonStringEnumConverter(), new CompactGuidConverter() } };
+
+    private readonly IPromptSessionMigration migration = new PromptSessionMigration();
 
     private string Sessions => Path.Combine(root, "Sessions");
 
@@ -58,22 +60,7 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
     public async Task Save(PromptSessionLink link, CancellationToken cancellation = default)
     {
         Directory.CreateDirectory(Sessions);
-        string path = PathOf(link.Id);
-        string pending = $"{path}.{Guid.NewGuid():N}.tmp";
-
-        FileStreamOptions options = new() { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
-
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        await using (StreamWriter writer = new(pending, options))
-        {
-            await writer.WriteAsync(JsonSerializer.Serialize(link, json).AsMemory(), cancellation);
-        }
-
-        File.Move(pending, path, true);
+        await Write(PathOf(link.Id), JsonSerializer.Serialize(link with { Version = migration.Version }, json), cancellation);
     }
 
     /// <inheritdoc />
@@ -88,9 +75,13 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
 
         try
         {
-            return JsonSerializer.Deserialize<PromptSessionLink>(await File.ReadAllTextAsync(path, cancellation), json);
+            return await Read(path, cancellation);
         }
         catch (JsonException exception)
+        {
+            throw new PromptSessionException($"The stored session {id} is unreadable: {exception.Message}");
+        }
+        catch (PromptSessionException exception)
         {
             throw new PromptSessionException($"The stored session {id} is unreadable: {exception.Message}");
         }
@@ -111,17 +102,17 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
         {
             try
             {
-                if (JsonSerializer.Deserialize<PromptSessionLink>(await File.ReadAllTextAsync(path, cancellation), json) is { } link)
+                if (await Read(path, cancellation) is { } link)
                 {
                     links.Add(link);
                 }
             }
-            catch (Exception exception) when (exception is JsonException or IOException)
+            catch (Exception exception) when (exception is JsonException or IOException or PromptSessionException)
             {
             }
         }
 
-        return [.. links.OrderByDescending(link => link.Created ?? DateTimeOffset.MinValue).ThenBy(link => link.Id)];
+        return [.. links.OrderByDescending(link => link.LastLoaded).ThenBy(link => link.Id)];
     }
 
     /// <inheritdoc />
@@ -132,7 +123,77 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
     public Task Delete(Guid id)
     {
         File.Delete(PathOf(id));
+
+        if (Directory.Exists(Sessions))
+        {
+            foreach (string backup in Directory.EnumerateFiles(Sessions, $"{id:N}.json.v*.bak"))
+            {
+                File.Delete(backup);
+            }
+        }
+
         return Task.CompletedTask;
+    }
+
+    private async Task<PromptSessionLink?> Read(string path, CancellationToken cancellation)
+    {
+        string text = await File.ReadAllTextAsync(path, cancellation);
+
+        if (JsonNode.Parse(text) is not JsonObject content)
+        {
+            return null;
+        }
+
+        int? from = migration.Upgrade(content);
+
+        if (content["lastLoaded"] is null)
+        {
+            content["lastLoaded"] = JsonValue.Create(new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero));
+        }
+
+        if (from is not null)
+        {
+            try
+            {
+                string backup = $"{path}.v{from}.bak";
+
+                if (!File.Exists(backup))
+                {
+                    File.Copy(path, backup);
+
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        File.SetUnixFileMode(backup, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                    }
+                }
+
+                await Write(path, content.ToJsonString(json), cancellation);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return content.Deserialize<PromptSessionLink>(json);
+    }
+
+    private async Task Write(string path, string text, CancellationToken cancellation)
+    {
+        string pending = $"{path}.{Guid.NewGuid():N}.tmp";
+
+        FileStreamOptions options = new() { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        await using (StreamWriter writer = new(pending, options))
+        {
+            await writer.WriteAsync(text.AsMemory(), cancellation);
+        }
+
+        File.Move(pending, path, true);
     }
 
     private string PathOf(Guid id)

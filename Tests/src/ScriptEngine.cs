@@ -14,6 +14,8 @@ internal sealed class ScriptEngine(string script) : IPromptEngine
 
     public string Identifier => "Script Tool";
 
+    public PromptProvider Provider => PromptProvider.Claude;
+
     public ProcessStartInfo CreateStart(PromptEngineStart start)
     {
         Starts.Add(start);

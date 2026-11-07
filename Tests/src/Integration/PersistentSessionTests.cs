@@ -8,8 +8,8 @@ public sealed class PersistentSessionTests : IDisposable
     public void Dispose()
         => temp.Dispose();
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
     private string Reply(string text, string session = "persistent-session")
         => $$$"""
@@ -35,9 +35,9 @@ public sealed class PersistentSessionTests : IDisposable
 
     private async Task<IPromptSession> Session(string body, string? prefix = null, string? controls = null)
     {
-        IPromptEngine provider = new ClaudeEngine(temp.Script("claude", $"printf '%s\\n' \"$@\" > \"$PWD/args.txt\"\necho $$ >> \"$PWD/pids.txt\"\n{prefix}\nn=0\nwhile IFS= read -r line; do\nn=$((n+1))\nprintf '%s\\n' \"$line\" >> \"$PWD/frames.txt\"\n{controls ?? Controls}\n{body}\ndone"), temp.Combine("claude-state"));
+        IPromptEngine engine = new ClaudeEngine(temp.Script("claude", $"printf '%s\\n' \"$@\" > \"$PWD/args.txt\"\necho $$ >> \"$PWD/pids.txt\"\n{prefix}\nn=0\nwhile IFS= read -r line; do\nn=$((n+1))\nprintf '%s\\n' \"$line\" >> \"$PWD/frames.txt\"\n{controls ?? Controls}\n{body}\ndone"), temp.Combine("claude-state"));
 
-        IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
+        IPromptSession session = temp.Track(await Service(engine).Create(TestModels.Options));
         return session;
     }
 
@@ -396,8 +396,8 @@ public sealed class PersistentSessionTests : IDisposable
     [Fact]
     public async Task Ask_WithCodex_KeepsOneAppServerForEveryPrompt()
     {
-        IPromptEngine provider = new CodexEngine(new FakeCodex(temp).Script(reply: "hi"), temp.Combine("codex-state"));
-        await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
+        IPromptEngine engine = new CodexEngine(new FakeCodex(temp).Script(reply: "hi"), temp.Combine("codex-state"));
+        await using IPromptSession session = temp.Track(await Service(engine).Create(TestModels.Options));
 
         await session.Request("first");
         await session.Request("second");
@@ -411,18 +411,18 @@ public sealed class PersistentSessionTests : IDisposable
     public async Task Ask_WithCodex_TakesAChangeOfModelAndEffortWithTheNextPromptWithoutAnotherProcess()
     {
         FakeCodex fake = new(temp);
-        IPromptEngine provider = new CodexEngine(fake.Script(reply: "hi"), temp.Combine("codex-state"));
-        await using IPromptSession session = temp.Track(await Provider(provider).Create(TestModels.Options));
+        IPromptEngine engine = new CodexEngine(fake.Script(reply: "hi"), temp.Combine("codex-state"));
+        await using IPromptSession session = temp.Track(await Service(engine).Create(TestModels.Options));
         await session.Request("first");
 
         session.Configuration.Capability = PromptCapability.Strong;
-        session.Configuration.Effort = PromptEffort.High;
+        session.Configuration.Effort = PromptEffort.Low;
         await session.Request("second");
 
         Assert.Single(await Pids());
         IReadOnlyList<JsonElement> turns = await fake.Parameters("turn/start");
-        Assert.Equal(("gpt-5.6-terra", "medium"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
-        Assert.Equal(("gpt-5.6-sol", "high"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
+        Assert.Equal(("gpt-5.6-terra", "high"), (turns[0].GetProperty("model").GetString(), turns[0].GetProperty("effort").GetString()));
+        Assert.Equal(("gpt-5.6-sol", "low"), (turns[1].GetProperty("model").GetString(), turns[1].GetProperty("effort").GetString()));
     }
 
     [Fact]

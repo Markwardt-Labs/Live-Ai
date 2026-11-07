@@ -7,15 +7,14 @@ public sealed class ApiKeyRedactionTests
     [Fact]
     public void TheSetup_HideTheKeyWhenPrintedButKeepTheOtherMembers()
     {
-        string claude = new ClaudeSetup { ApiKey = key, Instructions = "Be brief.", WorkspacePath = "/project" }.ToString();
-        string codex = new CodexSetup { ApiKey = key, Effort = PromptEffort.High }.ToString();
+        string claude = new ClaudeSetup { ApiKey = key, WorkspacePath = "/project" }.ToString();
+        string codex = new CodexSetup { ApiKey = key }.ToString();
 
         Assert.DoesNotContain(key, claude, StringComparison.Ordinal);
         Assert.DoesNotContain(key, codex, StringComparison.Ordinal);
         Assert.Contains("ApiKey = ***", claude, StringComparison.Ordinal);
-        Assert.Contains("Instructions = Be brief.", claude, StringComparison.Ordinal);
         Assert.Contains("WorkspacePath = /project", claude, StringComparison.Ordinal);
-        Assert.Contains("Effort = High", codex, StringComparison.Ordinal);
+        Assert.Contains("ApiKey = ***", codex, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -45,11 +44,11 @@ public sealed class ApiKeyRedactionTests
     [Fact]
     public void AStoredLinkAndTheInternalRecordsThatCarryTheKey_HideItToo()
     {
-        PromptSessionLink link = new() { Id = Guid.NewGuid(), Provider = "Claude Code", WorkingFolder = "/w", Setup = new ClaudeSetup { ApiKey = key } };
+        PromptSessionLink link = new() { LastLoaded = TestModels.Loaded, Id = Guid.NewGuid(), Provider = PromptProvider.Claude, WorkingFolder = "/w", Setup = new ClaudeSetup { ApiKey = key } };
 
         Assert.DoesNotContain(key, link.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(key, new PromptEnvironment { ImageGeneration = new OpenAiImageSetup { ApiKey = key } }.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(key, new PromptProviderOptions { ApiKey = key }.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(key, new PromptToolServiceOptions { ApiKey = key }.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(key, new PromptEngineStart { WorkingFolder = "/w", Instructions = "i", ApiKey = key }.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(key, new OpenCodeModelProvider { Id = "p", BaseUrl = "http://x", Models = [], ApiKey = key }.ToString(), StringComparison.Ordinal);
     }

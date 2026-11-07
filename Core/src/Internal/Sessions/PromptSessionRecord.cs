@@ -23,7 +23,7 @@ internal sealed record PromptSessionRecord
     /// <summary>
     /// Gets how much effort the model puts into each prompt, which is stored.
     /// </summary>
-    public PromptEffort Effort { get; init; } = PromptEffort.Medium;
+    public PromptEffort Effort { get; init; } = PromptEffort.High;
 
     /// <summary>
     /// Gets the model chosen for the capability, or <see langword="null" /> until a prompt has started. It is not stored.
@@ -96,14 +96,14 @@ internal sealed record PromptSessionRecord
     public string? WorkspacePath { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether the store of <see cref="WorkspacePath" /> only accepts paths inside the folder.
+    /// Gets a value indicating whether the AI's file tools can use any path on the machine and not only the ones inside the folder of <see cref="WorkspacePath" />.
     /// </summary>
-    public bool IsSandboxed { get; init; } = true;
+    public bool IsSystemAccessAllowed { get; init; }
 
     /// <summary>
-    /// Gets when the session was created, which is stored again with every write of its link, or <see langword="null" /> when it is not known.
+    /// Gets when the session was last loaded, which is stored again with every write of its link.
     /// </summary>
-    public DateTimeOffset? Created { get; init; }
+    public required DateTimeOffset LastLoaded { get; init; }
 
     /// <summary>
     /// Tells whether a process started for this record can also serve another: whether everything that is given to the tool when it starts is the same.
@@ -134,11 +134,11 @@ internal sealed record PromptSessionRecord
     /// </summary>
     /// <returns>The link.</returns>
     public PromptSessionLink ToLink()
-        => new() { Id = Id, Created = Created, Provider = Engine.Identifier, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSandboxed = IsSandboxed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Setup = Setup, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, IsImageGenerationAllowed = IsImageGenerationAllowed };
+        => new() { Id = Id, LastLoaded = LastLoaded, Provider = Engine.Provider, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSystemAccessAllowed = IsSystemAccessAllowed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Setup = Setup, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, IsImageGenerationAllowed = IsImageGenerationAllowed };
 
     /// <inheritdoc />
     public bool Equals(PromptSessionRecord? other)
-        => other is not null && Id == other.Id && ReferenceEquals(Engine, other.Engine) && SameProcess(other) && SameModel(other) && SameStored(other) && ForkedFrom == other.ForkedFrom && ForkedAt == other.ForkedAt && WorkingFolder == other.WorkingFolder && WorkspacePath == other.WorkspacePath && IsSandboxed == other.IsSandboxed && AiSessionId == other.AiSessionId;
+        => other is not null && Id == other.Id && ReferenceEquals(Engine, other.Engine) && SameProcess(other) && SameModel(other) && SameStored(other) && ForkedFrom == other.ForkedFrom && ForkedAt == other.ForkedAt && WorkingFolder == other.WorkingFolder && WorkspacePath == other.WorkspacePath && IsSystemAccessAllowed == other.IsSystemAccessAllowed && AiSessionId == other.AiSessionId;
 
     /// <inheritdoc />
     public override int GetHashCode()

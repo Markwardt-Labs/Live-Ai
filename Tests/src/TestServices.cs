@@ -1,25 +1,25 @@
 namespace Markwardt.LiveAi.Tests;
 
 /// <summary>
-/// Makes the tool providers the tests work with, over an engine of their own choosing.
+/// Makes the tool services the tests work with, over an engine of their own choosing.
 /// </summary>
-internal static class TestProviders
+internal static class TestServices
 {
     /// <summary>
-    /// Makes a provider over an engine, with stored sessions in a folder.
+    /// Makes a tool service over an engine, with stored sessions in a folder.
     /// </summary>
-    /// <param name="engine">The tool the provider drives.</param>
+    /// <param name="engine">The tool the service drives.</param>
     /// <param name="dataFolder">The folder that holds the stored sessions, or <see langword="null" /> for the usual one.</param>
     /// <param name="logger">The logger the sessions report to, or <see langword="null" /> for none.</param>
     /// <param name="time">The clock the sessions run on, or <see langword="null" /> for the system's.</param>
-    /// <returns>The provider.</returns>
-    public static PromptProvider Make(IPromptEngine engine, string? dataFolder = null, ILogger? logger = null, TimeProvider? time = null)
+    /// <returns>The tool service.</returns>
+    public static PromptToolService Make(IPromptEngine engine, string? dataFolder = null, ILogger? logger = null, TimeProvider? time = null)
     {
         TimeProvider clock = time ?? TimeProvider.System;
         IPromptSessionStore store = new PromptSessionStore(dataFolder);
         ITurnRunner runner = new TurnRunner();
         IPromptSessionOpener opener = new PromptSessionOpener(store, runner, new PromptToolHost(), new PromptLibraryTools(null, clock), logger, clock);
-        return new PromptProvider(engine, store, opener, runner, clock);
+        return new PromptToolService(engine, store, opener, runner, clock);
     }
 
     /// <summary>

@@ -1,9 +1,9 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// What a tool provider creates a session with.
+/// What a tool service creates a session with.
 /// </summary>
-internal sealed record PromptProviderOptions
+internal sealed record PromptToolServiceOptions
 {
     /// <summary>
     /// Gets the API key, or <see langword="null" /> for the sign in already configured in the tool.
@@ -14,6 +14,11 @@ internal sealed record PromptProviderOptions
     /// Gets the setup the session is created with, which is stored with it so that it can be loaded by its identifier alone, or <see langword="null" /> when there are none to store.
     /// </summary>
     public PromptSetup? Setup { get; init; }
+
+    /// <summary>
+    /// Gets the environment the session is created in, whose configuration properties are what the configuration of the session starts with, or <see langword="null" /> for the usual ones.
+    /// </summary>
+    public PromptEnvironment? Environment { get; init; }
 
     /// <summary>
     /// Gets the folder the session works in, or <see langword="null" /> for none.
@@ -28,6 +33,7 @@ internal sealed record PromptProviderOptions
     private bool PrintMembers(StringBuilder builder)
     {
         builder.Append("ApiKey = ").Append(ApiKey is null ? string.Empty : "***");
+        builder.Append(", Environment = ").Append(Environment);
         builder.Append(", Setup = ").Append(Setup);
         builder.Append(", WorkspacePath = ").Append(WorkspacePath);
         return true;

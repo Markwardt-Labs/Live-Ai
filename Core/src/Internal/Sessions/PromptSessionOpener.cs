@@ -9,11 +9,11 @@ internal interface IPromptSessionOpener
     /// Opens a session.
     /// </summary>
     /// <param name="link">What is stored about the session.</param>
-    /// <param name="provider">The provider that opens the session, which the session reports.</param>
+    /// <param name="service">The tool service that opens the session.</param>
     /// <param name="engine">The command line tool the session runs on.</param>
     /// <param name="apiKey">The API key to run with, or <see langword="null" /> to use the configured subscription.</param>
     /// <returns>The session.</returns>
-    IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey);
+    IPromptSession Open(PromptSessionLink link, IPromptToolService service, IPromptEngine engine, string? apiKey);
 }
 
 /// <inheritdoc />
@@ -27,7 +27,7 @@ internal interface IPromptSessionOpener
 internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner runner, IPromptToolHost toolHost, IPromptLibraryTools libraryTools, ILogger? logger = null, TimeProvider? time = null, Func<PromptImageSetup?>? images = null) : IPromptSessionOpener
 {
     /// <inheritdoc />
-    public IPromptSession Open(PromptSessionLink link, IPromptProvider provider, IPromptEngine engine, string? apiKey)
+    public IPromptSession Open(PromptSessionLink link, IPromptToolService service, IPromptEngine engine, string? apiKey)
     {
         if (link.WorkspacePath is not null && !Directory.Exists(link.WorkspacePath))
         {
@@ -35,6 +35,6 @@ internal sealed class PromptSessionOpener(IPromptSessionStore store, ITurnRunner
         }
 
         PromptSessionRecord record = link.ToRecord(engine);
-        return new PromptSession(record, apiKey, store, provider, engine, runner, toolHost, libraryTools, this, logger, time, null, images);
+        return new PromptSession(record, apiKey, store, service, engine, runner, toolHost, libraryTools, this, logger, time, null, images);
     }
 }

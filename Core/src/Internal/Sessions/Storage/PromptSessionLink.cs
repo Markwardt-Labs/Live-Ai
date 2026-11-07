@@ -6,19 +6,24 @@ namespace Markwardt.LiveAi;
 internal sealed record PromptSessionLink
 {
     /// <summary>
+    /// Gets the version of the layout of the stored file, which the store writes as the current one every time and checks when it reads (see <see cref="IPromptSessionMigration" />).
+    /// </summary>
+    public int Version { get; init; }
+
+    /// <summary>
     /// Gets the identifier the library gave the session.
     /// </summary>
     public required Guid Id { get; init; }
 
     /// <summary>
-    /// Gets when the session was created, or <see langword="null" /> for a link stored before that was recorded.
+    /// Gets when the session was last loaded. It starts as the time the session was created (or branched) and is set again each time it is loaded. A file stored before the library recorded the time gets the time it was last written.
     /// </summary>
-    public DateTimeOffset? Created { get; init; }
+    public required DateTimeOffset LastLoaded { get; init; }
 
     /// <summary>
-    /// Gets the name of the command line tool the session runs on (<see cref="IPromptEngine.Identifier" />), which says whose identifier <see cref="AiSessionId" /> is.
+    /// Gets which provider the session runs on, stored as <c>claude</c>, <c>codex</c> or <c>local</c>, which says whose identifier <see cref="AiSessionId" /> is.
     /// </summary>
-    public required string Provider { get; init; }
+    public required PromptProvider Provider { get; init; }
 
     /// <summary>
     /// Gets the full path of the folder the tools run in: an empty one the library made for the session, or the workspace folder the caller gave. The tools keep their conversations by it, so it stays the same for the life of the session.
@@ -36,9 +41,9 @@ internal sealed record PromptSessionLink
     public string? WorkspacePath { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether the store of <see cref="WorkspacePath" /> only accepts paths inside the folder.
+    /// Gets a value indicating whether the AI's file tools can use any path on the machine and not only the ones inside the folder of <see cref="WorkspacePath" />.
     /// </summary>
-    public bool IsSandboxed { get; init; } = true;
+    public bool IsSystemAccessAllowed { get; init; }
 
     /// <summary>
     /// Gets the identifier of the engine's session that this session branches from, until the engine has made the branch's own session at the first prompt and reported its identifier.
@@ -84,7 +89,7 @@ internal sealed record PromptSessionLink
     /// <summary>
     /// Gets how much effort the model puts into each prompt.
     /// </summary>
-    public PromptEffort Effort { get; init; } = PromptEffort.Medium;
+    public PromptEffort Effort { get; init; } = PromptEffort.High;
 
     /// <summary>
     /// Makes the in-memory description of a session that was just opened: its link, and the settings every session starts with.
@@ -95,7 +100,7 @@ internal sealed record PromptSessionLink
         => new()
         {
             Id = Id,
-            Created = Created,
+            LastLoaded = LastLoaded,
             Engine = engine,
             Setup = Setup,
             Capability = Capability,
@@ -106,7 +111,7 @@ internal sealed record PromptSessionLink
             IsImageGenerationAllowed = IsImageGenerationAllowed,
             WorkingFolder = WorkingFolder,
             WorkspacePath = WorkspacePath,
-            IsSandboxed = IsSandboxed,
+            IsSystemAccessAllowed = IsSystemAccessAllowed,
             AiSessionId = AiSessionId,
             ForkedFrom = ForkedFrom,
             ForkedAt = ForkedAt

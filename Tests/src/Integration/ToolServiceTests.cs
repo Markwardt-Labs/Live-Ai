@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi.Tests.Integration;
 
 [Collection("Processes")]
-public sealed class ProviderTests : IDisposable
+public sealed class ToolServiceTests : IDisposable
 {
     private readonly TempFolder temp = new();
 
@@ -16,11 +16,11 @@ public sealed class ProviderTests : IDisposable
 
     private IPromptEngine Codex => codex ??= new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
     private async Task<IPromptSession> Create(IPromptEngine engine, string? apiKey = null)
-        => temp.Track(await Provider(engine).Create(new PromptProviderOptions { ApiKey = apiKey }));
+        => temp.Track(await Service(engine).Create(new PromptToolServiceOptions { ApiKey = apiKey }));
 
     private string WorkingFolder(string id)
         => temp.Combine($"data/Workspaces/{id}");
@@ -29,21 +29,38 @@ public sealed class ProviderTests : IDisposable
         => File.ReadAllTextAsync(Directory.GetFiles(temp.Combine("data/Sessions")).Single());
 
     [Fact]
-    public async Task List_ShowsTheStoredSessionsAndTheCreationTimeSurvivesTheWriteOfTheToolsSessionIdentifier()
+    public async Task Load_MovesTheSessionToTheFrontOfTheListAndKeepsItThereWhenItIsDisposed()
     {
-        IPromptProvider provider = Provider(Claude);
+        IPromptToolService service = Service(Claude);
+        IPromptSession first = temp.Track(await service.Create(TestModels.Options));
+        await Task.Delay(20);
+        IPromptSession second = temp.Track(await service.Create(TestModels.Options));
+        await first.DisposeAsync();
+        await second.DisposeAsync();
+        Assert.Equal([second.Id, first.Id], (await service.List()).Select(info => info.Id));
+        await Task.Delay(20);
+
+        await using IPromptSession loaded = temp.Track(await service.Load(first.Id));
+
+        IReadOnlyList<PromptSessionInfo> sessions = await service.List();
+        Assert.Equal([first.Id, second.Id], sessions.Select(info => info.Id));
+        Assert.True(sessions[0].LastLoaded > sessions[1].LastLoaded);
+    }
+
+    [Fact]
+    public async Task List_ShowsTheStoredSessionsAndTheTimeOfTheLastLoadSurvivesTheWriteOfTheToolsSessionIdentifier()
+    {
+        IPromptToolService service = Service(Claude);
         DateTimeOffset before = DateTimeOffset.UtcNow;
-        IPromptSession fresh = temp.Track(await provider.Create(TestModels.Options));
-        PromptSessionInfo notStarted = Assert.Single(await provider.List());
+        IPromptSession fresh = temp.Track(await service.Create(TestModels.Options));
+        PromptSessionInfo beforePrompt = Assert.Single(await service.List());
         await fresh.Request("hello there");
 
-        PromptSessionInfo started = Assert.Single(await provider.List());
+        PromptSessionInfo afterPrompt = Assert.Single(await service.List());
 
-        Assert.False(notStarted.IsStarted);
-        Assert.True(started.IsStarted);
-        Assert.Equal(fresh.Id, started.Id);
-        Assert.Equal(notStarted.Created, started.Created);
-        Assert.InRange(started.Created!.Value, before, DateTimeOffset.UtcNow);
+        Assert.Equal(fresh.Id, afterPrompt.Id);
+        Assert.Equal(beforePrompt.LastLoaded, afterPrompt.LastLoaded);
+        Assert.InRange(afterPrompt.LastLoaded, before, DateTimeOffset.UtcNow);
     }
 
     [Fact]
@@ -51,23 +68,23 @@ public sealed class ProviderTests : IDisposable
     {
         await Create(Claude);
 
-        Assert.Empty(await Provider(Codex).List());
-        Assert.Single(await Provider(Claude).List());
+        Assert.Empty(await Service(Codex).List());
+        Assert.Single(await Service(Claude).List());
     }
 
     [Fact]
     public async Task AForkIsListedWithItsOwnCreationTime()
     {
-        IPromptProvider provider = Provider(Claude);
-        IPromptSession original = temp.Track(await provider.Create(TestModels.Options));
+        IPromptToolService service = Service(Claude);
+        IPromptSession original = temp.Track(await service.Create(TestModels.Options));
         await original.Request("hello there");
         await Task.Delay(20);
 
         IPromptSession fork = temp.Track(await original.Fork());
 
-        IReadOnlyList<PromptSessionInfo> sessions = await provider.List();
+        IReadOnlyList<PromptSessionInfo> sessions = await service.List();
         Assert.Equal([fork.Id, original.Id], sessions.Select(info => info.Id));
-        Assert.True(sessions[0].Created > sessions[1].Created);
+        Assert.True(sessions[0].LastLoaded > sessions[1].LastLoaded);
     }
 
     [Fact]
@@ -96,14 +113,14 @@ public sealed class ProviderTests : IDisposable
 
         await session.Request("hi");
 
-        Assert.Equal(("Claude Code", "Sonnet", "sonnet", "Medium"), (session.Descriptors["Provider"], session.Descriptors["Model"], session.Descriptors["Model ID"], session.Descriptors["Effort"]));
+        Assert.Equal(("Claude Code", "Sonnet", "sonnet", "High"), (session.Descriptors["Provider"], session.Descriptors["Model"], session.Descriptors["Model ID"], session.Descriptors["Effort"]));
     }
 
     [Fact]
     public async Task Create_WithAWorkspacePath_SetsTheWorkspacePathAndRunsTheToolInThatFolder()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        IPromptSession session = temp.Track(await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project }));
 
         await session.Request("hello");
 
@@ -113,46 +130,46 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task Load_BringsTheWorkspacePathOfTheSessionBackWithItsSandbox()
+    public async Task Load_BringsTheWorkspacePathOfTheSessionBackWithItsSystemAccess()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         string outside = temp.Combine("outside.txt");
         await File.WriteAllTextAsync(outside, "secret");
-        IPromptSession created = await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project });
-        created.Configuration.IsSandboxed = false;
+        IPromptSession created = await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project });
+        created.Configuration.IsSystemAccessAllowed = true;
         await created.Request("hi");
         await created.DisposeAsync();
 
-        IPromptSession loaded = temp.Track(await Provider(Claude).Load(created.Id));
+        IPromptSession loaded = temp.Track(await Service(Claude).Load(created.Id));
 
         Assert.Equal(project, loaded.WorkspacePath);
         Assert.Equal("secret", await ((PromptSession)loaded).Files.ReadText(outside));
-        Assert.Contains("\"isSandboxed\": false", await Stored());
+        Assert.Contains("\"isSystemAccessAllowed\": true", await Stored());
     }
 
     [Fact]
-    public async Task Create_WithAWorkspacePath_IsSandboxedByDefault()
+    public async Task Create_WithAWorkspacePath_ConfinesTheFileToolsToItByDefault()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         await File.WriteAllTextAsync(temp.Combine("outside.txt"), "secret");
 
-        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        IPromptSession session = temp.Track(await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project }));
 
         await Assert.ThrowsAnyAsync<Exception>(() => ((PromptSession)session).Files.ReadText(temp.Combine("outside.txt")));
     }
 
     [Fact]
-    public async Task IsSandboxed_ChangedOnALiveSession_ConfinesOrOpensTheFileToolsFromThenOn()
+    public async Task IsSystemAccessAllowed_ChangedOnALiveSession_OpensOrConfinesTheFileToolsFromThenOn()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
         await File.WriteAllTextAsync(temp.Combine("outside.txt"), "secret");
-        IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        IPromptSession session = temp.Track(await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project }));
         IStore files = ((PromptSession)session).Files;
 
         await Assert.ThrowsAnyAsync<Exception>(() => files.ReadText(temp.Combine("outside.txt")));
-        session.Configuration.IsSandboxed = false;
+        session.Configuration.IsSystemAccessAllowed = true;
         Assert.Equal("secret", await ((PromptSession)session).Files.ReadText(temp.Combine("outside.txt")));
-        session.Configuration.IsSandboxed = true;
+        session.Configuration.IsSystemAccessAllowed = false;
 
         await Assert.ThrowsAnyAsync<Exception>(() => ((PromptSession)session).Files.ReadText(temp.Combine("outside.txt")));
     }
@@ -160,7 +177,7 @@ public sealed class ProviderTests : IDisposable
     [Fact]
     public async Task Create_WithAWorkspacePathThatDoesNotExist_Throws()
     {
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = temp.Combine("missing") }));
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = temp.Combine("missing") }));
 
         Assert.False(Directory.Exists(temp.Combine("data/Sessions")) && Directory.GetFiles(temp.Combine("data/Sessions")).Length > 0);
     }
@@ -169,30 +186,30 @@ public sealed class ProviderTests : IDisposable
     public async Task Delete_OfAWorkspaceSession_LeavesTheFolderAndItsFiles()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        IPromptProvider provider = Provider(Claude);
+        IPromptToolService service = Service(Claude);
         string marker = Path.Combine(project, "keep.txt");
         await File.WriteAllTextAsync(marker, "mine");
-        IPromptSession session = await provider.Create(new PromptProviderOptions { WorkspacePath = project });
+        IPromptSession session = await service.Create(new PromptToolServiceOptions { WorkspacePath = project });
         await session.Request("hi");
         string id = session.Id;
         await session.DisposeAsync();
 
-        Assert.True(await provider.Delete(id));
+        Assert.True(await service.Delete(id));
 
         Assert.True(Directory.Exists(project));
         Assert.True(File.Exists(marker));
     }
 
     [Fact]
-    public async Task Create_StartsWithBalancedCapabilityMediumEffortAndNothingElse()
+    public async Task Create_StartsWithBalancedCapabilityHighEffortAndNothingElse()
     {
 
         IPromptSession created = await Create(Claude);
-        IPromptSession loaded = await Provider(Claude).Load(created.Id);
+        IPromptSession loaded = await Service(Claude).Load(created.Id);
 
         foreach (IPromptSession session in new[] { created, loaded })
         {
-            Assert.Equal((PromptCapability.Balanced, PromptEffort.Medium), (session.Configuration.Capability, session.Configuration.Effort));
+            Assert.Equal((PromptCapability.Balanced, PromptEffort.High), (session.Configuration.Capability, session.Configuration.Effort));
             Assert.Empty(session.Transient.Tools);
         }
     }
@@ -223,7 +240,7 @@ public sealed class ProviderTests : IDisposable
         await created.Request("first");
         await created.DisposeAsync();
 
-        IPromptSession loaded = await Provider(Claude).Load(created.Id);
+        IPromptSession loaded = await Service(Claude).Load(created.Id);
 
         Assert.Equal(created.Id, loaded.Id);
         Assert.Equal((PromptEffort.High, true, "Be brief."), (loaded.Configuration.Effort, loaded.Configuration.IsShellAllowed, loaded.Configuration.Instructions));
@@ -260,7 +277,7 @@ public sealed class ProviderTests : IDisposable
     {
         IPromptSession created = await Create(Codex);
 
-        IPromptSession loaded = await Provider(Codex).Load(created.Id);
+        IPromptSession loaded = await Service(Codex).Load(created.Id);
         await loaded.Request("hi");
 
         Assert.Equal(["thread/start"], (await new FakeCodex(temp).Requests()).Select(request => request.GetProperty("method").GetString()).Where(method => method!.StartsWith("thread/")));
@@ -274,7 +291,7 @@ public sealed class ProviderTests : IDisposable
         Assert.Equal("codex says hi", await created.Request("one"));
         Assert.Equal("first-key", await File.ReadAllTextAsync(temp.Combine("codex-key.txt")));
 
-        IPromptSession loaded = await Provider(Codex).Load(created.Id, new PromptProviderOptions { ApiKey = "second-key" });
+        IPromptSession loaded = await Service(Codex).Load(created.Id, new PromptToolServiceOptions { ApiKey = "second-key" });
         await loaded.Request("two");
 
         Assert.Equal(["app-server"], (await File.ReadAllLinesAsync(temp.Combine("codex-args.txt"))).Take(1));
@@ -300,7 +317,7 @@ public sealed class ProviderTests : IDisposable
         IPromptSession created = await Create(Claude);
         Directory.Delete(WorkingFolder(created.Id), true);
 
-        IPromptSession loaded = await Provider(Claude).Load(created.Id);
+        IPromptSession loaded = await Service(Claude).Load(created.Id);
         await loaded.Request("hi");
 
         Assert.Equal(WorkingFolder(created.Id), (await File.ReadAllTextAsync(temp.Combine("claude-cwd.txt"))).Trim());
@@ -314,22 +331,22 @@ public sealed class ProviderTests : IDisposable
         string file = Directory.GetFiles(temp.Combine("data/Sessions")).Single();
         File.Delete(temp.Combine("claude-state/projects/p/claude-session.jsonl"));
 
-        PromptSessionNotFoundException exception = await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Provider(Claude).Load(created.Id));
+        PromptSessionNotFoundException exception = await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Service(Claude).Load(created.Id));
 
         Assert.Equal(created.Id, exception.Id);
         Assert.True(File.Exists(file));
-        await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Provider(Claude).Load(created.Id));
+        await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Service(Claude).Load(created.Id));
     }
 
     [Fact]
     public async Task ThePrompter_StoresTheWholeConfigurationAndTheKeyWithTheSessionAndLoadsThemBackFromTheIdentifierAlone()
     {
-        Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
+        Prompter prompter = TestServices.MakePrompter(Claude, temp.Combine("data"));
         IPromptSession created = temp.Track(await prompter.Create(new ClaudeSetup { ApiKey = "very-secret" }));
         created.Configuration.Capability = PromptCapability.Strong;
         created.Configuration.Effort = PromptEffort.High;
         created.Configuration.IsShellAllowed = true;
-        created.Configuration.IsSandboxed = false;
+        created.Configuration.IsSystemAccessAllowed = true;
         created.Configuration.IsWebAllowed = true;
         created.Configuration.Instructions = "Be brief.";
         created.Configuration.IsImageGenerationAllowed = true;
@@ -337,7 +354,7 @@ public sealed class ProviderTests : IDisposable
 
         IPromptSession loaded = temp.Track(await prompter.Load(created.Id));
 
-        Assert.Equal((PromptCapability.Strong, PromptEffort.High, true, false, true, "Be brief."), (loaded.Configuration.Capability, loaded.Configuration.Effort, loaded.Configuration.IsShellAllowed, loaded.Configuration.IsSandboxed, loaded.Configuration.IsWebAllowed, loaded.Configuration.Instructions));
+        Assert.Equal((PromptCapability.Strong, PromptEffort.High, true, true, true, "Be brief."), (loaded.Configuration.Capability, loaded.Configuration.Effort, loaded.Configuration.IsShellAllowed, loaded.Configuration.IsSystemAccessAllowed, loaded.Configuration.IsWebAllowed, loaded.Configuration.Instructions));
         Assert.True(loaded.Configuration.IsImageGenerationAllowed);
         Assert.Contains("very-secret", await Stored(), StringComparison.Ordinal);
         await loaded.Request("again");
@@ -347,7 +364,7 @@ public sealed class ProviderTests : IDisposable
     [Fact]
     public async Task ThePrompter_StoresAChangeOfTheConfigurationWhenThePromptStartsAndWhenTheSessionIsDisposed()
     {
-        Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
+        Prompter prompter = TestServices.MakePrompter(Claude, temp.Combine("data"));
         IPromptSession session = temp.Track(await prompter.Create(new ClaudeSetup()));
         session.Configuration.Instructions = "First.";
         await session.Request("go");
@@ -362,7 +379,7 @@ public sealed class ProviderTests : IDisposable
     [Fact]
     public async Task ThePrompter_ListsAndDeletesBySessionIdentifierWithoutSetup()
     {
-        Prompter prompter = TestProviders.MakePrompter(Claude, temp.Combine("data"));
+        Prompter prompter = TestServices.MakePrompter(Claude, temp.Combine("data"));
         IPromptSession session = temp.Track(await prompter.Create(new ClaudeSetup()));
         await session.Request("go");
         await session.DisposeAsync();
@@ -370,14 +387,14 @@ public sealed class ProviderTests : IDisposable
         PromptSessionInfo info = Assert.Single(await prompter.List());
         bool deleted = await prompter.Delete(session.Id);
 
-        Assert.Equal((session.Id, "Claude Code", true, true), (info.Id, info.Provider, info.IsStarted, deleted));
+        Assert.Equal((session.Id, PromptProvider.Claude, true), (info.Id, info.Provider, deleted));
         Assert.Empty(await prompter.List());
         Assert.False(await prompter.Delete(session.Id));
     }
 
     [Fact]
     public async Task Load_ForAnUnknownIdentifier_Throws()
-        => await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Provider(Claude).Load(Guid.NewGuid().ToString("N")));
+        => await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => Service(Claude).Load(Guid.NewGuid().ToString("N")));
 
     [Fact]
     public async Task Send_WhenTheToolIsMissing_Throws()

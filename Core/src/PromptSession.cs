@@ -14,6 +14,11 @@ public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncD
     string Id { get; }
 
     /// <summary>
+    /// Gets which provider the session runs on (Claude Code, Codex or local models), which is what the type of the setup it was created with chose.
+    /// </summary>
+    PromptProvider Provider { get; }
+
+    /// <summary>
     /// Gets the full path of the workspace: the folder the session works in, which is never absent. It is the one given when the session was created or last moved (see <see cref="Move" />), or, when none was given, a folder the library made for the session in its data folder, named after the session, so the files the AI writes there are kept. It is stored with the session and comes back with it. The tool runs in this folder, so it finds the instruction files of the project (such as <c>CLAUDE.md</c> and <c>AGENTS.md</c>) the way it does when you start it there yourself, and the AI's file tools take relative paths relative to it.
     /// </summary>
     string WorkspacePath { get; }
@@ -34,7 +39,7 @@ public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncD
     PromptSessionState State { get; }
 
     /// <summary>
-    /// Gets the settings of the session that are stored with it: the capability and effort, the shell, image generation and web switches and the instructions. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
+    /// Gets the settings of the session that are stored with it: the capability and effort, the shell, system access, web and image generation switches and the instructions. Assign to them whenever you like; they are taken together when the next prompt starts (see <see cref="IPromptSessionConfiguration" />).
     /// </summary>
     IPromptSessionConfiguration Configuration { get; }
 

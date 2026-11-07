@@ -31,6 +31,9 @@ internal sealed class CodexEngine(string command = "codex", string? configFolder
     public string Identifier => "Codex";
 
     /// <inheritdoc />
+    public PromptProvider Provider => PromptProvider.Codex;
+
+    /// <inheritdoc />
     public bool CanPersist => true;
 
     /// <inheritdoc />

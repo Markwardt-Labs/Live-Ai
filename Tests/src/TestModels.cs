@@ -6,6 +6,11 @@ namespace Markwardt.LiveAi.Tests;
 internal static class TestModels
 {
     /// <summary>
+    /// Gets a time for the stored sessions the tests make by hand, which is neither now nor the beginning of time.
+    /// </summary>
+    public static DateTimeOffset Loaded { get; } = new(2026, 11, 1, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
     /// Gets a model with the settings <c>effort</c> (<c>low</c>, <c>medium</c>, <c>high</c>, medium by default) and <c>fast</c> (a toggle, off by default).
     /// </summary>
     public static PromptModel Model { get; } = new()
@@ -16,16 +21,16 @@ internal static class TestModels
     };
 
     /// <summary>
-    /// Gets provider options with nothing set.
+    /// Gets tool service options with nothing set.
     /// </summary>
-    public static PromptProviderOptions Options { get; } = new();
+    public static PromptToolServiceOptions Options { get; } = new();
 
     /// <summary>
-    /// Makes provider options as given.
+    /// Makes tool service options as given.
     /// </summary>
     /// <param name="apiKey">The API key.</param>
     /// <param name="workspacePath">The workspace path.</param>
     /// <returns>The options.</returns>
-    public static PromptProviderOptions With(string? apiKey = null, string? workspacePath = null)
+    public static PromptToolServiceOptions With(string? apiKey = null, string? workspacePath = null)
         => new() { ApiKey = apiKey, WorkspacePath = workspacePath };
 }

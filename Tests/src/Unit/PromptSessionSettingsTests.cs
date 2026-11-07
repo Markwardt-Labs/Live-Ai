@@ -36,7 +36,7 @@ public sealed class PromptSessionSettingsTests
         settings.Capability = PromptCapability.Strong;
         settings.Effort = PromptEffort.Low;
         settings.IsShellAllowed = true;
-        settings.IsSandboxed = false;
+        settings.IsSystemAccessAllowed = true;
         settings.IsWebAllowed = true;
         settings.Asker = (_, _) => Task.FromResult(string.Empty);
         settings.IsImageGenerationAllowed = true;
@@ -81,7 +81,7 @@ public sealed class PromptSessionSettingsTests
         Assert.Throws<ArgumentOutOfRangeException>(() => settings.Effort = (PromptEffort)99);
 
         Assert.Equal(0, changes);
-        Assert.Equal((PromptCapability.Balanced, PromptEffort.Medium), (settings.Capability, settings.Effort));
+        Assert.Equal((PromptCapability.Balanced, PromptEffort.High), (settings.Capability, settings.Effort));
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public sealed class PromptSessionSettingsTests
         settings.Tools.Clear();
         settings.McpServers.Clear();
 
-        Assert.Equal((PromptCapability.Strong, PromptEffort.Medium), (snapshot.Capability, snapshot.Effort));
+        Assert.Equal((PromptCapability.Strong, PromptEffort.High), (snapshot.Capability, snapshot.Effort));
         Assert.Equal(["alpha"], snapshot.Tools.Select(tool => tool.Name));
         Assert.Equal(["db"], snapshot.McpServers.Keys);
     }

@@ -19,7 +19,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
 
     private bool isShellAllowed;
 
-    private bool isSandboxed;
+    private bool isSystemAccessAllowed;
 
     private bool isWebAllowed;
 
@@ -42,7 +42,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
         capability = record.Capability;
         effort = record.Effort;
         isShellAllowed = record.IsShellAllowed;
-        isSandboxed = record.IsSandboxed;
+        isSystemAccessAllowed = record.IsSystemAccessAllowed;
         isWebAllowed = record.IsWebAllowed;
         isImageGenerationAllowed = record.IsImageGenerationAllowed;
         instructions = record.Instructions;
@@ -114,17 +114,17 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
     }
 
     /// <inheritdoc />
-    public bool IsSandboxed
+    public bool IsSystemAccessAllowed
     {
         get
         {
             lock (gate)
             {
-                return isSandboxed;
+                return isSystemAccessAllowed;
             }
         }
 
-        set => Set(() => isSandboxed = value);
+        set => Set(() => isSystemAccessAllowed = value);
     }
 
     /// <inheritdoc />
@@ -210,7 +210,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
                 Capability = capability,
                 Effort = effort,
                 IsShellAllowed = isShellAllowed,
-                IsSandboxed = isSandboxed,
+                IsSystemAccessAllowed = isSystemAccessAllowed,
                 IsWebAllowed = isWebAllowed,
                 IsImageGenerationAllowed = isImageGenerationAllowed,
                 Asker = asker,

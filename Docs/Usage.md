@@ -12,7 +12,7 @@ IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath =
 Console.WriteLine(await session.Request("Summarize what is in this folder."));
 ```
 
-The options name the tool and carry only what that tool needs. The model is chosen for the session by the library from how capable and how hard-working it should be (see below), on the subscription already configured in `claude`. The AI can reach only the workspace (the folder given as `WorkspacePath`) and the cache of the session (temporary storage, see below); without one the library makes a workspace folder for the session in its data folder, which is kept until the session is deleted or moved elsewhere.
+The setup names the tool and carries only what that tool needs. The model is chosen for the session by the library from how capable and how hard-working it should be (see below), on the subscription already configured in `claude`. The AI can reach only the workspace (the folder given as `WorkspacePath`) and the cache of the session (temporary storage, see below); without one the library makes a workspace folder for the session in its data folder, which is kept until the session is deleted or moved elsewhere.
 
 ## Reading the answer as it is written
 
@@ -49,7 +49,7 @@ session.Configuration.Effort = PromptEffort.High;
 await session.Request("Add a unit test for the parser and make it pass.");
 ```
 
-The setup can give the configuration its starting values (`Capability`, `Effort`, `IsShellAllowed`, `IsSandboxed`, `IsWebAllowed`, `IsImageGenerationAllowed` and `Instructions`), as in `new CodexSetup { Capability = PromptCapability.Strong, Effort = PromptEffort.High }`. They are used when the session is created; after that the session's configuration holds the values, and a loaded session has the ones it was left with.
+The configuration a new session starts with is set once for the prompter, on its environment: `prompter.Environment = prompter.Environment with { Capability = PromptCapability.Strong, Effort = PromptEffort.High }`. `PromptEnvironment` has `Capability`, `Effort`, `IsShellAllowed`, `IsSystemAccessAllowed`, `IsWebAllowed`, `IsImageGenerationAllowed` and `Instructions`, with the same defaults as a session has without it (`Balanced`, `High`, no shell, no system access, no web, no image generation, no instructions). The values are copied into a session when it is created, so after that its configuration holds them, and a loaded session has the ones it was left with, whatever the environment says now. The tools, MCP servers and asker are not part of this: they belong to the session object and are set on each one.
 
 The AI never asks for permission and may create, edit and delete in its workspace and the cache, so point it only at a folder it may change. A relative path the AI uses is relative to the workspace, like in a shell. Which model runs is the library's business, see "How a model is chosen".
 
@@ -74,7 +74,7 @@ IPromptSession resumed = await prompter.Load(id);
 Console.WriteLine(await resumed.Request("What did I ask you before?"));
 ```
 
-`Load` needs only the identifier: the stored link holds the options the session was created with, so the tool and where it is found are read from it. The session comes back with its workspace and its whole configuration (capability, effort, the shell, image generation and web switches and the instructions); the tools, MCP servers, asker and cache belong to the session object and are set again. The prompter that loads must use the same data folder as the one that created the session, and a tool configured with another configuration folder than the one that made the session cannot find it.
+`Load` needs only the identifier: the stored link holds the setup the session was created with, so the tool is read from it, and where the tool is found comes from the environment of the prompter that loads it. The session comes back with its workspace and its whole configuration (capability, effort, the shell, system access, web and image generation switches and the instructions); the tools, MCP servers, asker and cache belong to the session object and are set again. The prompter that loads must use the same data folder as the one that created the session, and a tool configured with another configuration folder than the one that made the session cannot find it.
 
 ## Changing capability and effort mid-conversation
 
@@ -108,9 +108,9 @@ An object as the input writes the prompt as JSON, and that is the whole prompt, 
 await using IPromptSession project = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 Console.WriteLine(project.WorkspacePath);
 
-// IsSandboxed = false lets the AI use any path on the machine.
+// IsSystemAccessAllowed = true lets the AI use any path on the machine.
 await using IPromptSession open = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
-open.Configuration.IsSandboxed = false;
+open.Configuration.IsSystemAccessAllowed = true;
 ```
 
 The workspace path is the folder the tool runs in, so Claude Code, Codex and OpenCode find the instruction files of the project (`CLAUDE.md`, `AGENTS.md`) there, as they do when you start them in that folder, and the file tools take relative paths relative to it. It is stored with the session, so `Load` brings it back; `session.WorkspacePath` reads it and `Move` changes it. The AI cannot build, test or run commands; add a tool of your own for the commands you allow.
@@ -119,13 +119,13 @@ The workspace path is the folder the tool runs in, so Claude Code, Codex and Ope
 
 ```csharp
 await using IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
-session.Configuration.IsSandboxed = false;
+session.Configuration.IsSystemAccessAllowed = true;
 session.Configuration.IsShellAllowed = true;
 
 await session.Request("Compare Program.cs with /etc/hosts and run the tests.");
 ```
 
-With `IsSandboxed = false` (a stored setting, true by default, that can be changed at any time) the folder is only where relative paths start, and the AI may also give absolute paths of the machine or paths that climb out of the folder, so use it only when the AI may read and write anything the program can. The default keeps every path, absolute or not, inside the folder. The workspace is also where the shell starts.
+With `IsSystemAccessAllowed = true` (a stored setting, false by default, that can be changed at any time) the folder is only where relative paths start, and the AI may also give absolute paths of the machine or paths that climb out of the folder, so use it only when the AI may read and write anything the program can. Without it every path, absolute or not, stays inside the folder. The workspace is also where the shell starts.
 
 ## Giving the AI data and collecting what it makes
 
@@ -180,7 +180,7 @@ session.Configuration.IsShellAllowed = true;
 Console.WriteLine(await session.Request("Run the unit tests in /path/to/project and tell me which ones fail."));
 ```
 
-The `shell` tool runs any command on this machine with the rights of the user your program runs as, so enable it only for an AI and a task you trust that far; the sandbox does not limit it. It is off by default. Commands start in the workspace in the workspace, unless the AI gives a working directory, and a command that runs longer than its timeout is stopped.
+The `shell` tool runs any command on this machine with the rights of the user your program runs as, so enable it only for an AI and a task you trust that far; the confinement of the file tools does not limit it. It is off by default. Commands start in the workspace in the workspace, unless the AI gives a working directory, and a command that runs longer than its timeout is stopped.
 
 ## Letting the AI look at images and read the web
 
@@ -190,7 +190,7 @@ session.Configuration.IsWebAllowed = true;
 await session.Request("Look at docs/design.png, then read https://example.com/spec and say what differs.");
 ```
 
-Every session has a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB). It reaches what the file tools reach: the cache through `CACHE:` always, and the workspace only when the session has a workspace path, inside it while the session is sandboxed. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered while the selected model takes images and the engine can be shown images. `IsWebAllowed`, off by default, is described below.
+Every session has a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB). It reaches what the file tools reach: the cache through `CACHE:` always, and the workspace only when the session has a workspace path, inside it unless the session allows system access. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered while the selected model takes images and the engine can be shown images. `IsWebAllowed`, off by default, is described below.
 
 ## The web and the tools every session has
 
@@ -349,7 +349,7 @@ await session.Move("/path/to/other-project");   // the same conversation, now wo
 await session.Move(null);                       // back to a folder the library makes for the session in its data folder (empty)
 ```
 
-The conversation goes along: Claude Code finds a conversation by the folder it ran in, so the library copies it to the new folder, and the other tools need nothing. The session keeps its `Id` and settings, ends a kept process, and leaves the old folder alone. The folder becomes the `WorkspacePath` of the session (with the sandbox switch it had) and comes back with every `Load`. It fails with `DirectoryNotFoundException` for a folder that does not exist.
+The conversation goes along: Claude Code finds a conversation by the folder it ran in, so the library copies it to the new folder, and the other tools need nothing. The session keeps its `Id` and settings, ends a kept process, and leaves the old folder alone. The folder becomes the `WorkspacePath` of the session (with the system access switch it had) and comes back with every `Load`. It fails with `DirectoryNotFoundException` for a folder that does not exist.
 
 ## Telling the AI something with an input
 
@@ -479,7 +479,7 @@ public async Task Reviews_CodeWithTheAi()
 }
 ```
 
-Pass a `TimeProvider` (`new FakePrompter { Time = clock }`) to run the clock of the sessions on a time the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so options and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt. `Created` and `Tests` record the options the code under test passed.
+Pass a `TimeProvider` (`new FakePrompter { Time = clock }`) to run the clock of the sessions on a time the test advances. The fake session answers from a script and records the prompts, and the requests it gives out are the real ones, so options and structured answers behave as in production. A prompt that has no scripted answer fails and shows the prompt. `Created` and `Tests` record the setups the code under test passed.
 
 ## Logging what sessions do
 

@@ -61,19 +61,24 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     /// </summary>
     /// <param name="apiKey">The API key the session was made with, which is only kept for a test to look at.</param>
     /// <param name="time">The clock the session's prompt times run on, or <see langword="null" /> for the system's. Give a <see cref="TimeProvider" /> that the test controls to test code that waits without waiting.</param>
-    public FakePromptSession(string? apiKey = null, TimeProvider? time = null)
+    /// <param name="provider">The provider the session reports that it runs on.</param>
+    public FakePromptSession(string? apiKey = null, TimeProvider? time = null, PromptProvider provider = PromptProvider.Claude)
     {
         this.time = time ?? TimeProvider.System;
         ApiKey = apiKey;
+        Provider = provider;
         requester = new PromptRequester(new Executor(this));
         Id = Guid.NewGuid().ToString("N");
         WorkspacePath = DefaultWorkspace();
         PromptLibraryTools library = new();
-        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = string.Empty }, [.. library.GetReservedNames(), "respond"]);
+        settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = string.Empty, LastLoaded = this.time.GetUtcNow() }, [.. library.GetReservedNames(), "respond"]);
     }
 
     /// <inheritdoc />
     public string Id { get; private set; }
+
+    /// <inheritdoc />
+    public PromptProvider Provider { get; }
 
     /// <inheritdoc />
     public string WorkspacePath { get; private set; }
@@ -316,7 +321,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            FakePromptSession fork = Copy(new FakePromptSession(ApiKey, time));
+            FakePromptSession fork = Copy(new FakePromptSession(ApiKey, time, Provider));
 
             if (at is { } point)
             {
@@ -679,7 +684,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
         lock (gate)
         {
-            fork = Copy(new FakePromptSession(ApiKey, time));
+            fork = Copy(new FakePromptSession(ApiKey, time, Provider));
         }
 
         try

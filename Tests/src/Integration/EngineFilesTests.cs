@@ -105,7 +105,7 @@ public sealed class EngineFilesTests : IDisposable
         => Assert.Empty(await new CodexEngine("codex", temp.Path).ReadHistory("abc").ToListAsync());
 
     private PromptSessionRecord Record(string? aiSessionId = null, string? forkedFrom = null, string? forkedAt = null)
-        => new() { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = temp.Path, AiSessionId = aiSessionId, ForkedFrom = forkedFrom, ForkedAt = forkedAt };
+        => new() { LastLoaded = TestModels.Loaded, Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = temp.Path, AiSessionId = aiSessionId, ForkedFrom = forkedFrom, ForkedAt = forkedAt };
 
     private string[] Codex(params string[] turns)
         => [.. new[] { """{"type":"session_meta","payload":{"id":"abc"}}""" }.Concat(turns.SelectMany((turn, index) => new[]

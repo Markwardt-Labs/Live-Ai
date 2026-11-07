@@ -12,13 +12,13 @@ public sealed class ClaudeEngineTests
     }
 
     [Fact]
-    public void CreateStart_DefaultsToAReadOnlyBalancedMediumSession()
+    public void CreateStart_DefaultsToAReadOnlyBalancedHighEffortSession()
     {
         ProcessStartInfo start = engine.CreateStart(Record().ToStart(null, null, null));
 
         Assert.Equal("claude", start.FileName);
         Assert.Equal("/work", start.WorkingDirectory);
-        Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--effort", "medium", "--strict-mcp-config", "--append-system-prompt", Guidance(null), "--permission-mode", "dontAsk", "--tools", ""], start.ArgumentList);
+        Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--effort", "high", "--strict-mcp-config", "--append-system-prompt", Guidance(null), "--permission-mode", "dontAsk", "--tools", ""], start.ArgumentList);
     }
 
     [Fact]

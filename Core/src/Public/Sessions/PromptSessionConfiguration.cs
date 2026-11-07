@@ -11,19 +11,19 @@ public interface IPromptSessionConfiguration
     PromptCapability Capability { get; set; }
 
     /// <summary>
-    /// Gets or sets how much effort the model puts into each prompt, <see cref="PromptEffort.Medium" /> by default. The library maps it to the nearest level the chosen model offers, and a model with no such setting ignores it. It is stored with the session.
+    /// Gets or sets how much effort the model puts into each prompt, <see cref="PromptEffort.High" /> by default. The library maps it to the nearest level the chosen model offers, and a model with no such setting ignores it. It is stored with the session.
     /// </summary>
     PromptEffort Effort { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the AI gets a shell tool (<c>shell</c>) with which it can run any command on this machine, as the user the host process runs as, with that user's full rights. It is <see langword="false" /> by default. This is outside everything else the library limits: the sandbox and the confinement of the file tools do not apply to what a command can reach, so turn it on only for an AI and a task that deserve that trust. The tool starts commands in the workspace folder unless the AI gives a working directory.
+    /// Gets or sets a value indicating whether the AI gets a shell tool (<c>shell</c>) with which it can run any command on this machine, as the user the host process runs as, with that user's full rights. It is <see langword="false" /> by default. This is outside everything else the library limits: the confinement of the file tools (<see cref="IsSystemAccessAllowed" />) does not apply to what a command can reach, so turn it on only for an AI and a task that deserve that trust. The tool starts commands in the workspace folder unless the AI gives a working directory.
     /// </summary>
     bool IsShellAllowed { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the AI's file tools only accept paths inside the workspace, <see langword="true" /> by default. A path that leads outside, absolute or relative and also through a link, is refused, and the workspace is only where relative paths start when it is <see langword="false" />, in which case the AI can also use any path on the machine. The workspace is <see cref="IPromptSession.WorkspacePath" />, and the cache (<c>CACHE:</c>) refuses paths that leave it either way. It applies to every tool that reads or writes files, <c>view_image</c> included, and not to the shell, which is not confined by anything. It is stored with the session.
+    /// Gets or sets a value indicating whether the AI's file tools can use any path on this machine and not only the ones inside the workspace, <see langword="false" /> by default. While it is <see langword="false" /> a path that leads outside, absolute or relative and also through a link, is refused; when it is <see langword="true" /> the workspace is only where relative paths start. The workspace is <see cref="IPromptSession.WorkspacePath" />, and the cache (<c>CACHE:</c>) refuses paths that leave it either way. It applies to every tool that reads or writes files, <c>view_image</c> included, and not to the shell, which is not confined by anything. It is stored with the session.
     /// </summary>
-    bool IsSandboxed { get; set; }
+    bool IsSystemAccessAllowed { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the AI can use the web: read a web page or other text from an http or https address with a tool (<c>fetch_url</c>), as this machine and with its network access (addresses on the local network and on this machine included), and search the web. When the AI's tool has a web search of its own (Claude Code and Codex do) the AI is allowed to use it, and the library does not see or filter what it searches or reads there; otherwise the AI is given a tool, <c>search_web</c>, that asks DuckDuckGo's plain HTML page, which needs no key and no other software but is best effort: the page is read, not an API, so it can change or turn the library away, and the library spaces its requests at least two seconds apart and stops for a minute when it is turned away. Nothing restricts what the AI reads or searches. It is <see langword="false" /> by default and stored with the session, and changing it ends a kept process of a tool that takes its web search when it starts.

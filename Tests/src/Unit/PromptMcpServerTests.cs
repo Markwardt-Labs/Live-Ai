@@ -78,7 +78,7 @@ public sealed class PromptMcpServerTests
 
         Assert.True(record.SameProcess(record with { Model = record.Model! with { } }));
         Assert.False(record.SameProcess(record with { Model = new PromptModel { Id = "other" } }));
-        Assert.False(record.SameProcess(record with { ModelSettings = new Dictionary<string, string> { ["effort"] = "high" } }));
+        Assert.False(record.SameProcess(record with { ModelSettings = new Dictionary<string, string> { ["effort"] = "low" } }));
     }
 
     [Fact]

@@ -28,7 +28,7 @@ public sealed class FakePromptSessionTests
         await session.Request("three");
         await recorder.Until(values => values.OfType<PromptDescriptorsEvent>().Count() == 2);
 
-        Assert.Equal(new Dictionary<string, string> { ["Provider"] = "Fake", ["Model"] = "Fake Max", ["Effort"] = "Medium" }, session.Descriptors);
+        Assert.Equal(new Dictionary<string, string> { ["Provider"] = "Fake", ["Model"] = "Fake Max", ["Effort"] = "High" }, session.Descriptors);
         Assert.Equal(["Fake Balanced", "Fake Max"], recorder.Values.OfType<PromptDescriptorsEvent>().Select(change => change.Descriptors["Model"]));
     }
 

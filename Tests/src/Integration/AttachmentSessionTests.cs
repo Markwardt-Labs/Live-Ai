@@ -16,11 +16,11 @@ public sealed class AttachmentSessionTests : IDisposable
 
     private IPromptEngine Codex => codex ??= new CodexEngine(new FakeCodex(temp).Script(reply: "codex saw it", before: "for path in $(printf '%s' \"$line\" | grep -o '\"path\":\"[^\"]*\"' | sed 's/\"path\":\"//; s/\"$//'); do cp \"$path\" \"$PWD/seen-$(basename \"$path\")\"; echo \"$path\" >> \"$PWD/codex-image-paths.txt\"; done"), temp.Combine("codex-state"));
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
-    private async Task<IPromptSession> Create(IPromptEngine provider)
-        => temp.Track(await Provider(provider).Create(TestModels.Options));
+    private async Task<IPromptSession> Create(IPromptEngine engine)
+        => temp.Track(await Service(engine).Create(TestModels.Options));
 
     private PromptAttachment Png(params byte[] content)
         => new() { Name = "shot.png", MediaType = "image/png", Content = content };
@@ -92,7 +92,7 @@ public sealed class AttachmentSessionTests : IDisposable
         IPromptSession first = await Create(Codex);
         await first.Request("first");
         await first.DisposeAsync();
-        await using IPromptSession session = temp.Track(await Provider(Codex).Load(first.Id));
+        await using IPromptSession session = temp.Track(await Service(Codex).Load(first.Id));
 
         await session.Request("second", new PromptRequestOptions { Attachments = [Png(1)] });
 
@@ -116,14 +116,14 @@ public sealed class AttachmentSessionTests : IDisposable
     [Fact]
     public async Task AnAttachmentTheLibraryCannotGive_IsRefusedForBothProvidersAndTheSessionStillWorks()
     {
-        foreach (IPromptEngine provider in new[] { Claude, Codex })
+        foreach (IPromptEngine engine in new[] { Claude, Codex })
         {
-            await using IPromptSession session = await Create(provider);
+            await using IPromptSession session = await Create(engine);
             PromptAttachment zip = new() { Name = "a.zip", MediaType = "application/zip", Content = new byte[] { 1 } };
 
             await Assert.ThrowsAsync<NotSupportedException>(() => session.Request("open it", new PromptRequestOptions { Attachments = [zip] }));
 
-            Assert.Equal(provider == Claude ? "claude saw it" : "codex saw it", await session.Request("hello"));
+            Assert.Equal(engine == Claude ? "claude saw it" : "codex saw it", await session.Request("hello"));
         }
     }
 

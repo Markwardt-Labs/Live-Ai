@@ -18,10 +18,10 @@ public sealed class EngineSessionTests : IDisposable
     public void Claude_FindsASessionInAnyProjectFolder()
     {
         Touch("projects/-some-project/abc.jsonl");
-        ClaudeEngine provider = new("claude", temp.Path);
+        ClaudeEngine engine = new("claude", temp.Path);
 
-        Assert.True(provider.HasSession("abc"));
-        Assert.False(provider.HasSession("other"));
+        Assert.True(engine.HasSession("abc"));
+        Assert.False(engine.HasSession("other"));
     }
 
     [Fact]
@@ -32,11 +32,11 @@ public sealed class EngineSessionTests : IDisposable
     public void Codex_FindsASessionByItsThreadInAnyDateFolder()
     {
         Touch("sessions/2026/08/16/rollout-2026-08-16T02-44-10-abc.jsonl");
-        CodexEngine provider = new("codex", temp.Path);
+        CodexEngine engine = new("codex", temp.Path);
 
-        Assert.True(provider.HasSession("abc"));
-        Assert.False(provider.HasSession("bc"));
-        Assert.False(provider.HasSession("other"));
+        Assert.True(engine.HasSession("abc"));
+        Assert.False(engine.HasSession("bc"));
+        Assert.False(engine.HasSession("other"));
     }
 
     [Fact]

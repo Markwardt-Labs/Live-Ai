@@ -4,7 +4,7 @@ internal sealed class PromptSessionRecordBuilder
 {
     public PromptModel? Model { get; set; } = new() { Id = "sonnet", Settings = [PromptModelSetting.Choose("effort", "Effort", ["low", "medium", "high", "max"])] };
 
-    public IReadOnlyDictionary<string, string> ModelSettings { get; set; } = new Dictionary<string, string> { ["effort"] = "medium" };
+    public IReadOnlyDictionary<string, string> ModelSettings { get; set; } = new Dictionary<string, string> { ["effort"] = "high" };
 
     public string? AiSessionId { get; set; }
 
@@ -19,6 +19,7 @@ internal sealed class PromptSessionRecordBuilder
     public PromptSessionRecord Build(IPromptEngine engine)
         => new()
         {
+            LastLoaded = TestModels.Loaded,
             Id = Guid.NewGuid(),
             Engine = engine,
             Model = Model,

@@ -15,11 +15,11 @@ public sealed class PromptSessionOpenerTests : IDisposable
         libraryTools.SetupGet(mock => mock.Names).Returns(["read_file"]);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
-        return new PromptSessionOpener(new Mock<IPromptSessionStore>().Object, new Mock<ITurnRunner>().Object, new Mock<IPromptToolHost>().Object, libraryTools.Object).Open(link, new Mock<IPromptProvider>().Object, engine.Object, null);
+        return new PromptSessionOpener(new Mock<IPromptSessionStore>().Object, new Mock<ITurnRunner>().Object, new Mock<IPromptToolHost>().Object, libraryTools.Object).Open(link, new Mock<IPromptToolService>().Object, engine.Object, null);
     }
 
-    private PromptSessionLink Link(string? workspace = null, bool sandbox = true)
-        => new() { Id = Guid.NewGuid(), Provider = "Fake", WorkingFolder = workspace ?? temp.Path, WorkspacePath = workspace, IsSandboxed = sandbox };
+    private PromptSessionLink Link(string? workspace = null, bool systemAccess = false)
+        => new() { LastLoaded = TestModels.Loaded, Id = Guid.NewGuid(), Provider = PromptProvider.Claude, WorkingFolder = workspace ?? temp.Path, WorkspacePath = workspace, IsSystemAccessAllowed = systemAccess };
 
     [Fact]
     public void ALinkWithAWorkspace_OpensASessionWhoseWorkspaceIsThatFolder()
@@ -32,22 +32,22 @@ public sealed class PromptSessionOpenerTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task TheSandboxOfTheLink_IsTheOneOfTheWorkspace(bool sandbox)
+    public async Task TheSystemAccessOfTheLink_DecidesWhatTheFileToolsOfTheWorkspaceReach(bool allowed)
     {
         using TempFolder other = new();
         string outside = other.Combine("outside.txt");
         await File.WriteAllTextAsync(outside, "secret");
-        IPromptSession session = Open(Link(temp.Path, sandbox));
+        IPromptSession session = Open(Link(temp.Path, allowed));
 
         Task<string> read = ((PromptSession)session).Files.ReadText(outside);
 
-        if (sandbox)
+        if (allowed)
         {
-            await Assert.ThrowsAnyAsync<Exception>(() => read);
+            Assert.Equal("secret", await read);
         }
         else
         {
-            Assert.Equal("secret", await read);
+            await Assert.ThrowsAnyAsync<Exception>(() => read);
         }
     }
 

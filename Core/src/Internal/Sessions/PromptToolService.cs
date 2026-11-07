@@ -3,7 +3,7 @@ namespace Markwardt.LiveAi;
 /// <summary>
 /// Creates, loads, deletes and tests the sessions of one command line tool, and chooses the model the sessions run on.
 /// </summary>
-internal interface IPromptProvider
+internal interface IPromptToolService
 {
     /// <summary>
     /// Creates a session and stores it under a new identifier. The tool's own session starts with the first prompt.
@@ -12,7 +12,7 @@ internal interface IPromptProvider
     /// <param name="cancellation">Cancels the creation.</param>
     /// <returns>The new session, which the caller disposes.</returns>
     /// <exception cref="DirectoryNotFoundException">The workspace folder does not exist.</exception>
-    Task<IPromptSession> Create(PromptProviderOptions? options = null, CancellationToken cancellation = default);
+    Task<IPromptSession> Create(PromptToolServiceOptions? options = null, CancellationToken cancellation = default);
 
     /// <summary>
     /// Loads a stored session so that it continues the same conversation.
@@ -23,10 +23,10 @@ internal interface IPromptProvider
     /// <returns>The session, which the caller disposes.</returns>
     /// <exception cref="ArgumentException">The session was made with another tool, or a workspace path is given.</exception>
     /// <exception cref="PromptSessionNotFoundException">There is no such session, or the tool no longer has its conversation.</exception>
-    Task<IPromptSession> Load(string id, PromptProviderOptions? options = null, CancellationToken cancellation = default);
+    Task<IPromptSession> Load(string id, PromptToolServiceOptions? options = null, CancellationToken cancellation = default);
 
     /// <summary>
-    /// Lists the stored sessions of the provider's tool, newest first.
+    /// Lists the stored sessions of the service's tool, the most recently loaded first.
     /// </summary>
     /// <param name="cancellation">Cancels the listing.</param>
     /// <returns>The sessions.</returns>
@@ -40,6 +40,18 @@ internal interface IPromptProvider
     /// <returns><see langword="true" /> when the session was there and is gone.</returns>
     /// <exception cref="ArgumentException">The session was made with another tool.</exception>
     Task<bool> Delete(string id, CancellationToken cancellation = default);
+
+    /// <summary>
+    /// Moves a stored session to another workspace folder without loading it, bringing the tool's conversation along where the tool keeps it by folder.
+    /// </summary>
+    /// <param name="id">The identifier of the session.</param>
+    /// <param name="workspacePath">The existing folder that becomes the session's workspace.</param>
+    /// <param name="cancellation">Cancels the move.</param>
+    /// <exception cref="PromptSessionNotFoundException">There is no such session.</exception>
+    /// <exception cref="ArgumentException">The session was made with another tool.</exception>
+    /// <exception cref="DirectoryNotFoundException">The folder does not exist.</exception>
+    /// <exception cref="PromptSessionException">The conversation could not be brought to the folder.</exception>
+    Task Move(string id, string workspacePath, CancellationToken cancellation = default);
 
     /// <summary>
     /// Finds out whether the tool is usable, and how much of the subscription is used where the tool says.
@@ -62,7 +74,7 @@ internal interface IPromptProvider
 }
 
 /// <inheritdoc />
-internal sealed class PromptProvider : IPromptProvider
+internal sealed class PromptToolService : IPromptToolService
 {
     private readonly IPromptEngine engine;
 
@@ -80,14 +92,14 @@ internal sealed class PromptProvider : IPromptProvider
     private readonly SemaphoreSlim listing = new(1, 1);
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="PromptProvider" /> class.
+    /// Initializes a new instance of the <see cref="PromptToolService" /> class.
     /// </summary>
     /// <param name="engine">The tool the sessions run on.</param>
     /// <param name="store">Keeps the stored sessions.</param>
     /// <param name="opener">Makes the session objects.</param>
     /// <param name="runner">Runs the engine's processes.</param>
     /// <param name="time">The clock that dates the sessions and ages the list of models, or <see langword="null" /> for the system's.</param>
-    public PromptProvider(IPromptEngine engine, IPromptSessionStore store, IPromptSessionOpener opener, ITurnRunner runner, TimeProvider? time = null)
+    public PromptToolService(IPromptEngine engine, IPromptSessionStore store, IPromptSessionOpener opener, ITurnRunner runner, TimeProvider? time = null)
     {
         this.time = time ?? TimeProvider.System;
         this.engine = engine;
@@ -102,7 +114,7 @@ internal sealed class PromptProvider : IPromptProvider
     internal TimeSpan ModelsLifetime { get; init; } = TimeSpan.FromMinutes(1);
 
     /// <inheritdoc />
-    public async Task<IPromptSession> Create(PromptProviderOptions? options = null, CancellationToken cancellation = default)
+    public async Task<IPromptSession> Create(PromptToolServiceOptions? options = null, CancellationToken cancellation = default)
     {
         string? apiKey = options?.ApiKey;
         string? workspacePath = options?.WorkspacePath;
@@ -119,11 +131,11 @@ internal sealed class PromptProvider : IPromptProvider
             throw new DirectoryNotFoundException($"The workspace folder '{workspacePath}' does not exist.");
         }
 
-        PromptSessionLink link = new() { Id = id, Created = time.GetUtcNow(), Provider = engine.Identifier, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Setup = options?.Setup };
+        PromptSessionLink link = new() { Id = id, LastLoaded = time.GetUtcNow(), Provider = engine.Provider, WorkingFolder = workspace ?? folder, WorkspacePath = workspace, Setup = options?.Setup };
 
-        if (options?.Setup is { } given)
+        if (options?.Environment is { } environment)
         {
-            link = link with { Capability = given.Capability, Effort = given.Effort, IsShellAllowed = given.IsShellAllowed, IsSandboxed = given.IsSandboxed, IsWebAllowed = given.IsWebAllowed, IsImageGenerationAllowed = given.IsImageGenerationAllowed, Instructions = given.Instructions };
+            link = link with { Capability = environment.Capability, Effort = environment.Effort, IsShellAllowed = environment.IsShellAllowed, IsSystemAccessAllowed = environment.IsSystemAccessAllowed, IsWebAllowed = environment.IsWebAllowed, IsImageGenerationAllowed = environment.IsImageGenerationAllowed, Instructions = environment.Instructions };
         }
 
         try
@@ -143,7 +155,7 @@ internal sealed class PromptProvider : IPromptProvider
     }
 
     /// <inheritdoc />
-    public async Task<IPromptSession> Load(string id, PromptProviderOptions? options = null, CancellationToken cancellation = default)
+    public async Task<IPromptSession> Load(string id, PromptToolServiceOptions? options = null, CancellationToken cancellation = default)
     {
         if (options?.WorkspacePath is not null)
         {
@@ -163,14 +175,25 @@ internal sealed class PromptProvider : IPromptProvider
             Directory.CreateDirectory(record.WorkingFolder);
         }
 
-        return opener.Open(record, this, engine, options?.ApiKey);
+        record = record with { LastLoaded = time.GetUtcNow() };
+        IPromptSession session = opener.Open(record, this, engine, options?.ApiKey);
+
+        try
+        {
+            await store.Save(record, cancellation);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return session;
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<PromptSessionInfo>> List(CancellationToken cancellation = default)
         => [.. (await store.List(cancellation))
-            .Where(link => string.Equals(link.Provider, engine.Identifier, StringComparison.OrdinalIgnoreCase))
-            .Select(link => new PromptSessionInfo { Id = link.Id.ToString("N"), Provider = link.Provider, Created = link.Created, WorkspacePath = link.WorkingFolder, IsStarted = link.AiSessionId is not null })];
+            .Where(link => link.Provider == engine.Provider)
+            .Select(link => new PromptSessionInfo { Id = link.Id.ToString("N"), Provider = engine.Provider, LastLoaded = link.LastLoaded, WorkspacePath = link.WorkingFolder })];
 
     /// <inheritdoc />
     public async Task<bool> Delete(string id, CancellationToken cancellation = default)
@@ -201,6 +224,37 @@ internal sealed class PromptProvider : IPromptProvider
 
         await store.Delete(guid);
         return true;
+    }
+
+    /// <inheritdoc />
+    public async Task Move(string id, string workspacePath, CancellationToken cancellation = default)
+    {
+        PromptSessionLink record = Guid.TryParse(id, out Guid guid) && await store.Find(guid, cancellation) is { } found ? found : throw new PromptSessionNotFoundException(id);
+        Check(record, id);
+        string workspace = Path.GetFullPath(workspacePath);
+
+        if (!Directory.Exists(workspace))
+        {
+            throw new DirectoryNotFoundException($"The workspace folder '{workspacePath}' does not exist.");
+        }
+
+        if ((record.AiSessionId ?? record.ForkedFrom) is { } origin)
+        {
+            await engine.MoveSession(origin, workspace, cancellation);
+        }
+
+        await store.Save(record with { WorkingFolder = workspace, WorkspacePath = workspace }, cancellation);
+
+        if (record.WorkspacePath is null && record.WorkingFolder != workspace && record.WorkingFolder == store.GetWorkspaceFolder(guid) && Directory.Exists(record.WorkingFolder))
+        {
+            try
+            {
+                Directory.Delete(record.WorkingFolder, true);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -296,9 +350,9 @@ internal sealed class PromptProvider : IPromptProvider
 
     private void Check(PromptSessionLink record, string id)
     {
-        if (!string.Equals(record.Provider, engine.Identifier, StringComparison.OrdinalIgnoreCase))
+        if (record.Provider != engine.Provider)
         {
-            throw new ArgumentException($"The session {id} was made with '{record.Provider}', not with '{engine.Identifier}'.", nameof(id));
+            throw new ArgumentException($"The session {id} was made with {record.Provider}, not with {engine.Provider}.", nameof(id));
         }
     }
 }

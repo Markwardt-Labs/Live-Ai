@@ -8,8 +8,8 @@ public sealed class EngineWindowTests : IDisposable
     public void Dispose()
         => temp.Dispose();
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
     private ClaudeEngine Claude(string? script = null)
         => new ClaudeEngine(script is null ? temp.Combine("missing-claude") : temp.Script("claude", script), temp.Combine("claude-state"));

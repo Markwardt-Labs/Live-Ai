@@ -13,7 +13,7 @@ public sealed class FakePrompter : IPrompter
 
     private readonly List<PromptSetup> created = [];
 
-    private readonly Dictionary<string, (DateTimeOffset Created, string Provider, string WorkspacePath)> made = [];
+    private readonly Dictionary<string, (DateTimeOffset LastLoaded, string WorkspacePath)> made = [];
 
     private PromptTestResult testResult = new() { IsAvailable = true };
 
@@ -114,30 +114,30 @@ public sealed class FakePrompter : IPrompter
     {
         ArgumentNullException.ThrowIfNull(setup);
         cancellation.ThrowIfCancellationRequested();
-        (string provider, string? apiKey) = setup switch
+        (PromptProvider provider, string? apiKey) = setup switch
         {
-            ClaudeSetup claude => ("Claude Code", claude.ApiKey ?? Environment.ClaudeApiKey),
-            CodexSetup codex => ("Codex", codex.ApiKey ?? Environment.CodexApiKey),
-            LocalSetup => ("OpenCode", (string?)null),
+            ClaudeSetup claude => (PromptProvider.Claude, claude.ApiKey ?? Environment.ClaudeApiKey),
+            CodexSetup codex => (PromptProvider.Codex, codex.ApiKey ?? Environment.CodexApiKey),
+            LocalSetup => (PromptProvider.Local, (string?)null),
             _ => throw new ArgumentException($"{setup.GetType().Name} is not a kind of session setup the library knows.", nameof(setup))
         };
 
-        FakePromptSession session = new(apiKey, Time);
+        FakePromptSession session = new(apiKey, Time, provider);
         session.UseWorkspace(setup.WorkspacePath is { } path ? Path.GetFullPath(path) : null);
-        session.Configuration.Capability = setup.Capability;
-        session.Configuration.Effort = setup.Effort;
-        session.Configuration.IsShellAllowed = setup.IsShellAllowed;
-        session.Configuration.IsSandboxed = setup.IsSandboxed;
-        session.Configuration.IsWebAllowed = setup.IsWebAllowed;
-        session.Configuration.IsImageGenerationAllowed = setup.IsImageGenerationAllowed;
-        session.Configuration.Instructions = setup.Instructions;
+        session.Configuration.Capability = Environment.Capability;
+        session.Configuration.Effort = Environment.Effort;
+        session.Configuration.IsShellAllowed = Environment.IsShellAllowed;
+        session.Configuration.IsSystemAccessAllowed = Environment.IsSystemAccessAllowed;
+        session.Configuration.IsWebAllowed = Environment.IsWebAllowed;
+        session.Configuration.IsImageGenerationAllowed = Environment.IsImageGenerationAllowed;
+        session.Configuration.Instructions = Environment.Instructions;
         string workspacePath = session.WorkspacePath;
 
         lock (gate)
         {
             created.Add(setup);
             sessions.Add(session);
-            made[session.Id] = ((Time ?? TimeProvider.System).GetUtcNow(), provider, workspacePath);
+            made[session.Id] = ((Time ?? TimeProvider.System).GetUtcNow(), workspacePath);
         }
 
         OnCreate?.Invoke(session);
@@ -152,8 +152,8 @@ public sealed class FakePrompter : IPrompter
         lock (gate)
         {
             return Task.FromResult<IReadOnlyList<PromptSessionInfo>>([.. sessions
-                .Select(session => new PromptSessionInfo { Id = session.Id, Provider = made[session.Id].Provider, Created = made[session.Id].Created, WorkspacePath = made[session.Id].WorkspacePath, IsStarted = session.Prompts.Count > 0 })
-                .OrderByDescending(info => info.Created)]);
+                .Select(session => new PromptSessionInfo { Id = session.Id, Provider = session.Provider, LastLoaded = made[session.Id].LastLoaded, WorkspacePath = session.WorkspacePath })
+                .OrderByDescending(info => info.LastLoaded)]);
         }
     }
 
@@ -164,6 +164,33 @@ public sealed class FakePrompter : IPrompter
         {
             made.Remove(id);
             return Task.FromResult(sessions.RemoveAll(session => session.Id == id) > 0);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task Move(string id, string workspacePath, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspacePath);
+        DateTimeOffset? before = null;
+
+        lock (gate)
+        {
+            if (made.TryGetValue(id, out (DateTimeOffset LastLoaded, string WorkspacePath) known))
+            {
+                before = known.LastLoaded;
+            }
+        }
+
+        IPromptSession session = await Load(id, cancellation);
+        await session.Move(workspacePath, cancellation);
+        await session.DisposeAsync();
+
+        lock (gate)
+        {
+            if (before is { } time && made.TryGetValue(id, out (DateTimeOffset LastLoaded, string WorkspacePath) current))
+            {
+                made[id] = (time, current.WorkspacePath);
+            }
         }
     }
 
@@ -185,6 +212,8 @@ public sealed class FakePrompter : IPrompter
             {
                 sessions[index] = sessions[index].Resume();
             }
+
+            made[id] = ((Time ?? TimeProvider.System).GetUtcNow(), made[id].WorkspacePath);
 
             return Task.FromResult<IPromptSession>(sessions[index]);
         }

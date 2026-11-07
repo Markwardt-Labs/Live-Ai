@@ -22,8 +22,8 @@ public sealed class PromptToolSessionTests : IDisposable
         curl -s -H "Authorization: Bearer $LIVEAI_TOOLS_TOKEN" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"{{{tool}}}","arguments":{{{arguments}}}}}' "$url" > "$PWD/tool-result.txt"
         """;
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
     private IPromptEngine Claude(string claude)
         => new ClaudeEngine(temp.Script("claude", $"IFS= read -r line\nprintf '%s\\n' \"$@\" > \"$PWD/args.txt\"\n{claude}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}]}}}}'\necho '{{\"type\":\"result\",\"is_error\":false,\"session_id\":\"s\"}}'"), temp.Combine("claude-state"));
@@ -42,7 +42,7 @@ public sealed class PromptToolSessionTests : IDisposable
     [Fact]
     public async Task Ask_LetsTheToolReachTheCallersFunctionWithTheSecretItWasGiven()
     {
-        await using IPromptSession session = temp.Track(await Provider(Claude(CallTool("echo", """{"note":"from the tool"}"""))).Create(TestModels.Options));
+        await using IPromptSession session = temp.Track(await Service(Claude(CallTool("echo", """{"note":"from the tool"}"""))).Create(TestModels.Options));
         session.Transient.Tools.Add(Echo());
 
         Assert.Equal("done", await session.Request("use it"));
@@ -57,7 +57,7 @@ public sealed class PromptToolSessionTests : IDisposable
     [Fact]
     public async Task Ask_AfterTheSessionIsDisposed_TheToolIsNoLongerReachable()
     {
-        IPromptSession session = temp.Track(await Provider(Claude("")).Create(TestModels.Options));
+        IPromptSession session = temp.Track(await Service(Claude("")).Create(TestModels.Options));
         session.Transient.Tools.Add(Echo());
         await session.Request("use it");
         string[] arguments = await File.ReadAllLinesAsync(temp.Combine("args.txt"));
@@ -84,7 +84,7 @@ public sealed class PromptToolSessionTests : IDisposable
             Directory.CreateDirectory(workspace);
         }
 
-        return temp.Track(await Provider(Claude(script)).Create(workspace is null ? TestModels.Options : TestModels.With(workspacePath: workspace)));
+        return temp.Track(await Service(Claude(script)).Create(workspace is null ? TestModels.Options : TestModels.With(workspacePath: workspace)));
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// What a session is created with: which tool runs it, how it signs in, and the configuration it starts with. It holds what every tool has in common, the workspace and the starting values of the session's configuration; each tool has a type that adds just what that tool needs, and only the library derives from it: <see cref="ClaudeSetup" />, <see cref="CodexSetup" /> and <see cref="LocalSetup" />. The tool-specific part of the setup is stored with the session (the API key too), so loading or deleting it needs only its identifier; where the tools are is the <see cref="PromptEnvironment" /> of the prompter. What can change while a session lives is on its <see cref="IPromptSession.Configuration" />.
+/// What a session is created with: which tool runs it, how it signs in, and where it works. It holds what every tool has in common, the workspace; each tool has a type that adds just what that tool needs, and only the library derives from it: <see cref="ClaudeSetup" />, <see cref="CodexSetup" /> and <see cref="LocalSetup" />. The tool-specific part of the setup is stored with the session (the API key too), so loading or deleting it needs only its identifier; where the tools are is the <see cref="PromptEnvironment" /> of the prompter. What can change while a session lives is on its <see cref="IPromptSession.Configuration" />.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "tool")]
 [JsonDerivedType(typeof(ClaudeSetup), "claude")]
@@ -19,45 +19,4 @@ public abstract record PromptSetup
     [JsonIgnore]
     public string? WorkspacePath { get; init; }
 
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.Capability" />, <see cref="PromptCapability.Balanced" /> by default. It is used when the session is created and not stored with the setup: the configuration of the session is, and a loaded session has the values it was left with.
-    /// </summary>
-    [JsonIgnore]
-    public PromptCapability Capability { get; init; } = PromptCapability.Balanced;
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.Effort" />, <see cref="PromptEffort.Medium" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public PromptEffort Effort { get; init; } = PromptEffort.Medium;
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.IsShellAllowed" />, <see langword="false" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsShellAllowed { get; init; }
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.IsSandboxed" />, <see langword="true" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsSandboxed { get; init; } = true;
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.IsWebAllowed" />, <see langword="false" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsWebAllowed { get; init; }
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.IsImageGenerationAllowed" />, <see langword="false" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsImageGenerationAllowed { get; init; }
-
-    /// <summary>
-    /// Gets the starting value of <see cref="IPromptSessionConfiguration.Instructions" />, <see langword="null" /> by default. It is used when the session is created and not stored with the setup.
-    /// </summary>
-    [JsonIgnore]
-    public string? Instructions { get; init; }
 }

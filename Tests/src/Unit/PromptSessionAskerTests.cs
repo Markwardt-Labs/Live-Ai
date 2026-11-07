@@ -6,7 +6,7 @@ public sealed class PromptSessionAskerTests
 
     private readonly Mock<IPromptEngine> engine = new();
 
-    private readonly Mock<IPromptProvider> provider = new();
+    private readonly Mock<IPromptToolService> provider = new();
 
     private readonly Mock<ITurnRunner> runner = new();
 

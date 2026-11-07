@@ -22,6 +22,9 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
     public string Identifier => "Claude Code";
 
     /// <inheritdoc />
+    public PromptProvider Provider => PromptProvider.Claude;
+
+    /// <inheritdoc />
     public bool CanPersist => true;
 
     /// <inheritdoc />

@@ -65,7 +65,7 @@ public sealed record FakePrompt
     /// <summary>
     /// Gets how much effort the model put into the prompt: the session's at the time.
     /// </summary>
-    public PromptEffort Effort { get; init; } = PromptEffort.Medium;
+    public PromptEffort Effort { get; init; } = PromptEffort.High;
 
     /// <summary>
     /// Gets the notes the session was told (with <see cref="IPromptSession.Send(object, PromptSendOptions?, CancellationToken)" />) since the prompt before this one, which are delivered with it.

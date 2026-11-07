@@ -13,15 +13,15 @@ public sealed class CodexSessionTests : IDisposable
     public void Dispose()
         => temp.Dispose();
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
     private IPromptEngine Codex(string command)
         => new CodexEngine(command, temp.Combine("codex-state"));
 
     private async Task<IPromptSession> Create(string command, bool persistent = false)
     {
-        IPromptSession session = temp.Track(await Provider(Codex(command)).Create(TestModels.Options));
+        IPromptSession session = temp.Track(await Service(Codex(command)).Create(TestModels.Options));
         return session;
     }
 
@@ -291,11 +291,11 @@ public sealed class CodexSessionTests : IDisposable
     [Fact]
     public async Task GetContext_OfAResumedThread_IsWhatTheAppServerReportsOnResume()
     {
-        IPromptProvider provider = Provider(Codex(fake.Script()));
-        IPromptSession first = temp.Track(await provider.Create(TestModels.Options));
+        IPromptToolService service = Service(Codex(fake.Script()));
+        IPromptSession first = temp.Track(await service.Create(TestModels.Options));
         await first.Request("one");
 
-        IPromptSession loaded = await provider.Load(first.Id);
+        IPromptSession loaded = await service.Load(first.Id);
 
         Assert.Equal(PromptContextOf(40, 1000), await loaded.GetContext());
     }
@@ -303,10 +303,10 @@ public sealed class CodexSessionTests : IDisposable
     [Fact]
     public async Task GetContext_OfAThreadThatHasNoTurnYet_ReportsNothingOnceTheWaitIsOver()
     {
-        CodexEngine provider = new(fake.Script(), temp.Path) { ContextWait = TimeSpan.FromMilliseconds(100) };
-        PromptSessionRecord record = new() { Id = Guid.NewGuid(), Engine = provider, WorkingFolder = temp.Path };
+        CodexEngine engine = new(fake.Script(), temp.Path) { ContextWait = TimeSpan.FromMilliseconds(100) };
+        PromptSessionRecord record = new() { LastLoaded = TestModels.Loaded, Id = Guid.NewGuid(), Engine = engine, WorkingFolder = temp.Path };
         PromptEngineStart given = record.ToStart(null, null, null);
-        await using IPromptProcess process = new TurnRunner().Open(provider, provider.CreatePersistentStart(given), given);
+        await using IPromptProcess process = new TurnRunner().Open(engine, engine.CreatePersistentStart(given), given);
 
         PromptContext context = await process.GetContext();
 

@@ -21,9 +21,9 @@ internal sealed record PromptSessionSettingsSnapshot
     public required bool IsShellAllowed { get; init; }
 
     /// <summary>
-    /// Gets a value indicating whether the workspace only accepts paths inside its folder.
+    /// Gets a value indicating whether the AI's file tools can use any path on the machine and not only the ones inside the workspace.
     /// </summary>
-    public required bool IsSandboxed { get; init; }
+    public required bool IsSystemAccessAllowed { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the AI has a tool to fetch web pages.
@@ -64,7 +64,7 @@ internal sealed record PromptSessionSettingsSnapshot
         target.Capability = Capability;
         target.Effort = Effort;
         target.IsShellAllowed = IsShellAllowed;
-        target.IsSandboxed = IsSandboxed;
+        target.IsSystemAccessAllowed = IsSystemAccessAllowed;
         target.IsWebAllowed = IsWebAllowed;
         target.Instructions = Instructions;
         target.IsImageGenerationAllowed = IsImageGenerationAllowed;

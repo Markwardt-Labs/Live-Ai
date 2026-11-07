@@ -5,6 +5,24 @@ namespace Markwardt.LiveAi;
 /// </summary>
 internal static class PromptModelSettings
 {
+    private static readonly string[][] tierHints =
+    [
+        ["haiku", "mini", "luna", "flash", "lite", "nano", "small"],
+        ["sonnet", "terra", "balanced"],
+        ["opus"],
+        ["fable", "sol", "max", "pro", "large", "ultra"]
+    ];
+
+    extension(string modelId)
+    {
+        /// <summary>
+        /// Says which capability a model of this name stands for, going by the same hints in its name that choosing a model by capability goes by.
+        /// </summary>
+        /// <returns>The capability, or <see langword="null" /> when the name says none.</returns>
+        public PromptCapability? CapabilityOf()
+            => tierHints.Select((hints, tier) => hints.Any(hint => modelId.Contains(hint, StringComparison.OrdinalIgnoreCase)) ? tier : -1).FirstOrDefault(tier => tier >= 0, -1) is >= 0 and int found ? (PromptCapability)found : null;
+    }
+
     extension(IReadOnlyList<PromptModel> models)
     {
         /// <summary>
@@ -28,15 +46,8 @@ internal static class PromptModelSettings
                 return usable.FirstOrDefault(model => string.Equals(model.Id, preferred, StringComparison.OrdinalIgnoreCase) || string.Equals(model.Name, preferred, StringComparison.OrdinalIgnoreCase) || model.Id.EndsWith("/" + preferred, StringComparison.OrdinalIgnoreCase)) ?? throw new PromptSessionException($"The tool does not offer a model '{preferred}'.");
             }
 
-            string[][] tierHints =
-            [
-                ["haiku", "mini", "luna", "flash", "lite", "nano", "small"],
-                ["sonnet", "terra", "balanced"],
-                ["opus"],
-                ["fable", "sol", "max", "pro", "large", "ultra"]
-            ];
             int wanted = (int)capability;
-            (PromptModel Model, int Tier)[] ranked = [.. usable.Select(model => (Model: model, Tier: tierHints.Select((hints, tier) => hints.Any(hint => model.Id.Contains(hint, StringComparison.OrdinalIgnoreCase)) ? tier : -1).FirstOrDefault(tier => tier >= 0, -1))).Where(entry => entry.Tier >= 0)];
+            (PromptModel Model, int Tier)[] ranked = [.. usable.Select(model => (Model: model, Tier: model.Id.CapabilityOf() is { } tier ? (int)tier : -1)).Where(entry => entry.Tier >= 0)];
 
             if (ranked.Length > 0)
             {

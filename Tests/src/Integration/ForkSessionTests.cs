@@ -16,11 +16,11 @@ public sealed class ForkSessionTests : IDisposable
 
     private IPromptEngine Codex => codex ??= new CodexEngine(new FakeCodex(temp).Script(), temp.Combine("codex-state"));
 
-    private IPromptProvider Provider(IPromptEngine engine)
-        => TestProviders.Make(engine, temp.Combine("data"));
+    private IPromptToolService Service(IPromptEngine engine)
+        => TestServices.Make(engine, temp.Combine("data"));
 
-    private async Task<IPromptSession> Create(IPromptEngine provider)
-        => temp.Track(await Provider(provider).Create(TestModels.Options));
+    private async Task<IPromptSession> Create(IPromptEngine engine)
+        => temp.Track(await Service(engine).Create(TestModels.Options));
 
     private async Task<JsonElement> Stored(IPromptSession session)
         => JsonDocument.Parse(await File.ReadAllTextAsync(temp.Combine($"data/Sessions/{session.Id}.json"))).RootElement;
@@ -32,8 +32,8 @@ public sealed class ForkSessionTests : IDisposable
     public async Task Fork_OfAWorkspaceSession_RunsInTheSameFolderWithTheSameWorkspace()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        await using IPromptSession origin = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
-        origin.Configuration.IsSandboxed = false;
+        await using IPromptSession origin = temp.Track(await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project }));
+        origin.Configuration.IsSystemAccessAllowed = true;
         await origin.Request("first");
 
         await using IPromptSession fork = temp.Track(await origin.Fork());
@@ -41,7 +41,7 @@ public sealed class ForkSessionTests : IDisposable
         JsonElement stored = await Stored(fork);
         Assert.Equal(project, stored.GetProperty("workingFolder").GetString());
         Assert.Equal(project, stored.GetProperty("workspacePath").GetString());
-        Assert.False(stored.GetProperty("isSandboxed").GetBoolean());
+        Assert.True(stored.GetProperty("isSystemAccessAllowed").GetBoolean());
         Assert.Equal(project, fork.WorkspacePath);
     }
 
@@ -119,15 +119,15 @@ public sealed class ForkSessionTests : IDisposable
     public async Task Move_AnotherWorkspace_CopiesTheClaudeConversationThereRunsTheNextPromptInItAndLoadsWithIt()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        IPromptProvider provider = Provider(Claude);
-        IPromptSession session = await provider.Create(TestModels.Options);
+        IPromptToolService service = Service(Claude);
+        IPromptSession session = await service.Create(TestModels.Options);
         await session.Request("one");
 
         await session.Move(project);
         await session.Request("two");
         string id = session.Id;
         await session.DisposeAsync();
-        await using IPromptSession loaded = temp.Track(await provider.Load(id));
+        await using IPromptSession loaded = temp.Track(await service.Load(id));
 
         string[] arguments = await Run(1);
         Assert.Equal("claude-0", arguments[Array.IndexOf(arguments, "--resume") + 1]);
@@ -141,7 +141,7 @@ public sealed class ForkSessionTests : IDisposable
     public async Task Move_ToNull_GoesToTheAutomaticWorkspaceInTheDataFolder()
     {
         string project = Directory.CreateDirectory(temp.Combine("project")).FullName;
-        await using IPromptSession session = temp.Track(await Provider(Claude).Create(new PromptProviderOptions { WorkspacePath = project }));
+        await using IPromptSession session = temp.Track(await Service(Claude).Create(new PromptToolServiceOptions { WorkspacePath = project }));
         await session.Request("one");
 
         await session.Move(null);
@@ -202,7 +202,7 @@ public sealed class ForkSessionTests : IDisposable
         origin.Configuration.Capability = PromptCapability.Strong;
         origin.Configuration.Effort = PromptEffort.High;
         origin.Configuration.IsShellAllowed = true;
-        origin.Configuration.IsSandboxed = false;
+        origin.Configuration.IsSystemAccessAllowed = true;
         origin.Configuration.IsWebAllowed = true;
         origin.Configuration.IsImageGenerationAllowed = true;
         origin.Configuration.Instructions = "Be brief.";
@@ -213,7 +213,7 @@ public sealed class ForkSessionTests : IDisposable
 
         Assert.Equal((PromptCapability.Strong, PromptEffort.High), (fork.Configuration.Capability, fork.Configuration.Effort));
         Assert.True(fork.Configuration.IsShellAllowed);
-        Assert.False(fork.Configuration.IsSandboxed);
+        Assert.True(fork.Configuration.IsSystemAccessAllowed);
         Assert.True(fork.Configuration.IsWebAllowed);
         Assert.True(fork.Configuration.IsImageGenerationAllowed);
         Assert.Equal("Be brief.", fork.Configuration.Instructions);
@@ -262,8 +262,8 @@ public sealed class ForkSessionTests : IDisposable
     [Fact]
     public async Task ALoadedBranch_ThatWasNotPromptedYet_NeedsTheOriginalConversationToStillExist()
     {
-        IPromptProvider provider = Provider(Claude);
-        await using IPromptSession origin = temp.Track(await provider.Create(TestModels.Options));
+        IPromptToolService service = Service(Claude);
+        await using IPromptSession origin = temp.Track(await service.Create(TestModels.Options));
         await origin.Request("first");
         string forkId;
 
@@ -272,10 +272,10 @@ public sealed class ForkSessionTests : IDisposable
             forkId = fork.Id;
         }
 
-        await using IPromptSession loaded = temp.Track(await provider.Load(forkId));
+        await using IPromptSession loaded = temp.Track(await service.Load(forkId));
         Assert.NotNull(loaded);
         File.Delete(temp.Combine("claude-state/projects/p/claude-0.jsonl"));
-        await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => provider.Load(forkId));
+        await Assert.ThrowsAsync<PromptSessionNotFoundException>(() => service.Load(forkId));
     }
 
     [Fact]
