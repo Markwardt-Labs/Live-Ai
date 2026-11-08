@@ -8,7 +8,7 @@ public sealed class ShellToolTests : IDisposable
     private readonly PromptTool shell;
 
     public ShellToolTests()
-        => shell = new PromptLibraryTools().CreateShell(temp.Path);
+        => shell = new PromptLibraryTools().CreateShell(temp.Path, new PromptTasks());
 
     public void Dispose()
         => temp.Dispose();
@@ -108,7 +108,7 @@ public sealed class ShellToolTests : IDisposable
     [Fact]
     public async Task Run_DoesNotWaitForABackgroundProcessThatKeepsTheOutputOpen()
     {
-        PromptTool quick = new PromptLibraryTools { ShellPipeGrace = TimeSpan.FromMilliseconds(100) }.CreateShell(temp.Path);
+        PromptTool quick = new PromptLibraryTools { ShellPipeGrace = TimeSpan.FromMilliseconds(100) }.CreateShell(temp.Path, new PromptTasks());
         DateTime begun = DateTime.UtcNow;
 
         string result = await Call(quick, new { command = "sleep 3 & echo started" });

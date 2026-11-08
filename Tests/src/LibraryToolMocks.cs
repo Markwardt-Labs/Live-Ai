@@ -18,10 +18,11 @@ internal static class LibraryToolMocks
             tools.SetupGet(mock => mock.TimeName).Returns("current_time");
             tools.SetupGet(mock => mock.ToolSearchName).Returns("tool_search");
             tools.SetupGet(mock => mock.DelegateName).Returns("delegate");
+            tools.SetupGet(mock => mock.TaskNames).Returns(["task_wait", "task_output", "task_stop"]);
             tools.Setup(mock => mock.CreateSearch()).Returns(() => Named("search_web"));
             tools.Setup(mock => mock.CreateTime()).Returns(() => Named("current_time"));
             tools.Setup(mock => mock.CreateToolSearch(It.IsAny<Func<IReadOnlyList<PromptTool>>>())).Returns(() => Named("tool_search"));
-            tools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Returns(() => Named("delegate"));
+            tools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Returns(() => Named("delegate"));
         }
     }
 

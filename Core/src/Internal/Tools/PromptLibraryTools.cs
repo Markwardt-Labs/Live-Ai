@@ -61,6 +61,11 @@ internal interface IPromptLibraryTools
     string DelegateName { get; }
 
     /// <summary>
+    /// Gets the names of the tools that follow background tasks, which a caller's own tools cannot use either.
+    /// </summary>
+    IReadOnlyList<string> TaskNames { get; }
+
+    /// <summary>
     /// Builds the tools for a store.
     /// </summary>
     /// <param name="store">The files the tools work on, with the cache at <see cref="CacheName" /> in its top level.</param>
@@ -78,8 +83,9 @@ internal interface IPromptLibraryTools
     /// Builds the tool that runs shell commands on this machine.
     /// </summary>
     /// <param name="workingFolder">The folder commands start in unless the AI names another.</param>
+    /// <param name="tasks">The background tasks of the session, which a command started in the background becomes one of.</param>
     /// <returns>The tool.</returns>
-    PromptTool CreateShell(string workingFolder);
+    PromptTool CreateShell(string workingFolder, IPromptTasks tasks);
 
     /// <summary>
     /// Builds the tool that shows the AI an image of a store.
@@ -126,8 +132,16 @@ internal interface IPromptLibraryTools
     /// Builds the tool that hands a task to a helper AI.
     /// </summary>
     /// <param name="run">Runs a task in a helper, and says whether the helper is given the conversation so far, and returns what it answered.</param>
+    /// <param name="tasks">The background tasks of the session, which a task handed over in the background becomes one of.</param>
     /// <returns>The tool.</returns>
-    PromptTool CreateDelegate(Func<string, bool, CancellationToken, Task<string>> run);
+    PromptTool CreateDelegate(Func<string, bool, CancellationToken, Task<string>> run, IPromptTasks tasks);
+
+    /// <summary>
+    /// Creates the tools with which the AI waits for, reads and stops its background tasks.
+    /// </summary>
+    /// <param name="tasks">The background tasks of the session.</param>
+    /// <returns>The tools.</returns>
+    PromptTool[] CreateTasks(IPromptTasks tasks);
 }
 
 /// <inheritdoc />
@@ -203,6 +217,12 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
     private readonly int shellMaxSeconds = 3600;
 
+    private readonly int backgroundDefaultSeconds = 3600;
+
+    private readonly int backgroundMaxSeconds = 86400;
+
+    private readonly ShellProcess shell = new();
+
     /// <summary>
     /// Gets how long a command's output is read after the command itself ended, for a background process that keeps the pipes open: it is waited for no longer than this.
     /// </summary>
@@ -239,6 +259,15 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     public string DelegateName => "delegate";
 
     /// <inheritdoc />
+    public IReadOnlyList<string> TaskNames { get; } = ["task_wait", "task_output", "task_stop"];
+
+    private string TaskWaitName => TaskNames[0];
+
+    private string TaskOutputName => TaskNames[1];
+
+    private string TaskStopName => TaskNames[2];
+
+    /// <inheritdoc />
     public string CacheName => "CACHE:";
 
     /// <inheritdoc />
@@ -265,8 +294,8 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         });
 
     /// <inheritdoc />
-    public PromptTool CreateShell(string workingFolder)
-        => PromptTool.Create<ShellInput, string>(ShellName, $"Runs a shell command on the local machine, with the full rights of the user this program runs as, and returns its output (standard output and standard error together) followed by its exit code. The command runs with /bin/sh -c (cmd /c on Windows). It starts in the workspace unless working_directory is given, so use absolute paths or working_directory. Standard input is empty, so a command that waits for input ends at once. A command is stopped after timeout_seconds (default {shellDefaultSeconds}, at most {shellMaxSeconds}), and very long output is cut.", (input, cancellation) => RunShell(workingFolder, input, cancellation));
+    public PromptTool CreateShell(string workingFolder, IPromptTasks tasks)
+        => PromptTool.Create<ShellInput, string>(ShellName, $"Runs a shell command on the local machine, with the full rights of the user this program runs as, and returns its output (standard output and standard error together) followed by its exit code. The command runs with /bin/sh -c (cmd /c on Windows). It starts in the workspace unless working_directory is given, so use absolute paths or working_directory. Standard input is empty, so a command that waits for input ends at once. A command is stopped after timeout_seconds (default {shellDefaultSeconds}, at most {shellMaxSeconds}), and very long output is cut. Set background to true for a command that takes long: the call returns a task identifier at once and the command keeps running (timeout_seconds then defaults to {backgroundDefaultSeconds}, at most {backgroundMaxSeconds}), so you can go on with other work and write status updates meanwhile; follow it with {TaskWaitName}, {TaskOutputName} and {TaskStopName}.", (input, cancellation) => RunShell(workingFolder, input, tasks, cancellation));
 
     /// <inheritdoc />
     public PromptTool CreateImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give)
@@ -453,17 +482,28 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         => PromptTool.Create<ToolSearchInput, string>(ToolSearchName, "Finds out which tools you have and how to call them. Give words to look for in the names and descriptions of your tools, and it returns the best matches with their descriptions and input schemas; give nothing to get a list of all their names. It covers the tools of this library (files, shell, web, your own tools), not those of other MCP servers.", (input, _) => Task.FromResult(SearchTools(tools(), input)));
 
     /// <inheritdoc />
-    public PromptTool CreateDelegate(Func<string, bool, CancellationToken, Task<string>> run)
-        => PromptTool.Create<DelegateInput, string>(DelegateName, "Hands a self-contained task to a helper AI that works with the same tools and returns what it found or did, so that the details stay out of your own conversation. Describe the task completely: by default the helper knows nothing of this conversation (set share_context to true to give it the conversation up to your last turn and the request you are working on now, which costs more). It is good for research, a long search through files, or a job that can be checked on its own. It takes as long as the task does, and the helper cannot hand tasks on to another.", (input, cancellation) => Delegated(run, input, cancellation));
+    public PromptTool CreateDelegate(Func<string, bool, CancellationToken, Task<string>> run, IPromptTasks tasks)
+        => PromptTool.Create<DelegateInput, string>(DelegateName, $"Hands a self-contained task to a helper AI that works with the same tools and returns what it found or did, so that the details stay out of your own conversation. Describe the task completely: by default the helper knows nothing of this conversation (set share_context to true to give it the conversation up to your last turn and the request you are working on now, which costs more). It is good for research, a long search through files, or a job that can be checked on its own. The call returns when the helper is done, which takes as long as the task does; set background to true to get a task identifier at once instead, go on with other work meanwhile, and follow the helper with {TaskWaitName}, {TaskOutputName} and {TaskStopName}. Several helpers run at once (three at most; more wait for a place), and a helper cannot hand tasks on to another.", (input, cancellation) => Delegated(run, tasks, input, cancellation));
 
-    private async Task<string> Delegated(Func<string, bool, CancellationToken, Task<string>> run, DelegateInput input, CancellationToken cancellation)
+    /// <inheritdoc />
+    public PromptTool[] CreateTasks(IPromptTasks tasks)
+        =>
+        [
+            PromptTool.Create<TaskWaitInput, string>(TaskWaitName, $"Waits for the background tasks you started (with background set on {ShellName} or {DelegateName}) and reports them. It returns as soon as one of the tasks it watches has ended, with its result, or when timeout_seconds are over (default 60, at most 3600), with how long each running task has run and its latest output. Use it in place of idling: wait for about the interval at which you owe the user a status update, write that update as a normal message, then wait again. Without task_ids it watches every task. A task that ended is reported once. With timeout_seconds 0 it only reports. Do not reply until every task has ended.", async (input, cancellation) => await tasks.Wait(input.TaskIds, input.TimeoutSeconds ?? 60, cancellation)),
+            PromptTool.Create<TaskOutputInput, string>(TaskOutputName, "Reads the latest output of a background command (not of a helper, which has none before it ends), without waiting.", (input, _) => Task.FromResult(tasks.Output(input.TaskId, input.Lines ?? 50))),
+            PromptTool.Create<TaskStopInput, string>(TaskStopName, "Stops a background task, a command and everything it started, or a helper.", (input, _) => Task.FromResult(tasks.Stop(input.TaskId)))
+        ];
+
+    private async Task<string> Delegated(Func<string, bool, CancellationToken, Task<string>> run, IPromptTasks tasks, DelegateInput input, CancellationToken cancellation)
     {
         if (string.IsNullOrWhiteSpace(input.Task))
         {
             throw new InvalidOperationException("Describe the task to delegate.");
         }
 
-        return await run(input.Task.Trim(), input.ShareContext ?? false, cancellation);
+        string task = input.Task.Trim();
+        bool share = input.ShareContext ?? false;
+        return input.Background == true ? tasks.StartHelper(task, token => run(task, share, token)) : await run(task, share, cancellation);
     }
 
     private async Task<string> GenerateImage(IStore store, IPromptImageGenerator generator, JsonElement arguments, CancellationToken cancellation)
@@ -805,34 +845,19 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         }
     }
 
-    private async Task<string> RunShell(string workingFolder, ShellInput input, CancellationToken cancellation = default)
+    private async Task<string> RunShell(string workingFolder, ShellInput input, IPromptTasks tasks, CancellationToken cancellation = default)
     {
+        string folder = input.WorkingDirectory is { Length: > 0 } ? input.WorkingDirectory : workingFolder;
+
+        if (input.Background == true)
+        {
+            return tasks.StartCommand(folder, input.Command, Math.Clamp(input.TimeoutSeconds ?? backgroundDefaultSeconds, 1, backgroundMaxSeconds));
+        }
+
         int seconds = Math.Clamp(input.TimeoutSeconds ?? shellDefaultSeconds, 1, shellMaxSeconds);
-
-        ProcessStartInfo start = new(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh")
-        {
-            WorkingDirectory = input.WorkingDirectory is { Length: > 0 } ? input.WorkingDirectory : workingFolder,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        start.ArgumentList.Add(OperatingSystem.IsWindows() ? "/c" : "-c");
-        start.ArgumentList.Add(input.Command);
-
-        using Process process = new() { StartInfo = start };
-
-        try
-        {
-            process.Start();
-        }
-        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
-        {
-            throw new InvalidOperationException($"The command could not be started: {exception.Message}");
-        }
-
-        process.StandardInput.Close();
+        using Process process = shell.Start(folder, input.Command);
         ShellOutput output = new(shellOutputLimit);
-        Task readers = Task.WhenAll(Pump(process.StandardOutput, output), Pump(process.StandardError, output));
+        Task readers = shell.Read(process, output);
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
         bool timedOut = false;
@@ -843,7 +868,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         }
         catch (OperationCanceledException)
         {
-            Stop(process);
+            shell.Stop(process);
 
             if (cancellation.IsCancellationRequested)
             {
@@ -858,25 +883,6 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         string status = timedOut ? $"(timed out after {seconds} seconds and stopped)" : $"(exit code {process.ExitCode})";
         string cut = output.IsCut ? "\n(output cut at 64 KB)" : string.Empty;
         return text.Length == 0 ? $"{status}{cut}".TrimStart('\n') : $"{text}{cut}\n{status}";
-    }
-
-    private async Task Pump(StreamReader reader, ShellOutput output)
-    {
-        for (string? line = await reader.ReadLineAsync(); line is not null; line = await reader.ReadLineAsync())
-        {
-            output.Add(line);
-        }
-    }
-
-    private void Stop(Process process)
-    {
-        try
-        {
-            process.Kill(true);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
-        {
-        }
     }
 
     private async Task<string> ListDirectory(IStore store, DirectoryInput input, CancellationToken cancellation = default)
@@ -1232,7 +1238,8 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// <param name="Command">The command line.</param>
     /// <param name="WorkingDirectory">The folder to run in, or <see langword="null" /> for the workspace.</param>
     /// <param name="TimeoutSeconds">How long the command may run, or <see langword="null" /> for the default.</param>
-    internal sealed record ShellInput(string Command, [property: JsonPropertyName("working_directory")] string? WorkingDirectory = null, [property: JsonPropertyName("timeout_seconds")] int? TimeoutSeconds = null);
+    /// <param name="Background">Whether the command runs as a background task, which the call does not wait for.</param>
+    internal sealed record ShellInput(string Command, [property: JsonPropertyName("working_directory")] string? WorkingDirectory = null, [property: JsonPropertyName("timeout_seconds")] int? TimeoutSeconds = null, bool? Background = null);
 
     /// <summary>
     /// The arguments of the tool that shows an image.
@@ -1265,7 +1272,28 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// </summary>
     /// <param name="Task">The task, described completely.</param>
     /// <param name="ShareContext">Whether the helper is given the conversation so far.</param>
-    internal sealed record DelegateInput(string Task, [property: JsonPropertyName("share_context")] bool? ShareContext = null);
+    /// <param name="Background">Whether the helper runs as a background task, which the call does not wait for.</param>
+    internal sealed record DelegateInput(string Task, [property: JsonPropertyName("share_context")] bool? ShareContext = null, bool? Background = null);
+
+    /// <summary>
+    /// The arguments of the tool that waits for background tasks.
+    /// </summary>
+    /// <param name="TaskIds">The tasks to watch, or <see langword="null" /> for all of them.</param>
+    /// <param name="TimeoutSeconds">How long to wait at most, or <see langword="null" /> for the default.</param>
+    internal sealed record TaskWaitInput([property: JsonPropertyName("task_ids")] List<string>? TaskIds = null, [property: JsonPropertyName("timeout_seconds")] int? TimeoutSeconds = null);
+
+    /// <summary>
+    /// The arguments of the tool that reads the output of a background command.
+    /// </summary>
+    /// <param name="TaskId">The task.</param>
+    /// <param name="Lines">How many of the last lines to read, or <see langword="null" /> for the default.</param>
+    internal sealed record TaskOutputInput([property: JsonPropertyName("task_id")] string TaskId, int? Lines = null);
+
+    /// <summary>
+    /// The arguments of the tool that stops a background task.
+    /// </summary>
+    /// <param name="TaskId">The task.</param>
+    internal sealed record TaskStopInput([property: JsonPropertyName("task_id")] string TaskId);
 
     /// <summary>
     /// The arguments of the tool that compares two files.
@@ -1283,44 +1311,6 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     internal sealed record WebSearchInput(string? Query = null, [property: JsonPropertyName("max_results")] int? MaxResults = null);
 
     private sealed record SearchResult(string Title, string Url, string Snippet);
-
-    private sealed class ShellOutput(int limit)
-    {
-        private readonly StringBuilder text = new();
-
-        private readonly object gate = new();
-
-        /// <summary>
-        /// Gets a value indicating whether lines were dropped because the output reached its limit.
-        /// </summary>
-        public bool IsCut { get; private set; }
-
-        /// <summary>
-        /// Adds a line of output, or drops it when the limit is reached.
-        /// </summary>
-        /// <param name="line">The line.</param>
-        public void Add(string line)
-        {
-            lock (gate)
-            {
-                if (text.Length >= limit)
-                {
-                    IsCut = true;
-                    return;
-                }
-
-                text.AppendLine(line);
-            }
-        }
-
-        public override string ToString()
-        {
-            lock (gate)
-            {
-                return text.ToString();
-            }
-        }
-    }
 }
 
 /// <summary>
@@ -1335,6 +1325,6 @@ internal static class PromptLibraryToolsExtensions
         /// </summary>
         /// <returns>The names.</returns>
         public IReadOnlyList<string> GetReservedNames()
-            => [.. tools.Names, tools.ShellName, tools.AskName, tools.ImageName, tools.FetchName, tools.SearchName, tools.GenerateImageName, tools.TimeName, tools.ToolSearchName, tools.DelegateName];
+            => [.. tools.Names, tools.ShellName, tools.AskName, tools.ImageName, tools.FetchName, tools.SearchName, tools.GenerateImageName, tools.TimeName, tools.ToolSearchName, tools.DelegateName, .. tools.TaskNames];
     }
 }

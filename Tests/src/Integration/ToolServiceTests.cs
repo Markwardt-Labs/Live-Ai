@@ -101,7 +101,7 @@ public sealed class ToolServiceTests : IDisposable
         Assert.Contains("sonnet", arguments);
         Assert.Contains("dontAsk", arguments);
         Assert.DoesNotContain("--resume", arguments);
-        Assert.Equal("mcp__liveai__list_directory,mcp__liveai__find_files,mcp__liveai__search_files,mcp__liveai__read_file,mcp__liveai__write_file,mcp__liveai__edit_file,mcp__liveai__delete_file,mcp__liveai__move_file,mcp__liveai__copy_file,mcp__liveai__diff_files,mcp__liveai__view_image,mcp__liveai__current_time,mcp__liveai__tool_search,mcp__liveai__delegate,mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
+        Assert.Equal("mcp__liveai__list_directory,mcp__liveai__find_files,mcp__liveai__search_files,mcp__liveai__read_file,mcp__liveai__write_file,mcp__liveai__edit_file,mcp__liveai__delete_file,mcp__liveai__move_file,mcp__liveai__copy_file,mcp__liveai__diff_files,mcp__liveai__view_image,mcp__liveai__current_time,mcp__liveai__tool_search,mcp__liveai__delegate,mcp__liveai__task_wait,mcp__liveai__task_output,mcp__liveai__task_stop,mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
         Assert.Equal(string.Empty, await File.ReadAllTextAsync(temp.Combine("claude-key.txt")));
     }
 

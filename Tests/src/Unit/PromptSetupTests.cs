@@ -27,7 +27,7 @@ public sealed class PromptSetupTests
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
-        libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
+        libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>(), It.IsAny<IPromptTasks>())).Returns(() => Tool("shell"));
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns(() => [Tool("read_file")]);
         engine.Setup(mock => mock.CreateStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));
         engine.Setup(mock => mock.CreatePersistentStart(It.IsAny<PromptEngineStart>())).Returns(new ProcessStartInfo("tool"));

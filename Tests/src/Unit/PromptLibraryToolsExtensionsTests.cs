@@ -9,7 +9,8 @@ public sealed class PromptLibraryToolsExtensionsTests
         return typeof(IPromptLibraryTools).GetProperties()
             .Where(property => property.Name.EndsWith("Name", StringComparison.Ordinal) && property.Name != nameof(IPromptLibraryTools.CacheName) && property.PropertyType == typeof(string))
             .Select(property => (string)property.GetValue(tools)!)
-            .Concat(tools.Names);
+            .Concat(tools.Names)
+            .Concat(tools.TaskNames);
     }
 
     private PromptTool Tool(string name)

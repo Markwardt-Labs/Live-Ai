@@ -8,7 +8,20 @@ public sealed class ManualTime : TimeProvider
 
     private DateTimeOffset now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+    private int created;
+
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public int CreatedTimers
+    {
+        get
+        {
+            lock (gate)
+            {
+                return created;
+            }
+        }
+    }
 
     public override DateTimeOffset GetUtcNow()
     {
@@ -24,6 +37,12 @@ public sealed class ManualTime : TimeProvider
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         ManualTimer timer = new(this, callback, state);
+
+        lock (gate)
+        {
+            created++;
+        }
+
         timer.Change(dueTime, period);
         return timer;
     }

@@ -101,6 +101,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptTool? shellTool;
 
+    private PromptTool[]? taskTools;
+
+    private readonly IPromptTasks tasks;
+
     private string? shellFolder;
 
     private DiskStore? fileToolWorkspace;
@@ -167,6 +171,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         persisted = record;
         log = new PromptLog(logger);
         Time = time ?? TimeProvider.System;
+        tasks = new PromptTasks(Time);
         this.apiKey = apiKey;
         this.store = store;
         this.service = service;
@@ -494,6 +499,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             turnInterrupted = true;
             process = live ?? active;
         }
+
+        tasks.StopAll();
 
         try
         {
@@ -1605,7 +1612,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
                 if (shellTool is null || shellFolder != folder)
                 {
-                    shellTool = libraryTools.CreateShell(folder);
+                    shellTool = libraryTools.CreateShell(folder, tasks);
                     shellFolder = folder;
                 }
             }
@@ -1634,8 +1641,9 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             search = snapshot.IsWebAllowed && !engine.NativeSearch ? searchTool ??= libraryTools.CreateSearch() : null;
             timeTool ??= libraryTools.CreateTime();
             toolSearchTool ??= libraryTools.CreateToolSearch(() => servedTools);
-            delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate);
-            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat(generate is null ? [] : [generate]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
+            delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate, tasks);
+            PromptTool[] following = hasShell || delegation is not null ? taskTools ??= libraryTools.CreateTasks(tasks) : [];
+            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat(generate is null ? [] : [generate]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(following).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
 
             if (exposed.GroupBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } clash)
             {
@@ -1751,6 +1759,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         try
         {
             await Release(immediate);
+            await tasks.DisposeAsync();
             await StopTools();
             await ClearCache();
             await SaveConfiguration();

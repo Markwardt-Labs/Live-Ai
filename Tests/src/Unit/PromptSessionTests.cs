@@ -29,7 +29,7 @@ public sealed class PromptSessionTests
         engine.Setup(mock => mock.Plain(It.IsAny<PromptInput>())).Returns((PromptInput turn) => turn.Text);
         libraryTools.SetupGet(mock => mock.ShellName).Returns("shell");
         libraryTools.OfferTheEverydayTools();
-        libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>())).Returns(() => Tool("shell"));
+        libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>(), It.IsAny<IPromptTasks>())).Returns(() => Tool("shell"));
         libraryTools.Setup(mock => mock.Create(It.IsAny<IStore>())).Returns([]);
         toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(() => Server().Object);
         provider.Setup(mock => mock.Select(It.IsAny<PromptCapability>(), It.IsAny<PromptEffort>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
@@ -895,7 +895,7 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        libraryTools.Verify(mock => mock.CreateShell(folder.Path), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(folder.Path, It.IsAny<IPromptTasks>()), Times.Once);
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasShell() && start.ShellInWorkspace())), Times.Once);
     }
 
@@ -914,8 +914,8 @@ public sealed class PromptSessionTests
         await session.Move(second.Path);
         await session.Messages("two");
 
-        libraryTools.Verify(mock => mock.CreateShell(first.Path), Times.Once);
-        libraryTools.Verify(mock => mock.CreateShell(second.Path), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(first.Path, It.IsAny<IPromptTasks>()), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(second.Path, It.IsAny<IPromptTasks>()), Times.Once);
     }
 
     [Fact]
@@ -1068,7 +1068,7 @@ public sealed class PromptSessionTests
 
         Assert.False(session.Configuration.IsShellAllowed);
         Served();
-        libraryTools.Verify(mock => mock.CreateShell(It.IsAny<string>()), Times.Never);
+        libraryTools.Verify(mock => mock.CreateShell(It.IsAny<string>(), It.IsAny<IPromptTasks>()), Times.Never);
     }
 
     [Fact]
@@ -1087,7 +1087,7 @@ public sealed class PromptSessionTests
         await session.Messages("two");
 
         Served("read_file", "shell", "mine");
-        libraryTools.Verify(mock => mock.CreateShell(record.WorkingFolder), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(record.WorkingFolder, It.IsAny<IPromptTasks>()), Times.Once);
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasShell())), Times.Exactly(2));
         Assert.Equal(["mine"], session.Transient.Tools.Select(tool => tool.Name));
         Assert.True(session.Configuration.IsShellAllowed);
@@ -1248,6 +1248,40 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
+    public async Task TheTaskTools_AreOfferedWithTheDelegationAndTheShellAndGetTheBackgroundTasksOfTheSession()
+    {
+        PromptTool[] made = [Tool("task_wait"), Tool("task_output"), Tool("task_stop")];
+        IPromptTasks? given = null;
+        libraryTools.Setup(mock => mock.CreateTasks(It.IsAny<IPromptTasks>())).Callback<IPromptTasks>(tasks => given = tasks).Returns(made);
+        PromptSession session = Session(Record());
+        Plain();
+
+        await session.Messages("one");
+
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).SequenceEqual(new[] { "current_time", "tool_search", "delegate", "task_wait", "task_output", "task_stop", "respond" }))), Times.Once);
+        libraryTools.Verify(mock => mock.CreateShell(It.IsAny<string>(), It.IsAny<IPromptTasks>()), Times.Never);
+        libraryTools.Verify(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), given!), Times.Once);
+        libraryTools.Verify(mock => mock.CreateTasks(given!), Times.Once);
+    }
+
+    [Fact]
+    public async Task TheShellAndTheDelegationShareOneSetOfBackgroundTasks()
+    {
+        List<IPromptTasks> seen = [];
+        libraryTools.Setup(mock => mock.CreateShell(It.IsAny<string>(), It.IsAny<IPromptTasks>())).Callback<string, IPromptTasks>((_, tasks) => seen.Add(tasks)).Returns(() => Tool("shell"));
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Callback<Func<string, bool, CancellationToken, Task<string>>, IPromptTasks>((_, tasks) => seen.Add(tasks)).Returns(() => Tool("delegate"));
+        libraryTools.Setup(mock => mock.CreateTasks(It.IsAny<IPromptTasks>())).Callback<IPromptTasks>(tasks => seen.Add(tasks)).Returns([Tool("task_wait")]);
+        PromptSession session = Session(Record());
+        session.Configuration.IsShellAllowed = true;
+        Plain();
+
+        await session.Messages("one");
+
+        Assert.Equal(3, seen.Count);
+        Assert.Single(seen.Distinct());
+    }
+
+    [Fact]
     public async Task ImageGeneration_OffersTheImageToolWhileTheSessionAllowsItAndTheEnvironmentHasASetup()
     {
         FakeImageGenerator generator = new();
@@ -1388,7 +1422,7 @@ public sealed class PromptSessionTests
     public async Task Delegate_RunsTheTaskInAFreshHelperOfTheSameModelAndWorkspaceAndReturnsItsAnswer()
     {
         Func<string, bool, CancellationToken, Task<string>>? run = null;
-        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Callback<Func<string, bool, CancellationToken, Task<string>>, IPromptTasks>((given, _) => run = given).Returns(() => Tool("delegate"));
         List<PromptInput> turns = Turns();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());
@@ -1414,7 +1448,7 @@ public sealed class PromptSessionTests
     public async Task Delegate_GivesTheHelperNoDelegationOfItsOwn()
     {
         Func<string, bool, CancellationToken, Task<string>>? run = null;
-        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Callback<Func<string, bool, CancellationToken, Task<string>>, IPromptTasks>((given, _) => run = given).Returns(() => Tool("delegate"));
         Plain();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());
@@ -1431,7 +1465,7 @@ public sealed class PromptSessionTests
     public async Task Delegate_WithTheContextShared_RunsTheTaskInAForkOfTheConversationThatIsThrownAway()
     {
         Func<string, bool, CancellationToken, Task<string>>? run = null;
-        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Callback<Func<string, bool, CancellationToken, Task<string>>, IPromptTasks>((given, _) => run = given).Returns(() => Tool("delegate"));
         List<PromptInput> turns = Turns();
         PromptSession session = Session(Record());
         PromptSession fork = Session(Record());
@@ -1453,7 +1487,7 @@ public sealed class PromptSessionTests
     public async Task Delegate_WhenTheHelperFails_FailsTheCallWithItsReasonAndStillRemovesTheHelper()
     {
         Func<string, bool, CancellationToken, Task<string>>? run = null;
-        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>())).Callback<Func<string, bool, CancellationToken, Task<string>>>(given => run = given).Returns(() => Tool("delegate"));
+        libraryTools.Setup(mock => mock.CreateDelegate(It.IsAny<Func<string, bool, CancellationToken, Task<string>>>(), It.IsAny<IPromptTasks>())).Callback<Func<string, bool, CancellationToken, Task<string>>, IPromptTasks>((given, _) => run = given).Returns(() => Tool("delegate"));
         Plain();
         PromptSession session = Session(Record());
         PromptSession helper = Session(Record());

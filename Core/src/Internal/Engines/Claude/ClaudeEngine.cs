@@ -668,6 +668,7 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
             if (server.BearerTokenVariable is { } variable && server.BearerToken is { } token)
             {
                 start.Environment[variable] = token;
+                start.Environment["MCP_TOOL_TIMEOUT"] = "3700000";
             }
         }
 

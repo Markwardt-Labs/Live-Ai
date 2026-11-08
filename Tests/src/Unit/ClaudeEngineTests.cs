@@ -359,6 +359,8 @@ public sealed class ClaudeEngineTests
 
         Assert.Equal("secret-token", once.Environment["LIVEAI_TOOLS_TOKEN"]);
         Assert.Equal("secret-token", persistent.Environment["LIVEAI_TOOLS_TOKEN"]);
+        Assert.Equal("3700000", once.Environment["MCP_TOOL_TIMEOUT"]);
+        Assert.Equal("3700000", persistent.Environment["MCP_TOOL_TIMEOUT"]);
         Assert.DoesNotContain(once.ArgumentList, argument => argument.Contains("secret-token"));
         Assert.Contains("--mcp-config", persistent.ArgumentList);
     }

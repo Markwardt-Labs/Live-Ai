@@ -100,7 +100,7 @@ public sealed class PromptEverydayToolTests
         {
             asked.Add((task, share));
             return Task.FromResult("found it");
-        });
+        }, new PromptTasks());
 
         string plain = await Run(tool, """{"task":"  look into x  "}""");
         string shared = await Run(tool, """{"task":"look into y","share_context":true}""");
@@ -113,7 +113,7 @@ public sealed class PromptEverydayToolTests
     [Fact]
     public async Task Delegate_RefusesAnEmptyTask()
     {
-        PromptTool tool = new PromptLibraryTools().CreateDelegate((_, _, _) => Task.FromResult("never"));
+        PromptTool tool = new PromptLibraryTools().CreateDelegate((_, _, _) => Task.FromResult("never"), new PromptTasks());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => Run(tool, """{"task":" "}"""));
     }
