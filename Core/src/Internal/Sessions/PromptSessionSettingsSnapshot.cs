@@ -46,6 +46,11 @@ internal sealed record PromptSessionSettingsSnapshot
     public string? Instructions { get; init; }
 
     /// <summary>
+    /// Gets how the session storage and the cache behave.
+    /// </summary>
+    public required PromptStorageSettings Storage { get; init; }
+
+    /// <summary>
     /// Gets the external MCP servers by name.
     /// </summary>
     public required IReadOnlyDictionary<string, PromptMcpServer> McpServers { get; init; }
@@ -67,6 +72,7 @@ internal sealed record PromptSessionSettingsSnapshot
         target.IsSystemAccessAllowed = IsSystemAccessAllowed;
         target.IsWebAllowed = IsWebAllowed;
         target.Instructions = Instructions;
+        target.Storage = Storage;
         target.IsImageGenerationAllowed = IsImageGenerationAllowed;
         target.Asker = Asker;
         target.McpServers.Clear();

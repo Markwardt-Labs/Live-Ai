@@ -21,7 +21,7 @@ public interface IPromptSessionConfiguration
     bool IsShellAllowed { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the AI's file tools can use any path on this machine and not only the ones inside the workspace, <see langword="false" /> by default. While it is <see langword="false" /> a path that leads outside, absolute or relative and also through a link, is refused; when it is <see langword="true" /> the workspace is only where relative paths start. The workspace is <see cref="IPromptSession.WorkspacePath" />, and the cache (<c>CACHE:</c>) refuses paths that leave it either way. It applies to every tool that reads or writes files, <c>view_image</c> included, and not to the shell, which is not confined by anything. It is stored with the session.
+    /// Gets or sets a value indicating whether the AI's file tools can use any path on this machine and not only the ones inside the workspace, <see langword="false" /> by default. While it is <see langword="false" /> a path that leads outside, absolute or relative and also through a link, is refused; when it is <see langword="true" /> the workspace is only where relative paths start. The workspace is <see cref="IPromptSession.WorkspacePath" />, and the cache (<c>.liveai-session</c>) refuses paths that leave it either way. It applies to every tool that reads or writes files, <c>view_image</c> included, and not to the shell, which is not confined by anything. It is stored with the session.
     /// </summary>
     bool IsSystemAccessAllowed { get; set; }
 
@@ -39,4 +39,10 @@ public interface IPromptSessionConfiguration
     /// Gets or sets custom instructions for the AI, added to the library's own guidance for every prompt of the session, or <see langword="null" /> for none; blank instructions mean none. They can be changed at any time and the next prompt follows the current ones: Claude Code renders its system prompt again when it resumes, and for Codex, which keeps the instructions a conversation started with, the library adds the new ones to the conversation as a developer message with the next prompt.
     /// </summary>
     string? Instructions { get; set; }
+
+    /// <summary>
+    /// Gets or sets how the session storage and the cache behave: how much they hold in memory before using files, the largest single file, and how long unused files are kept (see <see cref="PromptStorageSettings" />). It starts as <see cref="PromptEnvironment.Storage" />, is stored with the session, and is read when a prompt starts.
+    /// </summary>
+    /// <exception cref="ArgumentException">Assigning a value: a limit is not allowed.</exception>
+    PromptStorageSettings Storage { get; set; }
 }

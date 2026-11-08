@@ -25,6 +25,8 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
 
     private bool isImageGenerationAllowed;
 
+    private PromptStorageSettings storage;
+
     private PromptAsker? asker;
 
     private string? instructions;
@@ -46,6 +48,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
         isWebAllowed = record.IsWebAllowed;
         isImageGenerationAllowed = record.IsImageGenerationAllowed;
         instructions = record.Instructions;
+        storage = record.Storage;
         Tools = new GuardedList<PromptTool>(gate, CheckTool, Begin, Notify);
         McpServers = new GuardedDictionary<PromptMcpServer>(gate, CheckServer, Begin, Notify, record.McpServers);
     }
@@ -156,6 +159,25 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
     }
 
     /// <inheritdoc />
+    public PromptStorageSettings Storage
+    {
+        get
+        {
+            lock (gate)
+            {
+                return storage;
+            }
+        }
+
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            value.Check();
+            Set(() => storage = value);
+        }
+    }
+
+    /// <inheritdoc />
     public PromptAsker? Asker
     {
         get
@@ -215,6 +237,7 @@ internal sealed class PromptSessionSettings : IPromptSessionConfiguration, IProm
                 IsImageGenerationAllowed = isImageGenerationAllowed,
                 Asker = asker,
                 Instructions = instructions,
+                Storage = storage,
                 McpServers = McpServers.Copy(),
                 Tools = Tools.Copy()
             };

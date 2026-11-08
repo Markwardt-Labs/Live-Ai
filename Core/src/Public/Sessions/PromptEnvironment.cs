@@ -86,6 +86,11 @@ public sealed record PromptEnvironment
     public string? Instructions { get; init; }
 
     /// <summary>
+    /// Gets the value <see cref="IPromptSessionConfiguration.Storage" /> has in a session that is created: how much its session storage and cache hold in memory, the largest single file, and how long unused files are kept. The defaults are sensible for most uses.
+    /// </summary>
+    public PromptStorageSettings Storage { get; init; } = new();
+
+    /// <summary>
     /// Describes the members for <see cref="object.ToString" />, with the API keys hidden, so they do not end up in a log or a failure message.
     /// </summary>
     /// <param name="builder">Receives the text.</param>
@@ -108,6 +113,7 @@ public sealed record PromptEnvironment
         builder.Append(", IsWebAllowed = ").Append(IsWebAllowed);
         builder.Append(", IsImageGenerationAllowed = ").Append(IsImageGenerationAllowed);
         builder.Append(", Instructions = ").Append(Instructions);
+        builder.Append(", Storage = ").Append(Storage);
         return true;
     }
 }

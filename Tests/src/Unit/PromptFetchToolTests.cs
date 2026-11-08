@@ -38,6 +38,25 @@ public sealed class PromptFetchToolTests
     }
 
     [Fact]
+    public async Task Run_WithRaw_ReturnsHtmlWithItsMarkup()
+    {
+        answer = _ => Page("text/html", "<h1>Hello</h1>");
+
+        Assert.Equal("<h1>Hello</h1>", await Run("""{"url":"https://example.com/page","raw":true}"""));
+        Assert.Equal("Hello", (await Run("""{"url":"https://example.com/page","raw":false}""")).Trim());
+    }
+
+    [Fact]
+    public async Task Run_OfBinaryContent_PointsAtTheDownloadTool()
+    {
+        answer = _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1]) { Headers = { ContentType = new MediaTypeHeaderValue("image/png") } } };
+
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => Run("""{"url":"https://example.com/a.png"}"""));
+
+        Assert.Contains("download_url", failure.Message);
+    }
+
+    [Fact]
     public async Task Run_ReadsTextInTheCharsetTheServerNamesAndFallsBackToUtf8ForOneItDoesNotKnow()
     {
         answer = request => request.RequestUri!.AbsolutePath == "/latin"
@@ -101,7 +120,7 @@ public sealed class PromptFetchToolTests
 
         string text = await Run("""{"url":"http://example.com/long","max_chars":100}""");
 
-        Assert.Equal(new string('x', 100) + "\n[cut after 100 characters]", text);
+        Assert.StartsWith(new string('x', 100) + "\n[cut after 100 characters; use download_url", text);
     }
 
     [Theory]

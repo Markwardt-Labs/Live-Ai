@@ -38,7 +38,7 @@ public sealed class PromptImageToolTests
         string description = Tool().Description;
 
         Assert.Contains("same paths as the file tools", description, StringComparison.Ordinal);
-        Assert.Contains("CACHE:", description, StringComparison.Ordinal);
+        Assert.Contains(".liveai-session", description, StringComparison.Ordinal);
     }
 
     [Theory]

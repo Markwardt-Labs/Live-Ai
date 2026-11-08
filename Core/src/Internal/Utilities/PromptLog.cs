@@ -53,6 +53,13 @@ internal interface IPromptLog
     /// <param name="sessionId">The identifier of the session.</param>
     /// <param name="what">What was changed.</param>
     void ModelChanged(string sessionId, string what);
+
+    /// <summary>
+    /// Reports a problem with the storage of a session, such as files that could not be moved to disk.
+    /// </summary>
+    /// <param name="sessionId">The identifier of the session.</param>
+    /// <param name="what">What went wrong.</param>
+    void StorageProblem(string sessionId, string what);
 }
 
 /// <inheritdoc />
@@ -94,4 +101,8 @@ internal sealed partial class PromptLog : IPromptLog
     /// <inheritdoc />
     [LoggerMessage(EventId = 9, Level = LogLevel.Information, Message = "Session {SessionId}: {What}.")]
     public partial void ModelChanged(string sessionId, string what);
+
+    /// <inheritdoc />
+    [LoggerMessage(EventId = 10, Level = LogLevel.Warning, Message = "Session {SessionId}: {What}")]
+    public partial void StorageProblem(string sessionId, string what);
 }

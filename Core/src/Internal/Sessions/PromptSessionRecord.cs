@@ -46,6 +46,11 @@ internal sealed record PromptSessionRecord
     public string? Instructions { get; init; }
 
     /// <summary>
+    /// Gets how the session storage and the cache of the session behave, which is stored.
+    /// </summary>
+    public PromptStorageSettings Storage { get; init; } = new();
+
+    /// <summary>
     /// Gets the setup the session was created with, which is stored.
     /// </summary>
     public PromptSetup? Setup { get; init; }
@@ -134,7 +139,7 @@ internal sealed record PromptSessionRecord
     /// </summary>
     /// <returns>The link.</returns>
     public PromptSessionLink ToLink()
-        => new() { Id = Id, LastLoaded = LastLoaded, Provider = Engine.Provider, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSystemAccessAllowed = IsSystemAccessAllowed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Setup = Setup, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, IsImageGenerationAllowed = IsImageGenerationAllowed };
+        => new() { Id = Id, LastLoaded = LastLoaded, Provider = Engine.Provider, WorkingFolder = WorkingFolder, WorkspacePath = WorkspacePath, IsSystemAccessAllowed = IsSystemAccessAllowed, AiSessionId = AiSessionId, ForkedFrom = ForkedFrom, ForkedAt = ForkedAt, Setup = Setup, Capability = Capability, Effort = Effort, IsShellAllowed = IsShellAllowed, IsWebAllowed = IsWebAllowed, Instructions = Instructions, Storage = Storage, IsImageGenerationAllowed = IsImageGenerationAllowed };
 
     /// <inheritdoc />
     public bool Equals(PromptSessionRecord? other)

@@ -219,7 +219,6 @@ public sealed class ForkSessionTests : IDisposable
         Assert.Equal("Be brief.", fork.Configuration.Instructions);
         Assert.Equal(origin.Transient.McpServers["db"], fork.Transient.McpServers["db"]);
         Assert.Equal([tool], fork.Transient.Tools);
-        Assert.NotSame(origin.Cache, fork.Cache);
         Assert.Equal(temp.Combine($"data/Workspaces/{fork.Id}"), fork.WorkspacePath);
         Assert.True(Directory.Exists(fork.WorkspacePath));
         Assert.NotEqual(origin.WorkspacePath, fork.WorkspacePath);

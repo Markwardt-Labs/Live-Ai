@@ -135,7 +135,7 @@ internal sealed class PromptToolService : IPromptToolService
 
         if (options?.Environment is { } environment)
         {
-            link = link with { Capability = environment.Capability, Effort = environment.Effort, IsShellAllowed = environment.IsShellAllowed, IsSystemAccessAllowed = environment.IsSystemAccessAllowed, IsWebAllowed = environment.IsWebAllowed, IsImageGenerationAllowed = environment.IsImageGenerationAllowed, Instructions = environment.Instructions };
+            link = link with { Capability = environment.Capability, Effort = environment.Effort, IsShellAllowed = environment.IsShellAllowed, IsSystemAccessAllowed = environment.IsSystemAccessAllowed, IsWebAllowed = environment.IsWebAllowed, IsImageGenerationAllowed = environment.IsImageGenerationAllowed, Instructions = environment.Instructions, Storage = environment.Storage };
         }
 
         try

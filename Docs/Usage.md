@@ -12,7 +12,7 @@ IPromptSession session = await prompter.Create(new ClaudeSetup { WorkspacePath =
 Console.WriteLine(await session.Request("Summarize what is in this folder."));
 ```
 
-The setup names the tool and carries only what that tool needs. The model is chosen for the session by the library from how capable and how hard-working it should be (see below), on the subscription already configured in `claude`. The AI can reach only the workspace (the folder given as `WorkspacePath`) and the cache of the session (temporary storage, see below); without one the library makes a workspace folder for the session in its data folder, which is kept until the session is deleted or moved elsewhere.
+The setup names the tool and carries only what that tool needs. The model is chosen for the session by the library from how capable and how hard-working it should be (see below), on the subscription already configured in `claude`. The AI can reach only the workspace (the folder given as `WorkspacePath`) and the session storage and cache (see below); without one the library makes a workspace folder for the session in its data folder, which is kept until the session is deleted or moved elsewhere.
 
 ## Reading the answer as it is written
 
@@ -51,7 +51,7 @@ await session.Request("Add a unit test for the parser and make it pass.");
 
 The configuration a new session starts with is set once for the prompter, on its environment: `prompter.Environment = prompter.Environment with { Capability = PromptCapability.Strong, Effort = PromptEffort.High }`. `PromptEnvironment` has `Capability`, `Effort`, `IsShellAllowed`, `IsSystemAccessAllowed`, `IsWebAllowed`, `IsImageGenerationAllowed` and `Instructions`, with the same defaults as a session has without it (`Balanced`, `High`, no shell, no system access, no web, no image generation, no instructions). The values are copied into a session when it is created, so after that its configuration holds them, and a loaded session has the ones it was left with, whatever the environment says now. The tools, MCP servers and asker are not part of this: they belong to the session object and are set on each one.
 
-The AI never asks for permission and may create, edit and delete in its workspace and the cache, so point it only at a folder it may change. A relative path the AI uses is relative to the workspace, like in a shell. Which model runs is the library's business, see "How a model is chosen".
+The AI never asks for permission and may create, edit and delete in its workspace, its session storage and its cache, so point it only at a folder it may change. A relative path the AI uses is relative to the workspace, like in a shell. Which model runs is the library's business, see "How a model is chosen".
 
 ## A session with an API key
 
@@ -104,7 +104,7 @@ An object as the input writes the prompt as JSON, and that is the whole prompt, 
 ## Working on files
 
 ```csharp
-// The AI reads and edits only the workspace and the cache, only through the library's file tools, with no shell (see the shell example).
+// The AI reads and edits only the workspace, the session storage and the cache, only through the library's file tools, with no shell (see the shell example).
 await using IPromptSession project = await prompter.Create(new ClaudeSetup { WorkspacePath = "/path/to/project" });
 Console.WriteLine(project.WorkspacePath);
 
@@ -131,14 +131,14 @@ With `IsSystemAccessAllowed = true` (a stored setting, false by default, that ca
 
 ```csharp
 await using IPromptSession session = await prompter.Create(new ClaudeSetup());
-await session.Cache.WriteText("todo.md", "- write the report");
+await session.Workspace.WriteText($"{PromptStorageNames.Session}/todo.md", "- write the report");
 
-await session.Request("Add three items to CACHE:/todo.md and put a summary in CACHE:/summary.md.");
+await session.Request("Add three items to .liveai-session/todo.md and put a summary in .liveai-session/summary.md.");
 
-Console.WriteLine(await session.Cache.ReadText("summary.md"));
+Console.WriteLine(await session.Workspace.ReadText($"{PromptStorageNames.Session}/summary.md"));
 ```
 
-`session.Cache` is an in-memory `IStore` that belongs to the session object: it starts empty, nothing in it is stored, and it is lost when the session is disposed. The AI reaches it with paths that start with `CACHE:` (`CACHE:/folder/file.txt`), next to the workspace, and can copy and move between the two. It is where to put what the AI should read (a document from a database, a file too large for a prompt) and where to find what it makes (a summary, generated images) without touching the disk. A helper the AI starts with `delegate` shares the cache, and a branch gets an empty one of its own.
+`session.Workspace` is an `IStore` with the paths the AI's file tools use: the workspace for relative paths, and two storage folders next to it, named by `PromptStorageNames`. `.liveai-session` belongs to the session object: it starts empty, nothing in it is stored, and it is lost when the session is disposed. `.liveai-cache` is the same, and a file in it that was not read or written for `Storage.Retention` (30 minutes by default) is removed; it is where what the AI downloads goes. Both are kept in memory up to `Storage.MemoryLimit` (32 MiB for both together by default) and the rest moves to files in the background, with `Storage.FileLimit` (256 MiB) as the largest single file and no limit on the total, so a large file does not fill memory. They are where to put what the AI should read (a document from a database, a file too large for a prompt) and where to find what it makes (a summary, generated images) without touching the workspace. The workspace can have a third place, the real folder `.liveai-temp`, which the shell reaches and the AI is told to use for data that only commands need; it is removed when not used for the retention and when the session ends. `session.Configuration.Storage` (starting from `PromptEnvironment.Storage`) sets the three limits. A helper the AI starts with `delegate` shares all of it, and a branch gets a session storage and cache of its own.
 
 ## Giving the AI tools
 
@@ -190,7 +190,7 @@ session.Configuration.IsWebAllowed = true;
 await session.Request("Look at docs/design.png, then read https://example.com/spec and say what differs.");
 ```
 
-Every session has a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB). It reaches what the file tools reach: the cache through `CACHE:` always, and the workspace only when the session has a workspace path, inside it unless the session allows system access. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered while the selected model takes images and the engine can be shown images. `IsWebAllowed`, off by default, is described below.
+Every session has a `view_image` tool for a PNG, JPEG, GIF or WebP file (up to 5 MB). It reaches what the file tools reach: the session storage and the cache always, and the workspace only when the session has a workspace path, inside it unless the session allows system access. A tool can only answer in text, so the image is handed to the AI as an input of its own with the image attached, steered into the turn it is working on, or sent after it when none is running. It is offered while the selected model takes images and the engine can be shown images. `IsWebAllowed`, off by default, is described below.
 
 ## The web and the tools every session has
 
@@ -200,9 +200,9 @@ session.Configuration.IsWebAllowed = true;
 await session.Request("Find out what changed in the latest stable .NET release and compare notes.md with notes-old.md.");
 ```
 
-`IsWebAllowed` gives the AI the web with no restriction, as this machine with its network access, so addresses on the local network and on this machine are reachable too. It has two parts, with no key and no other software. A `fetch_url` tool reads text from an http or https address (HTML reduced to readable text, binary content refused, cut at 40000 characters unless the AI asks for up to 200000). For searching, when the tool has a web search of its own (Claude Code and Codex do) the AI is simply allowed to use it, and the library does not see what it searches; otherwise (OpenCode) the AI is given a `search_web` tool that reads DuckDuckGo's plain HTML page. That page is not an API, so the tool is best effort: it can change or turn the library away. The library spaces its requests at least two seconds apart, and when DuckDuckGo turns a search away it pauses searching for a minute and tells the AI so. The web is off by default, and changing the switch ends a kept process of an engine that is told about it when it starts.
+`IsWebAllowed` gives the AI the web with no restriction, as this machine with its network access, so addresses on the local network and on this machine are reachable too. It has two parts, with no key and no other software. A `fetch_url` tool reads text from an http or https address (HTML reduced to readable text unless it asks for `raw`, binary content refused, cut at 40000 characters unless the AI asks for up to 200000; a refusal or a cut names `download_url`). A `download_url` tool saves a file of any kind from an address into a store without it passing through the conversation, by default in `.liveai-cache/downloads` under the name in the address with a number added before it would replace anything, and never replaces a file; a file larger than `Storage.FileLimit` is refused and nothing is kept. For searching, when the tool has a web search of its own (Claude Code and Codex do) the AI is simply allowed to use it, and the library does not see what it searches; otherwise (OpenCode) the AI is given a `search_web` tool that reads DuckDuckGo's plain HTML page. That page is not an API, so the tool is best effort: it can change or turn the library away. The library spaces its requests at least two seconds apart, and when DuckDuckGo turns a search away it pauses searching for a minute and tells the AI so. The web is off by default, and changing the switch ends a kept process of an engine that is told about it when it starts.
 
-Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace or the cache) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, cache and settings, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
+Four more tools are offered to every session, with no switch: `current_time` (the date and time in UTC and the local zone, or any zone the AI names, since a model cannot know it), `tool_search` (finds a tool by words and gives its description and input schema, over the library's own tools and yours, not those of external MCP servers), `diff_files` (a unified diff of two text files of the workspace, the session storage or the cache) and `delegate`. `delegate` hands a self-contained task to a helper AI of the same model with the same tools, workspace, cache and settings, and returns its answer, so that the details stay out of the AI's own conversation; with `share_context` the helper continues a fork of the conversation as it stood after the last finished request, and is told the request being worked on now (a tool's session id only becomes known when a request ends, so the fork cannot hold the request in flight), instead of knowing nothing. A helper cannot delegate in turn, at most three run at once, its usage is added to the session's, and it is removed when it is done. Their names are taken, so your own tools cannot use them.
 
 Both `shell` and `delegate` take `background`: the call then returns a task identifier at once and the command or helper keeps running, so the AI can do other things and write status updates meanwhile. Three tools follow such tasks and are offered whenever the shell or the delegation is: `task_wait` (waits until a task ends or a timeout, default 60 seconds, passes, and reports ended tasks with their results and running ones with their latest output), `task_output` and `task_stop`. Tasks are stopped when the session ends or its work is interrupted, and at most 16 run at once.
 
@@ -328,7 +328,7 @@ await session.Request("Implement it with an in-memory dictionary.");
 await alternative.Request("Implement it with a file cache.");
 ```
 
-The branch starts with everything the session has said and done and then goes its own way; each is resumable with its own `Id`. It has the same configuration, tools and workspace, and an empty cache of its own, so give the branch a folder of its own with `Move` if both write to it.
+The branch starts with everything the session has said and done and then goes its own way; each is resumable with its own `Id`. It has the same configuration, tools and workspace, and an empty session storage and cache of its own, so give the branch a folder of its own with `Move` if both write to it.
 
 ## Going back to an earlier point
 

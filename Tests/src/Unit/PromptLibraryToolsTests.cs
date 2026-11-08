@@ -319,8 +319,9 @@ public sealed class PromptLibraryToolsTests
 
         string listing = tools.Single(tool => tool.Name == "list_directory").Description;
         Assert.Contains("relative to the workspace", listing);
-        Assert.Contains("except that one starting with CACHE: is in the cache", listing);
-        Assert.Contains("list the workspace and CACHE:", listing);
+        Assert.Contains("except that one starting with .liveai-session is in storage that is lost when the session ends", listing);
+        Assert.Contains("one starting with .liveai-cache is in the same kind of storage", listing);
+        Assert.Contains("list the workspace, .liveai-session and .liveai-cache", listing);
         Assert.DoesNotContain("Every path starts with", listing);
         Assert.Contains("relative to the workspace", tools.Single(tool => tool.Name == "move_file").Description);
     }

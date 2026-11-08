@@ -57,6 +57,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private PromptTool? fetchTool;
 
+    private PromptTool? downloadTool;
+
     private PromptTool? searchTool;
 
     private PromptTool? generateTool;
@@ -93,9 +95,15 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private DiskStore workspaceStore;
 
-    private IStore cache = new MemoryStore();
+    private IStoragePool pool;
 
-    private bool ownsCache = true;
+    private IStore sessionStore;
+
+    private IStore cacheStore;
+
+    private IWorkspaceTemp? workspaceTemp;
+
+    private bool ownsPool = true;
 
     private PromptTool[]? fileTools;
 
@@ -171,7 +179,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         persisted = record;
         log = new PromptLog(logger);
         Time = time ?? TimeProvider.System;
-        tasks = new PromptTasks(Time);
+        tasks = new PromptTasks(Time, BeginCommand);
         this.apiKey = apiKey;
         this.store = store;
         this.service = service;
@@ -185,6 +193,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         settings.Changed += OnSettingsChanged;
         workspaceStore = new DiskStore(Path.GetFullPath(record.WorkingFolder), !record.IsSystemAccessAllowed);
         descriptors = Describe(record);
+        pool = new StoragePool(Time, record.Storage, store.GetStorageFolder(record.Id), message => log.StorageProblem(Id, message));
+        sessionStore = pool.Create("session", false);
+        cacheStore = pool.Create("cache", true);
+        Workspace = new CurrentStore(() => Files);
     }
 
     /// <inheritdoc />
@@ -203,19 +215,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
-    public IStore Cache
-    {
-        get
-        {
-            lock (gate)
-            {
-                return cache;
-            }
-        }
-    }
+    public IStore Workspace { get; }
 
     /// <summary>
-    /// Gets the store the AI's file tools work on: the workspace, if there is one, with the cache at its place in the top level.
+    /// Gets the store the AI's file tools work on: the workspace, if there is one, with the session storage and the cache at their places in the top level.
     /// </summary>
     internal IStore Files
     {
@@ -224,7 +227,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             lock (gate)
             {
                 SyncWorkspace(!settings.IsSystemAccessAllowed);
-                return new MountedStore(workspaceStore, new Dictionary<string, IStore> { [libraryTools.CacheName] = cache });
+                return new MountedStore(new WorkspaceTempStore(workspaceStore, WorkspaceTempOf()), new Dictionary<string, IStore> { [libraryTools.SessionName] = sessionStore, [libraryTools.CacheName] = cacheStore });
             }
         }
     }
@@ -1084,17 +1087,27 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <summary>
-    /// Makes this session the helper of another, which cannot hand tasks on and works in the cache of the other.
+    /// Makes this session the helper of another, which cannot hand tasks on and works in the session storage, the cache and the temporary folder of the other.
     /// </summary>
-    /// <param name="shared">The cache of the session the helper works for, which the helper does not clear when it ends.</param>
-    internal void BecomeHelper(IStore shared)
+    /// <param name="sharedSession">The session storage of the session the helper works for, which the helper does not clear when it ends.</param>
+    /// <param name="sharedCache">The cache of that session.</param>
+    /// <param name="sharedWorkspaceTemp">The temporary folder in the workspace of that session.</param>
+    /// <returns>A task that completes when the helper is set up.</returns>
+    internal async Task BecomeHelper(IStore sharedSession, IStore sharedCache, IWorkspaceTemp sharedWorkspaceTemp)
     {
+        IStoragePool unused;
+
         lock (gate)
         {
             isHelper = true;
-            cache = shared;
-            ownsCache = false;
+            sessionStore = sharedSession;
+            cacheStore = sharedCache;
+            workspaceTemp = sharedWorkspaceTemp;
+            ownsPool = false;
+            unused = pool;
         }
+
+        await unused.DisposeAsync();
     }
 
     private async Task<string> Delegate(string task, bool shareContext, CancellationToken cancellation)
@@ -1132,7 +1145,18 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 }
             }
 
-            helper.BecomeHelper(Cache);
+            IStore sharedSession;
+            IStore sharedCache;
+            IWorkspaceTemp shared;
+
+            lock (gate)
+            {
+                sharedSession = sessionStore;
+                sharedCache = cacheStore;
+                shared = WorkspaceTempOf();
+            }
+
+            await helper.BecomeHelper(sharedSession, sharedCache, shared);
             string asked;
 
             lock (gate)
@@ -1595,6 +1619,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         DiskStore workspace;
         PromptTool? images;
         PromptTool? fetch;
+        PromptTool? download;
+        bool usableTemp;
         PromptTool? search;
         PromptTool? generate;
         PromptTool? delegation;
@@ -1604,6 +1630,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             SyncWorkspace(!snapshot.IsSystemAccessAllowed);
             workspace = workspaceStore;
             hasShell = snapshot.IsShellAllowed;
+
+            if (ownsPool && pool.Settings != snapshot.Storage)
+            {
+                pool.Settings = snapshot.Storage;
+            }
+
             IStore everything = Files;
 
             if (hasShell)
@@ -1621,6 +1653,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             {
                 fileTools = null;
                 imageTool = null;
+                downloadTool = null;
                 generateTool = null;
                 fileToolWorkspace = workspace;
             }
@@ -1628,6 +1661,8 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             PromptTool[] files = fileTools ??= libraryTools.Create(everything).ToArray();
             images = current.Model?.AcceptsImages != false && engine.Accepts("image/png") ? imageTool ??= libraryTools.CreateImage(everything, GiveImage) : null;
             fetch = snapshot.IsWebAllowed ? fetchTool ??= libraryTools.CreateFetch() : null;
+            download = snapshot.IsWebAllowed ? downloadTool ??= libraryTools.CreateDownload(everything, () => settings.Storage.FileLimit) : null;
+            usableTemp = WorkspaceTempOf().IsUsable;
             PromptImageSetup? imageSetup = snapshot.IsImageGenerationAllowed ? imageSetups() : null;
 
             if (generateWith != imageSetup)
@@ -1643,7 +1678,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             toolSearchTool ??= libraryTools.CreateToolSearch(() => servedTools);
             delegation = isHelper ? null : delegateTool ??= libraryTools.CreateDelegate(Delegate, tasks);
             PromptTool[] following = hasShell || delegation is not null ? taskTools ??= libraryTools.CreateTasks(tasks) : [];
-            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(search is null ? [] : [search]).Concat(generate is null ? [] : [generate]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(following).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
+            exposed = files.Concat(hasShell ? [shellTool!] : []).Concat(images is null ? [] : [images]).Concat(fetch is null ? [] : [fetch]).Concat(download is null ? [] : [download]).Concat(search is null ? [] : [search]).Concat(generate is null ? [] : [generate]).Concat([timeTool, toolSearchTool]).Concat(delegation is null ? [] : [delegation]).Concat(following).Concat(snapshot.Tools).Concat(snapshot.Asker is null ? [] : [AskTool()]).Append(RespondTool()).ToArray();
 
             if (exposed.GroupBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1) is { } clash)
             {
@@ -1661,7 +1696,16 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             log.ToolServerStarted(Id, exposed.Length);
         }
 
-        return toolServer.Endpoint with { HasShell = hasShell, CacheName = libraryTools.CacheName };
+        return toolServer.Endpoint with
+        {
+            HasShell = hasShell,
+            SessionName = libraryTools.SessionName,
+            CacheName = libraryTools.CacheName,
+            WorkspaceTempName = hasShell && usableTemp ? libraryTools.WorkspaceTempName : string.Empty,
+            DownloadName = download is not null ? libraryTools.DownloadName : string.Empty,
+            FileLimit = snapshot.Storage.FileLimit,
+            Retention = snapshot.Storage.Retention
+        };
     }
 
     private async Task StopTools()
@@ -1761,7 +1805,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             await Release(immediate);
             await tasks.DisposeAsync();
             await StopTools();
-            await ClearCache();
+            await ClosePool();
             await SaveConfiguration();
         }
         finally
@@ -1806,24 +1850,48 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         }
     }
 
-    private async Task ClearCache()
+    private async Task ClosePool()
     {
-        IStore owned;
+        IStoragePool owned;
+        IWorkspaceTemp? ownedTemp;
 
         lock (gate)
         {
-            if (!ownsCache)
+            if (!ownsPool)
             {
                 return;
             }
 
-            owned = cache;
+            owned = pool;
+            ownedTemp = workspaceTemp;
         }
 
-        foreach (StoreEntry entry in await owned.List(string.Empty).ToListAsync())
+        ownedTemp?.Dispose();
+        await owned.DisposeAsync();
+    }
+
+    private IDisposable BeginCommand()
+    {
+        lock (gate)
         {
-            await owned.Delete(entry.Path);
+            return WorkspaceTempOf().Command();
         }
+    }
+
+    private IWorkspaceTemp WorkspaceTempOf()
+    {
+        if (!ownsPool && workspaceTemp is not null)
+        {
+            return workspaceTemp;
+        }
+
+        if (workspaceTemp is null || workspaceTemp.Folder != Path.Combine(workspaceStore.Folder, libraryTools.WorkspaceTempName))
+        {
+            workspaceTemp?.Dispose();
+            workspaceTemp = new WorkspaceTemp(workspaceStore.Folder, libraryTools.WorkspaceTempName, current.Id.ToString("N"), pool);
+        }
+
+        return workspaceTemp;
     }
 
     private void OnSettingsChanged()
@@ -1841,7 +1909,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)
-        => record with { Capability = snapshot.Capability, Effort = snapshot.Effort, IsShellAllowed = snapshot.IsShellAllowed, IsSystemAccessAllowed = snapshot.IsSystemAccessAllowed, IsWebAllowed = snapshot.IsWebAllowed, IsImageGenerationAllowed = snapshot.IsImageGenerationAllowed, Instructions = snapshot.Instructions, NativeSearch = snapshot.IsWebAllowed && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
+        => record with { Capability = snapshot.Capability, Effort = snapshot.Effort, IsShellAllowed = snapshot.IsShellAllowed, IsSystemAccessAllowed = snapshot.IsSystemAccessAllowed, IsWebAllowed = snapshot.IsWebAllowed, IsImageGenerationAllowed = snapshot.IsImageGenerationAllowed, Instructions = snapshot.Instructions, Storage = snapshot.Storage, NativeSearch = snapshot.IsWebAllowed && engine.NativeSearch, McpServers = new Dictionary<string, PromptMcpServer>(snapshot.McpServers) };
 
     private void Update(Func<PromptSessionRecord, PromptSessionRecord> change)
     {

@@ -7,7 +7,7 @@ public sealed class PromptLibraryToolsExtensionsTests
         IPromptLibraryTools tools = new PromptLibraryTools();
 
         return typeof(IPromptLibraryTools).GetProperties()
-            .Where(property => property.Name.EndsWith("Name", StringComparison.Ordinal) && property.Name != nameof(IPromptLibraryTools.CacheName) && property.PropertyType == typeof(string))
+            .Where(property => property.Name.EndsWith("Name", StringComparison.Ordinal) && property.Name != nameof(IPromptLibraryTools.SessionName) && property.Name != nameof(IPromptLibraryTools.CacheName) && property.Name != nameof(IPromptLibraryTools.WorkspaceTempName) && property.PropertyType == typeof(string))
             .Select(property => (string)property.GetValue(tools)!)
             .Concat(tools.Names)
             .Concat(tools.TaskNames);

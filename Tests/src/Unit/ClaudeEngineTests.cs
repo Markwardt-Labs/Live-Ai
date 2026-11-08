@@ -335,7 +335,7 @@ public sealed class ClaudeEngineTests
         => tools.Guidance(Record());
 
     private ToolEndpoint Tools()
-        => new() { Url = "http://127.0.0.1:5555/mcp", Token = "secret-token", Names = ["alpha", "beta"], CacheName = "CACHE:" };
+        => new() { Url = "http://127.0.0.1:5555/mcp", Token = "secret-token", Names = ["alpha", "beta"], SessionName = ".liveai-session" };
 
     [Fact]
     public void CreateStart_WithTools_PassesAnMcpConfigAndAllowsTheTools()

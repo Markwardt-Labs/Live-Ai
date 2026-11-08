@@ -77,6 +77,11 @@ internal sealed record PromptSessionLink
     public string? Instructions { get; init; }
 
     /// <summary>
+    /// Gets how the session storage and the cache of the session behave.
+    /// </summary>
+    public PromptStorageSettings Storage { get; init; } = new();
+
+    /// <summary>
     /// Gets a value indicating whether the AI can make images with the image generation of the environment.
     /// </summary>
     public bool IsImageGenerationAllowed { get; init; }
@@ -108,6 +113,7 @@ internal sealed record PromptSessionLink
             IsShellAllowed = IsShellAllowed,
             IsWebAllowed = IsWebAllowed,
             Instructions = Instructions,
+            Storage = Storage,
             IsImageGenerationAllowed = IsImageGenerationAllowed,
             WorkingFolder = WorkingFolder,
             WorkspacePath = WorkspacePath,

@@ -48,7 +48,7 @@ public sealed class PromptSessionStoreTests : IDisposable
         await new PromptSessionStore(temp.Path).Save(link, CancellationToken.None);
 
         JsonElement written = JsonDocument.Parse(await File.ReadAllTextAsync(Directory.GetFiles(Path.Combine(temp.Path, "Sessions")).Single())).RootElement;
-        Assert.Equal(["version", "id", "lastLoaded", "provider", "workingFolder", "aiSessionId", "workspacePath", "isSystemAccessAllowed", "forkedFrom", "forkedAt", "options", "isShellAllowed", "isWebAllowed", "instructions", "isImageGenerationAllowed", "capability", "effort"], written.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(["version", "id", "lastLoaded", "provider", "workingFolder", "aiSessionId", "workspacePath", "isSystemAccessAllowed", "forkedFrom", "forkedAt", "options", "isShellAllowed", "isWebAllowed", "instructions", "storage", "isImageGenerationAllowed", "capability", "effort"], written.EnumerateObject().Select(property => property.Name));
         Assert.Equal("codex", written.GetProperty("provider").GetString());
     }
 

@@ -561,13 +561,16 @@ public sealed class FakePromptSessionTests
     public async Task TheCache_IsEmptyAtFirstOwnToEachSessionAndLostWhenTheSessionIsDisposed()
     {
         FakePromptSession session = Session().Reply("x");
-        await session.Cache.WriteText("a.txt", "kept");
+        await session.Workspace.WriteText(".liveai-session/a.txt", "kept");
+        await session.Workspace.WriteText(".liveai-cache/b.txt", "kept too");
 
         FakePromptSession fork = (FakePromptSession)await session.Fork();
 
-        Assert.Equal("kept", await session.Cache.ReadText("a.txt"));
-        Assert.Empty(await fork.Cache.List(string.Empty).ToListAsync());
+        Assert.Equal("kept", await session.Workspace.ReadText(".liveai-session/a.txt"));
+        Assert.Empty(await fork.Workspace.List(".liveai-session").ToListAsync());
+        Assert.Empty(await fork.Workspace.List(".liveai-cache").ToListAsync());
         await session.DisposeAsync();
-        Assert.Empty(await session.Cache.List(string.Empty).ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-session").ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-cache").ToListAsync());
     }
 }

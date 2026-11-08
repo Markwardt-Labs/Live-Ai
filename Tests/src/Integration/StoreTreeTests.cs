@@ -1,27 +1,49 @@
 namespace Markwardt.LiveAi.Tests.Integration;
 
-public sealed class StoreTreeTests : IDisposable
+public sealed class StoreTreeTests : IAsyncLifetime
 {
-    public static TheoryData<string, string> Pairs => new()
+    public static TheoryData<string> Kinds => [.. TestStorage.Kinds];
+
+    public static TheoryData<string, string> Pairs
     {
-        { "disk", "disk" },
-        { "disk", "memory" },
-        { "memory", "disk" },
-        { "memory", "memory" }
-    };
+        get
+        {
+            TheoryData<string, string> pairs = [];
+
+            foreach (string from in TestStorage.Kinds)
+            {
+                foreach (string to in TestStorage.Kinds)
+                {
+                    pairs.Add(from, to);
+                }
+            }
+
+            return pairs;
+        }
+    }
 
     private readonly TempFolder source = new();
 
     private readonly TempFolder target = new();
 
-    public void Dispose()
+    private readonly Dictionary<string, StoragePool> pools = [];
+
+    public Task InitializeAsync()
+        => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
+        foreach (StoragePool pool in pools.Values)
+        {
+            await pool.DisposeAsync();
+        }
+
         source.Dispose();
         target.Dispose();
     }
 
     private IStore Make(string kind, TempFolder folder)
-        => kind == "disk" ? DiskStore.Open(folder.Path) : new MemoryStore();
+        => TestStorage.Make(kind, folder.Path, pools);
 
     private async Task<IStore> Tree(string kind)
     {
@@ -83,8 +105,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task Copy_And_Move_WithinOneStore_KeepEmptyFolders(string kind)
     {
         IStore store = await Tree(kind);
@@ -145,8 +166,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task TryMoveTo_ToAnExistingDestinationOrFromAMissingSource_ThrowsAndChangesNothing(string kind)
     {
         IStore first = Make(kind, source);
@@ -163,8 +183,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task Move_OfAFolderIntoItself_FailsWithoutExposingHostPathsAndChangesNothing(string kind)
     {
         IStore store = await Tree(kind);
@@ -176,8 +195,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task Move_OfAMissingSource_DoesNotCreateTheDestinationFolders(string kind)
     {
         IStore store = Make(kind, source);
@@ -188,8 +206,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task CreateFolder_MakesTheFolderAndItsParentsAndIsRepeatable(string kind)
     {
         IStore store = Make(kind, source);
@@ -201,8 +218,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task CreateFolder_OverAFileOrThroughOne_Throws(string kind)
     {
         IStore store = Make(kind, source);
@@ -247,8 +263,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task IsFolder_IsTrueOnlyForFoldersIncludingTheRoot(string kind)
     {
         IStore store = await Tree(kind);
@@ -262,8 +277,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task GetSize_OfAFileIsItsBytesAndOfAFolderTheSumOfEverythingInIt(string kind)
     {
         IStore store = await Tree(kind);
@@ -278,8 +292,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task GetSize_OfSomethingMissing_Throws(string kind)
     {
         IStore store = await Tree(kind);
@@ -326,8 +339,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task Copy_Natively_RefusesTheRootAnExistingDestinationAndACopyIntoItself(string kind)
     {
         IStore store = await Tree(kind);
@@ -344,8 +356,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task Copy_Natively_MakesAnIndependentCopy(string kind)
     {
         IStore store = await Tree(kind);
@@ -468,8 +479,7 @@ public sealed class StoreTreeTests : IDisposable
         => paths.Select(path => path + suffix).Order(StringComparer.Ordinal).ToArray();
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task List_Recursive_ReturnsEverythingBelowWithPathsRelativeToTheFolder(string kind)
     {
         IStore store = await Tree(kind);
@@ -483,8 +493,7 @@ public sealed class StoreTreeTests : IDisposable
     }
 
     [Theory]
-    [InlineData("disk")]
-    [InlineData("memory")]
+    [MemberData(nameof(Kinds))]
     public async Task ListFiles_And_ListFolders_ReturnPathsAndTakeTheRecursiveOption(string kind)
     {
         IStore store = await Tree(kind);

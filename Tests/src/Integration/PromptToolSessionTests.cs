@@ -101,7 +101,7 @@ public sealed class PromptToolSessionTests : IDisposable
         Assert.Equal("mcp__liveai__list_directory,mcp__liveai__find_files,mcp__liveai__search_files,mcp__liveai__read_file,mcp__liveai__write_file,mcp__liveai__edit_file,mcp__liveai__delete_file,mcp__liveai__move_file,mcp__liveai__copy_file,mcp__liveai__diff_files,mcp__liveai__view_image,mcp__liveai__current_time,mcp__liveai__tool_search,mcp__liveai__delegate,mcp__liveai__task_wait,mcp__liveai__task_output,mcp__liveai__task_stop,mcp__liveai__respond", arguments[Array.IndexOf(arguments, "--allowedTools") + 1]);
         string guidance = arguments[Array.IndexOf(arguments, "--append-system-prompt") + 1];
         Assert.Contains("file tools of the MCP server named liveai", guidance);
-        Assert.Contains("unless it starts with CACHE:", guidance);
+        Assert.Contains("unless it starts with .liveai-session", guidance);
     }
 
     [Fact]
@@ -138,20 +138,20 @@ public sealed class PromptToolSessionTests : IDisposable
         Assert.False(File.Exists(temp.Combine("loose.txt")));
         string listing = await File.ReadAllTextAsync(temp.Combine("list.txt"));
         Assert.Contains("notes/", listing);
-        Assert.Contains("CACHE:/", listing);
+        Assert.Contains(".liveai-session/", listing);
     }
 
     [Fact]
     public async Task Ask_LetsTheAiWorkInTheCacheAndTheCallerReadsTheResultAndNothingReachesTheDisk()
     {
-        string script = Library(Call("read_file", """{"path":"CACHE:/a.txt"}""", "read.txt"), Call("write_file", """{"path":"CACHE:/out/b.txt","content":"made by the AI"}""", "write.txt"));
+        string script = Library(Call("read_file", """{"path":".liveai-session/a.txt"}""", "read.txt"), Call("write_file", """{"path":".liveai-session/out/b.txt","content":"made by the AI"}""", "write.txt"));
         await using IPromptSession session = await Session(script);
-        await session.Cache.WriteText("a.txt", "from the caller");
+        await session.Workspace.WriteText(".liveai-session/a.txt", "from the caller");
 
         await session.Request("work");
 
         Assert.Contains("from the caller", await File.ReadAllTextAsync(temp.Combine("read.txt")));
-        Assert.Equal("made by the AI", await session.Cache.ReadText("out/b.txt"));
+        Assert.Equal("made by the AI", await session.Workspace.ReadText(".liveai-session/out/b.txt"));
         Assert.False(File.Exists(temp.Combine("out/b.txt")));
     }
 
@@ -161,29 +161,29 @@ public sealed class PromptToolSessionTests : IDisposable
         Directory.CreateDirectory(temp.Combine("work"));
         await File.WriteAllTextAsync(temp.Combine("work/guide.md"), "the guide");
         string script = Library(
-            Call("copy_file", """{"from":"guide.md","to":"CACHE:/guide-copy.md"}""", "copy.txt"),
-            Call("move_file", """{"from":"CACHE:/guide-copy.md","to":"moved.md"}""", "move.txt"));
+            Call("copy_file", """{"from":"guide.md","to":".liveai-session/guide-copy.md"}""", "copy.txt"),
+            Call("move_file", """{"from":".liveai-session/guide-copy.md","to":"moved.md"}""", "move.txt"));
         await using IPromptSession session = await Session(script, temp.Combine("work"));
 
         await session.Request("work");
 
         Assert.Equal("the guide", await File.ReadAllTextAsync(temp.Combine("work/moved.md")));
-        Assert.Empty(await session.Cache.List(string.Empty).ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-session").ToListAsync());
     }
 
     [Fact]
     public async Task Ask_TheAiCannotDeleteOrRenameTheCacheFolderItself()
     {
         string script = Library(
-            Call("delete_file", """{"path":"CACHE:"}""", "delete1.txt"),
-            Call("delete_file", """{"path":"CACHE:/."}""", "delete2.txt"),
-            Call("delete_file", """{"path":"CACHE:/"}""", "delete3.txt"),
-            Call("move_file", """{"from":"CACHE:","to":"renamed"}""", "move1.txt"),
-            Call("move_file", """{"from":"CACHE:/.","to":"cache2"}""", "move2.txt"),
-            Call("write_file", """{"path":"CACHE:/.","content":"x"}""", "write.txt"),
+            Call("delete_file", """{"path":".liveai-session"}""", "delete1.txt"),
+            Call("delete_file", """{"path":".liveai-session/."}""", "delete2.txt"),
+            Call("delete_file", """{"path":".liveai-session/"}""", "delete3.txt"),
+            Call("move_file", """{"from":".liveai-session","to":"renamed"}""", "move1.txt"),
+            Call("move_file", """{"from":".liveai-session/.","to":"cache2"}""", "move2.txt"),
+            Call("write_file", """{"path":".liveai-session/.","content":"x"}""", "write.txt"),
             Call("list_directory", "{}", "list.txt"));
         await using IPromptSession session = await Session(script);
-        await session.Cache.WriteText("keep.txt", "kept");
+        await session.Workspace.WriteText(".liveai-session/keep.txt", "kept");
 
         await session.Request("work");
 
@@ -192,7 +192,51 @@ public sealed class PromptToolSessionTests : IDisposable
             Assert.Contains("\"isError\":true", await File.ReadAllTextAsync(temp.Combine($"{result}.txt")));
         }
 
-        Assert.Equal("kept", await session.Cache.ReadText("keep.txt"));
-        Assert.Contains("CACHE:/", await File.ReadAllTextAsync(temp.Combine("list.txt")));
+        Assert.Equal("kept", await session.Workspace.ReadText(".liveai-session/keep.txt"));
+        Assert.Contains(".liveai-session/", await File.ReadAllTextAsync(temp.Combine("list.txt")));
+    }
+
+    [Fact]
+    public async Task Ask_TheAiWritesInTheCacheAndTheTempFolder_AndBothAreGoneWhenTheSessionEnds()
+    {
+        Directory.CreateDirectory(temp.Combine("work"));
+        string script = Library(
+            Call("write_file", """{"path":".liveai-cache/a.txt","content":"cached"}""", "w1.txt"),
+            Call("write_file", """{"path":".liveai-session/s.txt","content":"kept"}""", "w2.txt"),
+            Call("write_file", """{"path":".liveai-temp/b.txt","content":"timed"}""", "w3.txt"));
+        IPromptSession session = await Session(script, temp.Combine("work"));
+        session.Configuration.Storage = new PromptStorageSettings { MemoryLimit = 0 };
+
+        await session.Request("work");
+
+        string folder = temp.Combine($"data/{session.Id}");
+        Assert.Single(Directory.GetFiles(Path.Combine(folder, "cache"), "*.bin"));
+        Assert.Single(Directory.GetFiles(Path.Combine(folder, "session"), "*.bin"));
+        Assert.Equal("cached", await session.Workspace.ReadText(".liveai-cache/a.txt"));
+        Assert.Equal("kept", await session.Workspace.ReadText(".liveai-session/s.txt"));
+        Assert.Equal("timed", await File.ReadAllTextAsync(temp.Combine("work/.liveai-temp/b.txt")));
+        Assert.Equal("*\n", await File.ReadAllTextAsync(temp.Combine("work/.liveai-temp/.gitignore")));
+        Assert.False(File.Exists(temp.Combine("work/a.txt")));
+
+        await session.DisposeAsync();
+
+        Assert.False(Directory.Exists(folder));
+        Assert.False(Directory.Exists(temp.Combine("work/.liveai-temp")));
+        Assert.Empty(await session.Workspace.List(".liveai-cache", true).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Ask_AFolderOfTheNameOfTheTempFolderThatSomethingElseMade_IsNeverTouched()
+    {
+        Directory.CreateDirectory(temp.Combine("work/.liveai-temp"));
+        await File.WriteAllTextAsync(temp.Combine("work/.liveai-temp/theirs.txt"), "mine");
+        string script = Library(Call("write_file", """{"path":".liveai-temp/b.txt","content":"timed"}""", "w1.txt"));
+        IPromptSession session = await Session(script, temp.Combine("work"));
+
+        await session.Request("work");
+        await session.DisposeAsync();
+
+        Assert.Equal("mine", await File.ReadAllTextAsync(temp.Combine("work/.liveai-temp/theirs.txt")));
+        Assert.False(File.Exists(temp.Combine("work/.liveai-temp/.gitignore")));
     }
 }

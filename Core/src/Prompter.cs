@@ -213,6 +213,13 @@ public sealed class Prompter : IPrompter
         {
             throw new ArgumentException("The effort of the environment is not a defined value.", nameof(environment));
         }
+
+        if (environment.Storage is null)
+        {
+            throw new ArgumentException("The storage settings of the environment are missing.", nameof(environment));
+        }
+
+        environment.Storage.Check();
     }
 
     private void Check(PromptSetup setup, PromptEnvironment environment)

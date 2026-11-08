@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// Files and folders the library's file tools work on, such as the cache of a session (<see cref="IPromptSession.Cache" />), which a caller reads from and writes to. The library makes every store; a caller reads and writes them, and the file tools of the AI work on them.
+/// Files and folders the library's file tools work on, such as the files of a session (<see cref="IPromptSession.Workspace" />), which a caller reads from and writes to. The library makes every store; a caller reads and writes them, and the file tools of the AI work on them.
 /// </summary>
 public interface IStore
 {

@@ -1,16 +1,28 @@
 namespace Markwardt.LiveAi.Tests.Integration;
 
-public sealed class StoreOpenModeTests : IDisposable
+public sealed class StoreOpenModeTests : IAsyncLifetime
 {
-    public static TheoryData<string> Kinds => ["disk", "memory"];
+    public static TheoryData<string> Kinds => [.. TestStorage.Kinds];
 
     private readonly TempFolder temp = new();
 
-    public void Dispose()
-        => temp.Dispose();
+    private readonly Dictionary<string, StoragePool> pools = [];
+
+    public Task InitializeAsync()
+        => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        foreach (StoragePool pool in pools.Values)
+        {
+            await pool.DisposeAsync();
+        }
+
+        temp.Dispose();
+    }
 
     private IStore Make(string kind)
-        => kind == "disk" ? DiskStore.Open(temp.Path) : new MemoryStore();
+        => TestStorage.Make(kind, temp.Path, pools);
 
     private async Task Put(IStore store, string path, string text)
     {

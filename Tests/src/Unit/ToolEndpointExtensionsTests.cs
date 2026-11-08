@@ -10,7 +10,62 @@ public sealed class ToolEndpointExtensionsTests
     }
 
     private ToolEndpoint Endpoint(bool hasShell = false)
-        => new() { Url = "http://127.0.0.1:1/mcp", Token = "t", Names = ["x"], HasShell = hasShell, CacheName = "CACHE:" };
+        => new() { Url = "http://127.0.0.1:1/mcp", Token = "t", Names = ["x"], HasShell = hasShell, SessionName = ".liveai-session", CacheName = ".liveai-cache" };
+
+    private ToolEndpoint Full(bool hasShell = true)
+        => Endpoint(hasShell) with { WorkspaceTempName = ".liveai-temp", DownloadName = "download_url", FileLimit = 256L * 1024 * 1024, Retention = TimeSpan.FromMinutes(30) };
+
+    [Fact]
+    public void Guidance_TellsTheAiTheThreePlacesAndWhatEachIsFor()
+    {
+        string text = Full().Guidance(Record());
+
+        Assert.Contains("which is kept for the long term", text);
+        Assert.Contains(".liveai-session, fast storage that lasts as long as this session, with files of up to 256 MiB each", text);
+        Assert.Contains(".liveai-cache, which is the same except that a file in it that you did not read or write for 30 minutes is removed", text);
+        Assert.Contains("copy it into the workspace with copy_file", text);
+        Assert.Contains("Save files from the web with download_url, which puts them in .liveai-cache/downloads", text);
+    }
+
+    [Fact]
+    public void Guidance_WithAShell_SaysCommandsReachOnlyTheWorkspaceAndTheTempFolder()
+    {
+        string text = Full().Guidance(Record());
+
+        Assert.Contains("The commands you run reach only the workspace, not .liveai-session or .liveai-cache", text);
+        Assert.Contains("the folder .liveai-temp in the workspace: what is in it that was not used for 30 minutes is removed (running a command counts as using all of it)", text);
+    }
+
+    [Fact]
+    public void Guidance_WithoutAShell_SaysNothingAboutCommandsOrTheTempFolder()
+    {
+        string text = Full(false).Guidance(Record());
+
+        Assert.DoesNotContain("commands", text);
+        Assert.DoesNotContain(".liveai-temp", text);
+    }
+
+    [Fact]
+    public void Guidance_WithoutAUsableTempFolder_DoesNotMentionIt()
+    {
+        string text = (Full() with { WorkspaceTempName = string.Empty }).Guidance(Record());
+
+        Assert.Contains("The commands you run reach only the workspace", text);
+        Assert.DoesNotContain(".liveai-temp", text);
+    }
+
+    [Fact]
+    public void Guidance_WithoutTheDownloadTool_DoesNotMentionIt()
+        => Assert.DoesNotContain("download_url", (Full() with { DownloadName = string.Empty }).Guidance(Record()));
+
+    [Fact]
+    public void Equals_ComparesWhatTheAiIsToldAboutStorage()
+    {
+        Assert.NotEqual(Full(), Full() with { FileLimit = 1 });
+        Assert.NotEqual(Full(), Full() with { Retention = TimeSpan.FromMinutes(5) });
+        Assert.NotEqual(Full(), Full() with { WorkspaceTempName = string.Empty });
+        Assert.Equal(Full(), Full());
+    }
 
     [Fact]
     public void Guidance_ForFileToolsWithoutAShell_TellsTheAiItsPathsAreRelativeToItsWorkspaceExceptTheCache()
@@ -19,7 +74,7 @@ public sealed class ToolEndpointExtensionsTests
 
         Assert.Contains("file tools", guidance);
         Assert.Contains("relative to your workspace", guidance);
-        Assert.Contains("CACHE:", guidance);
+        Assert.Contains(".liveai-session", guidance);
         Assert.DoesNotContain("is empty", guidance);
     }
 
@@ -41,7 +96,7 @@ public sealed class ToolEndpointExtensionsTests
         string text = Endpoint(true).Guidance(Record());
 
         Assert.Contains("a shell tool and file tools", text);
-        Assert.Contains("unless it starts with CACHE:", text);
+        Assert.Contains("unless it starts with .liveai-session", text);
         Assert.Contains("The shell tool starts in your workspace.", text);
         Assert.DoesNotContain("no shell", text);
     }
@@ -58,7 +113,7 @@ public sealed class ToolEndpointExtensionsTests
         Assert.Contains("no shell", text);
         Assert.Contains("relative to your workspace", text);
         Assert.Contains("file tools of the MCP server named liveai", text);
-        Assert.Contains("unless it starts with CACHE:", text);
+        Assert.Contains("unless it starts with .liveai-session", text);
     }
 
     [Fact]

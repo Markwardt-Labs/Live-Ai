@@ -42,6 +42,13 @@ internal interface IPromptSessionStore
     /// <param name="id">The identifier of the session.</param>
     /// <returns>The path.</returns>
     string GetWorkspaceFolder(Guid id);
+
+    /// <summary>
+    /// Gets the full path of the folder the files of a session's session storage and cache move to when they do not fit in memory, which is inside the data folder and named after the session. The folder is not made. The first call also removes what sessions that ended without cleaning up left behind.
+    /// </summary>
+    /// <param name="id">The identifier of the session.</param>
+    /// <returns>The path, or <see langword="null" /> when the files of the session stay in memory.</returns>
+    string? GetStorageFolder(Guid id);
 }
 
 /// <inheritdoc />
@@ -53,6 +60,10 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
     private readonly JsonSerializerOptions json = new(JsonSerializerDefaults.Web) { WriteIndented = true, Converters = { new JsonStringEnumConverter<PromptProvider>(JsonNamingPolicy.CamelCase), new JsonStringEnumConverter(), new CompactGuidConverter() } };
 
     private readonly IPromptSessionMigration migration = new PromptSessionMigration();
+
+    private readonly object sweeping = new();
+
+    private bool swept;
 
     private string Sessions => Path.Combine(root, "Sessions");
 
@@ -120,9 +131,25 @@ internal sealed class PromptSessionStore(string? folder) : IPromptSessionStore
         => Path.Combine(root, "Workspaces", id.ToString("N"));
 
     /// <inheritdoc />
+    public string? GetStorageFolder(Guid id)
+    {
+        lock (sweeping)
+        {
+            if (!swept)
+            {
+                swept = true;
+                StoragePool.ClearOrphans(root);
+            }
+        }
+
+        return Path.Combine(root, id.ToString("N"));
+    }
+
+    /// <inheritdoc />
     public Task Delete(Guid id)
     {
         File.Delete(PathOf(id));
+        StoragePool.TryClear(Path.Combine(root, id.ToString("N")));
 
         if (Directory.Exists(Sessions))
         {

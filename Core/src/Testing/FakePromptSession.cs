@@ -56,6 +56,10 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private Task pumping = Task.CompletedTask;
 
+    private readonly IStore sessionStore = new MemoryStore();
+
+    private readonly IStore cacheStore = new MemoryStore();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="FakePromptSession" /> class.
     /// </summary>
@@ -71,6 +75,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
         Id = Guid.NewGuid().ToString("N");
         WorkspacePath = DefaultWorkspace();
         PromptLibraryTools library = new();
+        Workspace = new MountedStore(new MemoryStore(), new Dictionary<string, IStore> { [library.SessionName] = sessionStore, [library.CacheName] = cacheStore });
         settings = new PromptSessionSettings(new PromptSessionRecord { Id = Guid.NewGuid(), Engine = new ClaudeEngine(), WorkingFolder = string.Empty, LastLoaded = this.time.GetUtcNow() }, [.. library.GetReservedNames(), "respond"]);
     }
 
@@ -84,7 +89,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     public string WorkspacePath { get; private set; }
 
     /// <inheritdoc />
-    public IStore Cache { get; } = new MemoryStore();
+    public IStore Workspace { get; }
 
     /// <inheritdoc />
     public PromptUsage Usage
@@ -476,9 +481,12 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private async Task ClearCache()
     {
-        foreach (StoreEntry entry in await Cache.List(string.Empty).ToListAsync())
+        foreach (IStore store in new[] { sessionStore, cacheStore })
         {
-            await Cache.Delete(entry.Path);
+            foreach (StoreEntry entry in await store.List(string.Empty).ToListAsync())
+            {
+                await store.Delete(entry.Path);
+            }
         }
     }
 

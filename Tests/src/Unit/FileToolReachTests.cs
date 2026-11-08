@@ -14,7 +14,7 @@ public sealed class FileToolReachTests
     {
         await cache.WriteText("in-cache.png", "x");
         await workspace.WriteText("in-workspace.png", "x");
-        MountedStore store = new(hasWorkspace ? workspace : null, new Dictionary<string, IStore> { [library.CacheName] = cache });
+        MountedStore store = new(hasWorkspace ? workspace : null, new Dictionary<string, IStore> { [library.SessionName] = cache });
         return [.. library.Create(store), library.CreateImage(store, (path, _, _) =>
         {
             shown.Add(path);
@@ -35,10 +35,10 @@ public sealed class FileToolReachTests
             shown.Clear();
             IReadOnlyList<PromptTool> tools = await Tools(hasWorkspace);
 
-            string answer = await Run(tools, tool, "CACHE:/in-cache.png");
+            string answer = await Run(tools, tool, ".liveai-session/in-cache.png");
 
             Assert.False(string.IsNullOrEmpty(answer));
-            Assert.Equal(tool == "view_image" ? ["CACHE:/in-cache.png"] : [], shown);
+            Assert.Equal(tool == "view_image" ? [".liveai-session/in-cache.png"] : [], shown);
         }
     }
 

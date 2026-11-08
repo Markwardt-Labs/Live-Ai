@@ -800,16 +800,34 @@ public sealed class PromptSessionTests
     }
 
     [Fact]
-    public async Task Cache_IsAnEmptyStoreOfTheSessionAndIsLostWhenItIsDisposed()
+    public async Task Workspace_HasAnEmptyCacheAndTemporaryStorageOfTheSessionThatAreLostWhenItIsDisposed()
     {
         PromptSession session = Session(Record());
-        Assert.Empty(await session.Cache.List(string.Empty).ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-session").ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-cache").ToListAsync());
 
-        await session.Cache.WriteText("notes/a.txt", "x");
-        Assert.Equal("x", await session.Cache.ReadText("notes/a.txt"));
+        await session.Workspace.WriteText(".liveai-session/notes/a.txt", "x");
+        await session.Workspace.WriteText(".liveai-cache/b.txt", "y");
+        Assert.Equal("x", await session.Workspace.ReadText(".liveai-session/notes/a.txt"));
+        Assert.Equal("y", await session.Workspace.ReadText(".liveai-cache/b.txt"));
         await session.DisposeAsync();
 
-        Assert.Empty(await session.Cache.List(string.Empty, true).ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-session", true).ToListAsync());
+        Assert.Empty(await session.Workspace.List(".liveai-cache", true).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Workspace_StaysValidAfterTheSystemAccessSettingChanges()
+    {
+        using TempFolder folder = new();
+        PromptSession session = Session(Record() with { WorkspacePath = folder.Path, WorkingFolder = folder.Path });
+        IStore files = session.Workspace;
+        await files.WriteText("a.txt", "one");
+
+        session.Configuration.IsSystemAccessAllowed = true;
+
+        Assert.Equal("one", await files.ReadText("a.txt"));
+        Assert.Equal("one", await File.ReadAllTextAsync(Path.Combine(folder.Path, "a.txt")));
     }
 
     [Fact]
@@ -833,14 +851,14 @@ public sealed class PromptSessionTests
         });
         toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
         Plain();
-        await session.Cache.WriteText("a.txt", "cached");
+        await session.Workspace.WriteText(".liveai-session/a.txt", "cached");
 
         await session.Messages("one");
 
         Assert.IsType<MountedStore>(built);
-        Assert.Equal("cached", await built!.ReadText("CACHE:/a.txt"));
+        Assert.Equal("cached", await built!.ReadText(".liveai-session/a.txt"));
         Served("read_file");
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasWorkspace() && start.Instructions.Contains("CACHE:"))), Times.Once);
+        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.ApiKey == null && start.Schema == null && start.HasEndpoint() && start.HasFiles() && start.HasWorkspace() && start.Instructions.Contains(".liveai-session"))), Times.Once);
     }
 
     [Fact]
@@ -1232,7 +1250,7 @@ public sealed class PromptSessionTests
         session.Configuration.IsWebAllowed = false;
         await session.Messages("two");
 
-        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "fetch_url", "search_web", "respond" }))), Times.Once);
+        toolHost.Verify(mock => mock.Start(It.Is<IReadOnlyList<PromptTool>>(started => started.Select(tool => tool.Name).Where(name => !everyday.Contains(name)).SequenceEqual(new[] { "fetch_url", "download_url", "search_web", "respond" }))), Times.Once);
         libraryTools.Verify(mock => mock.CreateFetch(), Times.Once);
     }
 
@@ -1367,7 +1385,7 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        Served("fetch_url", "search_web");
+        Served("fetch_url", "download_url", "search_web");
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => !start.Search)), Times.Once);
     }
 
@@ -1382,7 +1400,7 @@ public sealed class PromptSessionTests
 
         await session.Messages("one");
 
-        Served("fetch_url");
+        Served("fetch_url", "download_url");
         engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Search)), Times.Once);
         libraryTools.Verify(mock => mock.CreateSearch(), Times.Never);
     }

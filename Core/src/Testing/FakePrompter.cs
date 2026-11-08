@@ -131,6 +131,7 @@ public sealed class FakePrompter : IPrompter
         session.Configuration.IsWebAllowed = Environment.IsWebAllowed;
         session.Configuration.IsImageGenerationAllowed = Environment.IsImageGenerationAllowed;
         session.Configuration.Instructions = Environment.Instructions;
+        session.Configuration.Storage = Environment.Storage;
         string workspacePath = session.WorkspacePath;
 
         lock (gate)

@@ -10,7 +10,7 @@ Live AI drives the Claude Code (`claude`), OpenAI Codex (`codex`) and OpenCode (
 - **Requests:** ask directly, mixed into running work, or in a fork. Send files and images, typed input, and get typed output under a JSON schema.
 - **Tools:** give the AI your own functions, MCP servers, a way to ask the user questions, web search and page reading, images (looking at them and making them with OpenAI or a local Stable Diffusion), helper delegation, the time and file diffs.
 - **Control:** usage and subscription status, interrupts, branching, rewinding and compaction.
-- **Files:** the AI reaches files only through the library's file tools, in the session's workspace folder (one you give it, or one the library makes and keeps for the session) and in a temporary cache, and has no shell unless you enable one.
+- **Files:** the AI reaches files only through the library's file tools, in the session's workspace folder (one you give it, or one the library makes and keeps for the session) and in session storage and a cache that keep their data in memory and move what does not fit to files in the background, and has no shell unless you enable one.
 - **Local models and tests:** run local models through OpenCode, and test your code with the fakes in `Markwardt.LiveAi.Testing`.
 
 Built on .NET 10 with one dependency, `Microsoft.Extensions.Logging.Abstractions`; see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

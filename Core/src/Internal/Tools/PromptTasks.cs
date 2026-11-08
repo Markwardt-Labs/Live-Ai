@@ -16,6 +16,12 @@ internal interface IPromptTasks : IAsyncDisposable
     string StartCommand(string workingFolder, string command, int seconds);
 
     /// <summary>
+    /// Tells the session that a command is running, which the foreground commands of the shell tool do for as long as they run, and the background commands do by themselves.
+    /// </summary>
+    /// <returns>The hold, which is disposed when the command ends.</returns>
+    IDisposable Hold();
+
+    /// <summary>
     /// Starts a helper that keeps working after this call returns.
     /// </summary>
     /// <param name="description">What the helper was asked, for the lists the AI reads.</param>
@@ -59,7 +65,8 @@ internal interface IPromptTasks : IAsyncDisposable
 
 /// <inheritdoc />
 /// <param name="time">The clock the times of the tasks, their time limits and the waits run on, or <see langword="null" /> for the system's.</param>
-internal sealed class PromptTasks(TimeProvider? time = null) : IPromptTasks
+/// <param name="hold">Called when a command starts, and the hold it returns is disposed when the command ends, or <see langword="null" /> for none.</param>
+internal sealed class PromptTasks(TimeProvider? time = null, Func<IDisposable>? hold = null) : IPromptTasks
 {
     private readonly TimeProvider clock = time ?? TimeProvider.System;
 
@@ -92,19 +99,26 @@ internal sealed class PromptTasks(TimeProvider? time = null) : IPromptTasks
         ShellOutput output = new(outputLimit);
         task.Output = output;
 
+        IDisposable held = Hold();
+
         try
         {
             Process process = shell.Start(workingFolder, command);
-            _ = Run(task, process, output, seconds);
+            _ = Run(task, process, output, seconds, held);
         }
         catch
         {
+            held.Dispose();
             Forget(task);
             throw;
         }
 
         return $"Started {task.Id} in the background. It keeps running while you do other things. {Follow()}";
     }
+
+    /// <inheritdoc />
+    public IDisposable Hold()
+        => hold?.Invoke() ?? new Idle();
 
     /// <inheritdoc />
     public string StartHelper(string description, Func<CancellationToken, Task<string>> run)
@@ -248,8 +262,9 @@ internal sealed class PromptTasks(TimeProvider? time = null) : IPromptTasks
         }
     }
 
-    private async Task Run(BackgroundTask task, Process process, ShellOutput output, int seconds)
+    private async Task Run(BackgroundTask task, Process process, ShellOutput output, int seconds, IDisposable held)
     {
+        using (held)
         using (process)
         {
             try
@@ -368,6 +383,13 @@ internal sealed class PromptTasks(TimeProvider? time = null) : IPromptTasks
 
     private string Span(TimeSpan time)
         => time.TotalMinutes >= 1 ? $"{(int)time.TotalMinutes} min {time.Seconds} s" : $"{Math.Max(1, (int)time.TotalSeconds)} s";
+
+    private sealed class Idle : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
 
     private sealed class BackgroundTask(string id, string description, TimeProvider clock)
     {

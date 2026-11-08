@@ -12,13 +12,17 @@ internal static class LibraryToolMocks
         /// </summary>
         public void OfferTheEverydayTools()
         {
-            tools.SetupGet(mock => mock.CacheName).Returns("CACHE:");
+            tools.SetupGet(mock => mock.SessionName).Returns(".liveai-session");
+            tools.SetupGet(mock => mock.CacheName).Returns(".liveai-cache");
+            tools.SetupGet(mock => mock.WorkspaceTempName).Returns(".liveai-temp");
+            tools.SetupGet(mock => mock.DownloadName).Returns("download_url");
             tools.SetupGet(mock => mock.SearchName).Returns("search_web");
             tools.SetupGet(mock => mock.GenerateImageName).Returns("generate_image");
             tools.SetupGet(mock => mock.TimeName).Returns("current_time");
             tools.SetupGet(mock => mock.ToolSearchName).Returns("tool_search");
             tools.SetupGet(mock => mock.DelegateName).Returns("delegate");
             tools.SetupGet(mock => mock.TaskNames).Returns(["task_wait", "task_output", "task_stop"]);
+            tools.Setup(mock => mock.CreateDownload(It.IsAny<IStore>(), It.IsAny<Func<long>>())).Returns(() => Named("download_url"));
             tools.Setup(mock => mock.CreateSearch()).Returns(() => Named("search_web"));
             tools.Setup(mock => mock.CreateTime()).Returns(() => Named("current_time"));
             tools.Setup(mock => mock.CreateToolSearch(It.IsAny<Func<IReadOnlyList<PromptTool>>>())).Returns(() => Named("tool_search"));

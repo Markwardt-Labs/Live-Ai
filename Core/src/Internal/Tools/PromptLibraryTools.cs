@@ -31,6 +31,11 @@ internal interface IPromptLibraryTools
     string FetchName { get; }
 
     /// <summary>
+    /// Gets the name of the tool that downloads a file into a store, which a caller's own tools cannot use either.
+    /// </summary>
+    string DownloadName { get; }
+
+    /// <summary>
     /// Gets the name of the tool that searches the web, which a caller's own tools cannot use either.
     /// </summary>
     string SearchName { get; }
@@ -41,9 +46,19 @@ internal interface IPromptLibraryTools
     string GenerateImageName { get; }
 
     /// <summary>
-    /// Gets the first part of a path that is in the session's cache (the <c>CACHE:</c> of <c>CACHE:/notes.txt</c>), which the file tools and the descriptions of the tools use.
+    /// Gets the first part of a path that is in the session storage (the <c>.liveai-session</c> of <c>.liveai-session/notes.txt</c>), which the file tools and the descriptions of the tools use.
+    /// </summary>
+    string SessionName { get; }
+
+    /// <summary>
+    /// Gets the first part of a path that is in the session's cache (the <c>.liveai-cache</c> of <c>.liveai-cache/page.html</c>), which the file tools and the descriptions of the tools use.
     /// </summary>
     string CacheName { get; }
+
+    /// <summary>
+    /// Gets the name of the folder in the workspace where the AI and its commands put data that is wanted for a while, which is removed when not used for a while and when the session ends.
+    /// </summary>
+    string WorkspaceTempName { get; }
 
     /// <summary>
     /// Gets the name of the tool that tells the time, which a caller's own tools cannot use either.
@@ -68,7 +83,7 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tools for a store.
     /// </summary>
-    /// <param name="store">The files the tools work on, with the cache at <see cref="CacheName" /> in its top level.</param>
+    /// <param name="store">The files the tools work on, with the session storage at <see cref="SessionName" /> and the cache at <see cref="CacheName" /> in its top level.</param>
     /// <returns>The tools.</returns>
     IReadOnlyList<PromptTool> Create(IStore store);
 
@@ -90,7 +105,7 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tool that shows the AI an image of a store.
     /// </summary>
-    /// <param name="store">The files the image is read from, with the cache at <c>CACHE:</c> in its top level.</param>
+    /// <param name="store">The files the image is read from, with the session storage and the cache at their names in its top level.</param>
     /// <param name="give">Gives the AI the image, by the path it was read from, as an input of its own.</param>
     /// <returns>The tool.</returns>
     PromptTool CreateImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give);
@@ -100,6 +115,14 @@ internal interface IPromptLibraryTools
     /// </summary>
     /// <returns>The tool.</returns>
     PromptTool CreateFetch();
+
+    /// <summary>
+    /// Builds the tool that downloads a file from the web into a store without it passing through the conversation.
+    /// </summary>
+    /// <param name="store">Where the file is saved, with the cache at <see cref="CacheName" /> in its top level, which is where a file goes when the AI gives no path.</param>
+    /// <param name="limit">Gives the most bytes a download may have, at the moment of the download.</param>
+    /// <returns>The tool.</returns>
+    PromptTool CreateDownload(IStore store, Func<long> limit);
 
     /// <summary>
     /// Builds the tool that searches the web by reading the HTML page of DuckDuckGo, for an engine that has no web search of its own. It spaces its requests, stops for a while when it is turned away, and is not subject to the web filter.
@@ -116,7 +139,7 @@ internal interface IPromptLibraryTools
     /// <summary>
     /// Builds the tool that makes an image with a generator and saves it in a store.
     /// </summary>
-    /// <param name="store">Where the images are saved, with the cache at <c>CACHE:</c> in its top level.</param>
+    /// <param name="store">Where the images are saved, with the session storage and the cache at their names in its top level.</param>
     /// <param name="generator">Makes the images, and decides what the tool offers.</param>
     /// <returns>The tool.</returns>
     PromptTool CreateGenerateImage(IStore store, IPromptImageGenerator generator);
@@ -244,6 +267,9 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     public string FetchName => "fetch_url";
 
     /// <inheritdoc />
+    public string DownloadName => "download_url";
+
+    /// <inheritdoc />
     public string SearchName => "search_web";
 
     /// <inheritdoc />
@@ -268,12 +294,18 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     private string TaskStopName => TaskNames[2];
 
     /// <inheritdoc />
-    public string CacheName => "CACHE:";
+    public string SessionName => PromptStorageNames.Session;
+
+    /// <inheritdoc />
+    public string CacheName => PromptStorageNames.Cache;
+
+    /// <inheritdoc />
+    public string WorkspaceTempName => PromptStorageNames.Temp;
 
     /// <inheritdoc />
     public IReadOnlyList<PromptTool> Create(IStore store)
         => [
-            PromptTool.Create<DirectoryInput, string>("list_directory", "Lists the files and folders directly in a folder (folders end with /). " + Where() + $" Leave path out to list the workspace and {CacheName}.", (input, cancellation) => ListDirectory(store, input, cancellation)),
+            PromptTool.Create<DirectoryInput, string>("list_directory", "Lists the files and folders directly in a folder (folders end with /). " + Where() + $" Leave path out to list the workspace, {SessionName} and {CacheName}.", (input, cancellation) => ListDirectory(store, input, cancellation)),
             PromptTool.Create<FindInput, string>("find_files", "Finds files by glob pattern, as paths you can give the other tools. A pattern without / (like *.cs) matches file names at any depth; with / (like src/**/*.md) it matches the whole path. * matches within a folder name, ** across folders, ? one character.", (input, cancellation) => FindFiles(store, input, cancellation)),
             PromptTool.Create<SearchInput, string>("search_files", "Searches file contents with a regular expression and returns path:line:text for each match (at most 200). Optionally limit it to a folder (path) or to files matching a glob (glob)." + Where(), (input, cancellation) => SearchFiles(store, input, cancellation)),
             PromptTool.Create<ReadInput, string>("read_file", "Reads a text file and returns its lines numbered (line number, tab, text). Reads up to 2000 lines; use offset (first line, starting at 1) and limit to read more or a part.", (input, cancellation) => ReadFile(store, input, cancellation)),
@@ -299,11 +331,11 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
     /// <inheritdoc />
     public PromptTool CreateImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give)
-        => PromptTool.Create<ImageInput, string>(ImageName, $"Shows you an image file (PNG, JPEG, GIF or WebP, up to 5 MB) that you can read with the file tools, such as a screenshot or a picture in the project, with the same paths as the file tools (relative to the workspace, or starting with {CacheName} for the cache). The file tools only read text, so they cannot show you an image. The image is not returned by this call: it is sent to you as a message from the user, which arrives while you work, or right after your turn if it could not reach you sooner. Carry on, and describe or use the image once the message with it has arrived. If it has not arrived when you need it, call this tool again.", (input, cancellation) => ViewImage(store, give, input, cancellation));
+        => PromptTool.Create<ImageInput, string>(ImageName, $"Shows you an image file (PNG, JPEG, GIF or WebP, up to 5 MB) that you can read with the file tools, such as a screenshot or a picture in the project, with the same paths as the file tools (relative to the workspace, or starting with {SessionName} or {CacheName}). The file tools only read text, so they cannot show you an image. The image is not returned by this call: it is sent to you as a message from the user, which arrives while you work, or right after your turn if it could not reach you sooner. Carry on, and describe or use the image once the message with it has arrived. If it has not arrived when you need it, call this tool again.", (input, cancellation) => ViewImage(store, give, input, cancellation));
 
     /// <inheritdoc />
     public PromptTool CreateFetch()
-        => PromptTool.Create<FetchInput, string>(FetchName, $"Fetches a web page or other text from an http or https address and returns it as text (HTML is reduced to its readable text). Use it to read documentation, an issue, an API response or a text file on the web. Binary content is refused, and long content is cut at max_chars (default {fetchDefaultChars}, at most {fetchMaxChars}).", (input, cancellation) => Fetch(input, cancellation));
+        => PromptTool.Create<FetchInput, string>(FetchName, $"Fetches a web page or other text from an http or https address and returns it as text (HTML is reduced to its readable text, unless raw is true, which gives the page as it is, with its markup). Use it to read documentation, an issue, an API response or a text file on the web. Binary content is refused, and long content is cut at max_chars (default {fetchDefaultChars}, at most {fetchMaxChars}); use {DownloadName} to save a binary file or the whole of a long one.", (input, cancellation) => Fetch(input, cancellation));
 
     private async Task<string> ViewImage(IStore store, Func<string, PromptAttachment, CancellationToken, Task> give, ImageInput input, CancellationToken cancellation = default)
     {
@@ -341,10 +373,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
     private async Task<string> Fetch(FetchInput input, CancellationToken cancellation = default)
     {
-        if (!Uri.TryCreate(input.Url, UriKind.Absolute, out Uri? address) || address.Scheme is not ("http" or "https"))
-        {
-            throw new InvalidOperationException("Give an absolute http or https address.");
-        }
+        Uri address = Address(input.Url);
 
         int limit = Math.Clamp(input.MaxChars ?? fetchDefaultChars, 1, fetchMaxChars);
 
@@ -361,7 +390,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
 
             if (!(media.IsText() || media.Contains("javascript", StringComparison.OrdinalIgnoreCase)))
             {
-                throw new InvalidOperationException($"The address returns {media}, which is not text.");
+                throw new InvalidOperationException($"The address returns {media}, which is not text. Use {DownloadName} to save it as a file.");
             }
 
             await using Stream body = await response.Content.ReadAsStreamAsync(cancellation);
@@ -387,14 +416,138 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
                 text = text.TrimEnd('\uFFFD');
             }
 
-            if (media.Contains("html", StringComparison.OrdinalIgnoreCase))
+            if (input.Raw != true && media.Contains("html", StringComparison.OrdinalIgnoreCase))
             {
                 text = blankLines.Replace(WebUtility.HtmlDecode(htmlTags.Replace(hiddenHtml.Replace(text, string.Empty), "\n")), "\n").Trim();
             }
 
-            return text.Length > limit ? text[..limit] + $"\n[cut after {limit} characters]" : text;
+            return text.Length > limit ? text[..limit] + $"\n[cut after {limit} characters; use {DownloadName} to save the whole of it as a file]" : text;
         }
         catch (Exception exception) when ((exception is HttpRequestException or TaskCanceledException or RegexMatchTimeoutException) && !cancellation.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"The address could not be read: {exception.Message}");
+        }
+    }
+
+    private Uri Address(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out Uri? address) && address.Scheme is "http" or "https" ? address : throw new InvalidOperationException("Give an absolute http or https address.");
+
+    private string DownloadFileName(Uri address, string media)
+    {
+        string name = string.Concat(Uri.UnescapeDataString(address.Segments.LastOrDefault()?.Trim('/') ?? string.Empty).Where(character => !char.IsControl(character) && !"\\/:*?\"<>|".Contains(character))).Trim().TrimStart('.');
+
+        if (name.Length == 0)
+        {
+            name = "download";
+        }
+
+        string extension = media.ToLowerInvariant() switch
+        {
+            "image/png" => ".png",
+            "image/jpeg" => ".jpg",
+            "image/gif" => ".gif",
+            "image/webp" => ".webp",
+            "application/pdf" => ".pdf",
+            "application/json" => ".json",
+            "text/html" => ".html",
+            "text/plain" => ".txt",
+            _ => string.Empty
+        };
+
+        return extension.Length > 0 && Path.GetExtension(name).Length == 0 ? name + extension : name;
+    }
+
+    private async Task<string> FreeName(IStore store, string path, CancellationToken cancellation)
+    {
+        string folder = path.Contains('/') ? path[..path.LastIndexOf('/')] : string.Empty;
+        string name = Path.GetFileNameWithoutExtension(path);
+        string extension = Path.GetExtension(path);
+        string free = path;
+
+        for (int number = 2; await Exists(store, free, cancellation); number++)
+        {
+            free = folder.Length > 0 ? $"{folder}/{name}-{number}{extension}" : $"{name}-{number}{extension}";
+        }
+
+        return free;
+    }
+
+    private async Task<string> Download(IStore store, Func<long> limit, DownloadInput input, CancellationToken cancellation = default)
+    {
+        Uri address = Address(input.Url);
+        long maximum = limit();
+
+        try
+        {
+            using HttpResponseMessage response = await Get(address, cancellation);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"The address answered {(int)response.StatusCode} {response.ReasonPhrase}.");
+            }
+
+            string media = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+
+            if (response.Content.Headers.ContentLength is { } announced && announced > maximum)
+            {
+                throw new InvalidOperationException($"The file at the address is {announced.DescribeSize()}, more than the {maximum.DescribeSize()} a download may have, so nothing was saved.");
+            }
+
+            bool given = !string.IsNullOrWhiteSpace(input.Path);
+            string path = given ? Normalize(input.Path!) : $"{CacheName}/downloads/{DownloadFileName(address, media)}";
+
+            if (given && (path.Length == 0 || input.Path!.TrimEnd().EndsWith('/') || input.Path.TrimEnd().EndsWith('\\')))
+            {
+                path = path.Length == 0 ? DownloadFileName(address, media) : $"{path}/{DownloadFileName(address, media)}";
+            }
+
+            if (!given)
+            {
+                path = await FreeName(store, path, cancellation);
+            }
+            else if (await Exists(store, path, cancellation))
+            {
+                throw new InvalidOperationException($"'{path}' already exists, and a download never replaces a file. Give another path.");
+            }
+
+            long total = 0;
+            await using Stream body = await response.Content.ReadAsStreamAsync(cancellation);
+
+            try
+            {
+                await using Stream file = await store.Open(path, StoreOpenMode.Create, cancellation);
+                byte[] chunk = new byte[81920];
+
+                for (int read = await body.ReadAsync(chunk, cancellation); read > 0; read = await body.ReadAsync(chunk, cancellation))
+                {
+                    total += read;
+
+                    if (total > maximum)
+                    {
+                        throw new InvalidOperationException($"The file at the address is more than the {maximum.DescribeSize()} a download may have, so it was not saved.");
+                    }
+
+                    await file.WriteAsync(chunk.AsMemory(0, read), cancellation);
+                }
+            }
+            catch
+            {
+                try
+                {
+                    await store.Delete(path, CancellationToken.None);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+
+                throw;
+            }
+
+            string next = path.StartsWith(CacheName, StringComparison.Ordinal) ? " It is in the cache, where an unused file is removed after a while, so copy it to the workspace to keep it." : string.Empty;
+            string view = media.IsImage() ? $" Look at it with {ImageName}." : string.Empty;
+            return $"Saved {path} ({total.DescribeSize()}, {media}).{view}{next}";
+        }
+        catch (Exception exception) when ((exception is HttpRequestException or TaskCanceledException) && !cancellation.IsCancellationRequested)
         {
             throw new InvalidOperationException($"The address could not be read: {exception.Message}");
         }
@@ -428,6 +581,10 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
             }
         }
     }
+
+    /// <inheritdoc />
+    public PromptTool CreateDownload(IStore store, Func<long> limit)
+        => PromptTool.Create<DownloadInput, string>(DownloadName, $"Downloads a file from an http or https address and saves it as a file, without it passing through the conversation: use it for images, PDFs, archives and any other large or binary file, and then open the file with the file tools or {ImageName}. path says where to save it, as with the file tools, and ends in / for a folder; leave it out to save it in {CacheName}/downloads under the name in the address. It never replaces an existing file, and a file larger than {limit().DescribeSize()} is refused. Use {FetchName} to read a page as text.", (input, cancellation) => Download(store, limit, input, cancellation));
 
     /// <inheritdoc />
     public PromptTool CreateSearch()
@@ -855,6 +1012,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
         }
 
         int seconds = Math.Clamp(input.TimeoutSeconds ?? shellDefaultSeconds, 1, shellMaxSeconds);
+        using IDisposable hold = tasks.Hold();
         using Process process = shell.Start(folder, input.Command);
         ShellOutput output = new(shellOutputLimit);
         Task readers = shell.Read(process, output);
@@ -1100,7 +1258,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     }
 
     private string Where()
-        => $" A path is relative to the workspace, your working directory, except that one starting with {CacheName} is in the cache, temporary storage that is lost when the session ends (for example {CacheName}/notes.txt). An absolute path is a path on this machine, which only works if the workspace allows it.";
+        => $" A path is relative to the workspace, your working directory, except that one starting with {SessionName} is in storage that is lost when the session ends (for example {SessionName}/notes.txt), and one starting with {CacheName} is in the same kind of storage, in which a file you did not read or write for a while is removed. An absolute path is a path on this machine, which only works if the workspace allows it.";
 
     private async IAsyncEnumerable<string> Walk(IStore store, string directory, [EnumeratorCancellation] CancellationToken cancellation = default)
     {
@@ -1182,7 +1340,7 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// <summary>
     /// The arguments of the tool that lists a folder.
     /// </summary>
-    /// <param name="Path">The folder, or <see langword="null" /> for the top, the workspace and the cache.</param>
+    /// <param name="Path">The folder, or <see langword="null" /> for the top, the workspace, the session storage and the cache.</param>
     internal sealed record DirectoryInput(string? Path = null);
 
     /// <summary>
@@ -1252,7 +1410,15 @@ internal sealed class PromptLibraryTools(HttpMessageHandler? handler = null, Tim
     /// </summary>
     /// <param name="Url">The http or https address.</param>
     /// <param name="MaxChars">The most characters to return, or <see langword="null" /> for the default.</param>
-    internal sealed record FetchInput(string Url, [property: JsonPropertyName("max_chars")] int? MaxChars = null);
+    /// <param name="Raw">Whether to return a page as it is, with its markup, instead of reduced to its text.</param>
+    internal sealed record FetchInput(string Url, [property: JsonPropertyName("max_chars")] int? MaxChars = null, bool? Raw = null);
+
+    /// <summary>
+    /// The arguments of the tool that downloads a file.
+    /// </summary>
+    /// <param name="Url">The http or https address.</param>
+    /// <param name="Path">Where to save the file, or <see langword="null" /> for the downloads folder of the cache.</param>
+    internal sealed record DownloadInput(string Url, string? Path = null);
 
     /// <summary>
     /// The arguments of the tool that tells the time.
@@ -1325,6 +1491,6 @@ internal static class PromptLibraryToolsExtensions
         /// </summary>
         /// <returns>The names.</returns>
         public IReadOnlyList<string> GetReservedNames()
-            => [.. tools.Names, tools.ShellName, tools.AskName, tools.ImageName, tools.FetchName, tools.SearchName, tools.GenerateImageName, tools.TimeName, tools.ToolSearchName, tools.DelegateName, .. tools.TaskNames];
+            => [.. tools.Names, tools.ShellName, tools.AskName, tools.ImageName, tools.FetchName, tools.DownloadName, tools.SearchName, tools.GenerateImageName, tools.TimeName, tools.ToolSearchName, tools.DelegateName, .. tools.TaskNames];
     }
 }
