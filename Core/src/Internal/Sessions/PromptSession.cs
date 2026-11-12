@@ -129,6 +129,12 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private bool teardownScheduled;
 
+    private Task saving = Task.CompletedTask;
+
+    private bool saveRequested;
+
+    private bool saveRunning;
+
     private PromptUsage usage = new();
 
     private CancellationTokenSource? turnInterrupt;
@@ -1806,6 +1812,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             await tasks.DisposeAsync();
             await StopTools();
             await ClosePool();
+            await WaitForSaves();
             await SaveConfiguration();
         }
         finally
@@ -1898,7 +1905,20 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     {
         lock (gate)
         {
-            if (disposed || teardownScheduled || live is null)
+            if (disposed)
+            {
+                return;
+            }
+
+            saveRequested = true;
+
+            if (!saveRunning)
+            {
+                saveRunning = true;
+                saving = Task.Run(SaveRequested, CancellationToken.None);
+            }
+
+            if (teardownScheduled || live is null)
             {
                 return;
             }
@@ -1906,6 +1926,43 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             teardownScheduled = true;
             teardown = Task.WhenAll(teardown, Task.Run(TearDown, CancellationToken.None));
         }
+    }
+
+    private async Task SaveRequested()
+    {
+        while (true)
+        {
+            lock (gate)
+            {
+                if (!saveRequested || disposed)
+                {
+                    saveRunning = false;
+                    return;
+                }
+
+                saveRequested = false;
+            }
+
+            try
+            {
+                await SaveConfiguration();
+            }
+            catch (PromptSessionException)
+            {
+            }
+        }
+    }
+
+    private async Task WaitForSaves()
+    {
+        Task running;
+
+        lock (gate)
+        {
+            running = saving;
+        }
+
+        await running.ContinueWith(static _ => { }, CancellationToken.None);
     }
 
     private PromptSessionRecord Merge(PromptSessionRecord record, PromptSessionSettingsSnapshot snapshot)

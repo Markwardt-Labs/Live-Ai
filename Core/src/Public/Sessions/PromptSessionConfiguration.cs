@@ -1,7 +1,7 @@
 namespace Markwardt.LiveAi;
 
 /// <summary>
-/// The settings of an <see cref="IPromptSession" />, which are changed by assigning to them or by changing their collections, at any time. Nothing happens at once: the session takes all the settings together when the next prompt starts, so changing several costs at most one restart of the AI's process, and a prompt that is running keeps what it started with. All of it is stored with the session, so a session that is loaded starts with it; the tools, MCP servers and asker are in <see cref="IPromptSessionTransientConfiguration" />. A value that is not allowed throws at the moment it is set and changes nothing, and once the session is disposed every change throws <see cref="ObjectDisposedException" />.
+/// The settings of an <see cref="IPromptSession" />, which are changed by assigning to them or by changing their collections, at any time. Nothing is applied at once: the session takes all the settings together when the next prompt starts, so changing several costs at most one restart of the AI's process, and a prompt that is running keeps what it started with. All of it is stored with the session, so a session that is loaded starts with it, and a change is written to the session's file at once in the background without waiting for a prompt or for the session to close; the tools, MCP servers and asker are in <see cref="IPromptSessionTransientConfiguration" />. A value that is not allowed throws at the moment it is set and changes nothing, and once the session is disposed every change throws <see cref="ObjectDisposedException" />.
 /// </summary>
 public interface IPromptSessionConfiguration
 {
