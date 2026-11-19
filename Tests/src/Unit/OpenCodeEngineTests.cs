@@ -126,6 +126,22 @@ public sealed class OpenCodeEngineTests
     }
 
     [Fact]
+    public void EveryProviderIsToldToWaitForeverForTheHeadersAndTheEndOfAResponseAndAlmostForeverBetweenChunks()
+    {
+        OpenCodeEngine local = new("opencode", ["http://localhost:11434/v1", "http://127.0.0.1:1234/v1"], [new OpenCodeModelProvider { Id = "x", BaseUrl = "http://box:9/v1", Models = [new OpenCodeModel { Id = "m" }] }]);
+
+        JsonElement ollama = JsonDocument.Parse(local.CreatePersistentStart(new PromptEngineStart { Model = "ollama/gemma4:26b", WorkingFolder = "/", Instructions = string.Empty }).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider");
+        JsonElement other = JsonDocument.Parse(local.CreatePersistentStart(new PromptEngineStart { Model = "x/m", WorkingFolder = "/", Instructions = string.Empty }).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider");
+
+        foreach (JsonElement options in new[] { ollama.GetProperty("ollama").GetProperty("options"), other.GetProperty("x").GetProperty("options") })
+        {
+            Assert.Equal(JsonValueKind.False, options.GetProperty("timeout").ValueKind);
+            Assert.Equal(JsonValueKind.False, options.GetProperty("headerTimeout").ValueKind);
+            Assert.Equal(2_000_000_000, options.GetProperty("chunkTimeout").GetInt32());
+        }
+    }
+
+    [Fact]
     public void TheModelOfAnotherLocalServerIsFoundByItsProviderIdentifier()
     {
         OpenCodeEngine local = new("opencode", ["http://localhost:11434/v1", "http://127.0.0.1:1234/v1"]);

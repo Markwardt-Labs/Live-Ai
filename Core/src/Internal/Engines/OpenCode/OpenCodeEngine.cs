@@ -18,6 +18,9 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
 
     private readonly TimeSpan exchangeTimeout = TimeSpan.FromSeconds(60);
 
+    // OpenCode takes only a positive number of milliseconds here (false is rejected) and a timer cannot exceed 2^31 - 1, so this is as close to never as it gets.
+    private readonly int chunkWait = 2_000_000_000;
+
     private readonly string instructions = Path.Combine(Path.GetTempPath(), "markwardt.liveai-opencode");
 
     /// <summary>
@@ -580,7 +583,7 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
         {
             ["npm"] = "@ai-sdk/openai-compatible",
             ["name"] = provider.Name ?? provider.Id,
-            ["options"] = new JsonObject { ["baseURL"] = provider.BaseUrl, ["apiKey"] = provider.ApiKey ?? apiKey ?? "none" },
+            ["options"] = new JsonObject { ["baseURL"] = provider.BaseUrl, ["apiKey"] = provider.ApiKey ?? apiKey ?? "none", ["timeout"] = false, ["headerTimeout"] = false, ["chunkTimeout"] = chunkWait },
             ["models"] = models
         };
     }
