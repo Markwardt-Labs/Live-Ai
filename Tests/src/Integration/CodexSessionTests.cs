@@ -85,6 +85,7 @@ public sealed class CodexSessionTests : IDisposable
         Assert.Equal(PromptDirectory(session), thread.GetProperty("cwd").GetString());
         JsonElement turn = Assert.Single(await fake.Parameters("turn/start"));
         Assert.Equal(("gpt-5.6-terra", "high", "codex-thread"), (turn.GetProperty("model").GetString(), turn.GetProperty("effort").GetString(), turn.GetProperty("threadId").GetString()));
+        Assert.Equal("auto", turn.GetProperty("summary").GetString());
         Assert.Equal(("text", "hi"), (turn.GetProperty("input")[0].GetProperty("type").GetString(), turn.GetProperty("input")[0].GetProperty("text").GetString()));
     }
 

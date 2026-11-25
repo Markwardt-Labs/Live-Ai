@@ -11,6 +11,8 @@ public sealed class FakeModelServer : IDisposable
 
     private readonly List<string> requested = [];
 
+    private readonly List<(string Path, string Body)> posted = [];
+
     private readonly object gate = new();
 
     private readonly Task serving;
@@ -55,6 +57,20 @@ public sealed class FakeModelServer : IDisposable
     }
 
     /// <summary>
+    /// Gets the bodies of the POST requests the server got, with the path of each, in order.
+    /// </summary>
+    public IReadOnlyList<(string Path, string Body)> Posted
+    {
+        get
+        {
+            lock (gate)
+            {
+                return [.. posted];
+            }
+        }
+    }
+
+    /// <summary>
     /// Makes the server answer a path.
     /// </summary>
     /// <param name="path">The path, such as <c>/api/tags</c>.</param>
@@ -94,10 +110,17 @@ public sealed class FakeModelServer : IDisposable
             }
 
             (int Status, string Body) answer;
+            string sent = context.Request.HttpMethod == "POST" ? await new StreamReader(context.Request.InputStream, Encoding.UTF8).ReadToEndAsync() : string.Empty;
 
             lock (gate)
             {
                 requested.Add(context.Request.Url!.AbsolutePath);
+
+                if (context.Request.HttpMethod == "POST")
+                {
+                    posted.Add((context.Request.Url.AbsolutePath, sent));
+                }
+
                 answer = routes.GetValueOrDefault(context.Request.Url.AbsolutePath, (404, "{}"));
             }
 

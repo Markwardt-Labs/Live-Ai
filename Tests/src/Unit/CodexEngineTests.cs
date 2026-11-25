@@ -170,6 +170,34 @@ public sealed class CodexEngineTests
     }
 
     [Fact]
+    public void Read_TurnsTheReasoningSummaryAndTheRawReasoningIntoThinkingEventsWithABlankLineBetweenSummaryParts()
+    {
+        JsonElement Values(string text) => JsonDocument.Parse(text).RootElement;
+
+        PromptEngineEvent summary = Assert.Single(engine.Read("item/reasoning/summaryTextDelta", Values("""{"turnId":"t","itemId":"r","delta":"**Calculating**","summaryIndex":0}"""), "t"));
+        PromptEngineEvent raw = Assert.Single(engine.Read("item/reasoning/textDelta", Values("""{"turnId":"t","itemId":"r","delta":"hmm","contentIndex":0}"""), "t"));
+        PromptEngineEvent separator = Assert.Single(engine.Read("item/reasoning/summaryPartAdded", Values("""{"turnId":"t","itemId":"r","summaryIndex":1}"""), "t"));
+
+        Assert.Equal(new PromptThinkingEvent { Text = "**Calculating**" }, summary.Event);
+        Assert.Equal(new PromptThinkingEvent { Text = "hmm" }, raw.Event);
+        Assert.Equal(new PromptThinkingEvent { Text = "\n\n" }, separator.Event);
+        Assert.Empty(engine.Read("item/reasoning/summaryPartAdded", Values("""{"turnId":"t","itemId":"r","summaryIndex":0}"""), "t"));
+        Assert.Empty(engine.Read("item/reasoning/summaryTextDelta", Values("""{"turnId":"t","itemId":"r","delta":""}"""), "t"));
+        Assert.Empty(engine.Read("item/reasoning/summaryTextDelta", Values("""{"turnId":"other","itemId":"r","delta":"x"}"""), "t"));
+    }
+
+    [Fact]
+    public void Read_ReportsTheToolSummarizingTheConversationAsANotice()
+    {
+        JsonElement item = JsonDocument.Parse("""{"item":{"type":"contextCompaction","id":"c"},"turnId":"t"}""").RootElement;
+
+        PromptEngineEvent started = Assert.Single(engine.Read("item/started", item, "t"));
+
+        Assert.Contains("summarized", Assert.IsType<PromptNoticeEvent>(started.Event).Text);
+        Assert.Empty(engine.Read("item/completed", item, "t"));
+    }
+
+    [Fact]
     public void Flags_TellTheSessionThatTheToolIsDrivenThroughItsAppServer()
         => Assert.Equal((true, true, true), (engine.CanPersist, engine.KeepsInstructions, engine.SchemaPerTurn));
 

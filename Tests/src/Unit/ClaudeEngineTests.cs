@@ -298,6 +298,42 @@ public sealed class ClaudeEngineTests
         => Assert.Empty(engine.Parse(line));
 
     [Fact]
+    public void Parse_ReportsTheStartOfAThinkingBlockAsANoticeBecauseTheToolMayNotSayWhatItThinks()
+    {
+        PromptEngineEvent started = Assert.Single(engine.Parse("""{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}}"""));
+
+        PromptNoticeEvent notice = Assert.IsType<PromptNoticeEvent>(started.Event);
+        Assert.Contains("thinking", notice.Text);
+    }
+
+    [Fact]
+    public void Parse_TurnsThinkingTextThatTheToolDoesReportIntoThinkingEventsAndSkipsEmptyOnes()
+    {
+        PromptEngineEvent thought = Assert.Single(engine.Parse("""{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"divide 156 by 52"}}}"""));
+
+        Assert.Equal(new PromptThinkingEvent { Text = "divide 156 by 52" }, thought.Event);
+        Assert.Empty(engine.Parse("""{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}}"""));
+        Assert.Empty(engine.Parse("""{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}}"""));
+    }
+
+    [Fact]
+    public void Parse_IgnoresTheThinkingOfASubAgent()
+    {
+        Assert.Empty(engine.Parse("""{"type":"stream_event","parent_tool_use_id":"toolu_1","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}"""));
+        Assert.Empty(engine.Parse("""{"type":"stream_event","parent_tool_use_id":"toolu_1","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"sub"}}}"""));
+    }
+
+    [Fact]
+    public void Parse_ReportsTheToolSummarizingTheConversationAsANoticeAndNoOtherStatus()
+    {
+        PromptEngineEvent compacting = Assert.Single(engine.Parse("""{"type":"system","subtype":"status","status":"compacting","session_id":"s"}"""));
+
+        Assert.Contains("summarized", Assert.IsType<PromptNoticeEvent>(compacting.Event).Text);
+        Assert.Empty(engine.Parse("""{"type":"system","subtype":"status","status":"requesting","session_id":"s"}"""));
+        Assert.Empty(engine.Parse("""{"type":"system","subtype":"init","session_id":"s"}"""));
+    }
+
+    [Fact]
     public void Frame_WithNotes_PutsEachInFrontOfThePromptAsASystemReminder()
     {
         string line = engine.Frame(Turn("go", notes: ["the build passes", "a file changed"]));

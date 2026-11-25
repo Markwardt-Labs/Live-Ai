@@ -18,6 +18,10 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
 
     private readonly TimeSpan exchangeTimeout = TimeSpan.FromSeconds(60);
 
+    private readonly ConcurrentDictionary<(string Model, int Context), string> prepared = new();
+
+    private readonly int highestOutput = 1_000_000;
+
     // OpenCode takes only a positive number of milliseconds here (false is rejected) and a timer cannot exceed 2^31 - 1, so this is as close to never as it gets.
     private readonly int chunkWait = 2_000_000_000;
 
@@ -451,7 +455,7 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
 
     private JsonObject Config(PromptEngineStart given, bool withServers)
     {
-        JsonObject config = new() { ["update"] = "disable", ["share"] = "disabled", ["snapshots"] = false, ["websearch"] = false };
+        JsonObject config = new() { ["update"] = "disable", ["share"] = "disabled", ["snapshots"] = false, ["websearch"] = false, ["agent"] = new JsonObject { ["title"] = new JsonObject { ["disable"] = true } } };
 
         if (given.Model is { } model)
         {
@@ -544,6 +548,27 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
         };
     }
 
+    /// <inheritdoc />
+    public async Task Prepare(PromptEngineStart start, CancellationToken cancellation = default)
+    {
+        if (start.Model is not { } id || Context(start) is not { } size || servers.FirstOrDefault(known => id.StartsWith($"{known.ProviderId}/", StringComparison.Ordinal)) is not { } server)
+        {
+            return;
+        }
+
+        if (await server.Prepare(id[(server.ProviderId.Length + 1)..], size, cancellation) is { } derived)
+        {
+            prepared[(id, size)] = derived;
+        }
+        else
+        {
+            prepared.TryRemove((id, size), out _);
+        }
+    }
+
+    private int? Context(PromptEngineStart given)
+        => given.Settings.TryGetValue("context", out string? size) && int.TryParse(size, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tokens) && tokens > 0 ? tokens : null;
+
     private OpenCodeModelProvider? LocalProvider(PromptEngineStart given)
     {
         if (given.Model is not { } id)
@@ -558,7 +583,7 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
             Id = server.ProviderId,
             Name = server.ProviderId == "ollama" ? "Ollama" : server.ProviderId,
             BaseUrl = server.BaseUrl,
-            Models = [new OpenCodeModel { Id = id[(server.ProviderId.Length + 1)..], ContextLimit = given.Settings.TryGetValue("context", out string? size) && int.TryParse(size, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tokens) ? tokens : null }]
+            Models = [new OpenCodeModel { Id = id[(server.ProviderId.Length + 1)..], ContextLimit = Context(given), ApiId = Context(given) is { } size && prepared.TryGetValue((id, size), out string? derived) ? derived : null }]
         };
     }
 
@@ -568,12 +593,11 @@ internal sealed class OpenCodeEngine(string command = "opencode", IEnumerable<st
 
         foreach (OpenCodeModel model in provider.Models)
         {
-            JsonObject description = new() { ["name"] = model.Name ?? model.Id, ["tool_call"] = true };
+            JsonObject description = new() { ["name"] = model.Name ?? model.Id, ["tool_call"] = true, ["limit"] = new JsonObject { ["context"] = model.ContextLimit ?? 0, ["output"] = model.OutputLimit ?? highestOutput } };
 
-            if (model.ContextLimit is not null || model.OutputLimit is not null)
+            if (model.ApiId is not null)
             {
-                int context = model.ContextLimit ?? 32768;
-                description["limit"] = new JsonObject { ["context"] = context, ["output"] = model.OutputLimit ?? Math.Min(8192, context / 2) };
+                description["id"] = model.ApiId;
             }
 
             models[model.Id] = description;

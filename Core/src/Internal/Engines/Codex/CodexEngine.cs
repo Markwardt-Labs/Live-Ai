@@ -9,6 +9,8 @@ internal sealed class CodexEngine(string command = "codex", string? configFolder
 {
     private readonly ITurnRunner turns = new TurnRunner();
 
+    private readonly PromptNotices notices = new();
+
     private readonly TimeSpan branchTimeout = TimeSpan.FromSeconds(60);
 
     private readonly string[] access = ["--disable", "shell_tool", "--disable", "multi_agent", "-c", "sandbox_mode=\"read-only\"", "-c", "approval_policy=\"never\""];
@@ -363,6 +365,12 @@ internal sealed class CodexEngine(string command = "codex", string? configFolder
             {
                 case "item/agentMessage/delta" when values.TryGetProperty("delta", out JsonElement delta) && delta.GetString() is { Length: > 0 } text:
                     return [Event(new PromptDeltaEvent { Text = text })];
+                case "item/reasoning/summaryTextDelta" or "item/reasoning/textDelta" when values.TryGetProperty("delta", out JsonElement thought) && thought.GetString() is { Length: > 0 } reasoning:
+                    return [Event(new PromptThinkingEvent { Text = reasoning })];
+                case "item/reasoning/summaryPartAdded" when values.TryGetProperty("summaryIndex", out JsonElement part) && part.TryGetInt32(out int index) && index > 0:
+                    return [Event(new PromptThinkingEvent { Text = "\n\n" })];
+                case "item/started" when values.TryGetProperty("item", out JsonElement compacting) && ItemKind(compacting) == "contextCompaction":
+                    return [Event(new PromptNoticeEvent { Text = notices.Compacting })];
                 case "item/completed" when values.TryGetProperty("item", out JsonElement finished) && ItemKind(finished) == "agentMessage" && finished.TryGetProperty("text", out JsonElement reply) && !string.IsNullOrWhiteSpace(reply.GetString()):
                     return [new PromptEngineEvent { Kind = PromptEngineEventKind.Reply, Text = reply.GetString()! }];
                 case "item/started" when values.TryGetProperty("item", out JsonElement searching) && ItemKind(searching) == "webSearch":

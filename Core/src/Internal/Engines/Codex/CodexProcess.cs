@@ -76,7 +76,8 @@ internal sealed class CodexProcess(CodexEngine engine, Process process, PromptEn
             {
                 ["threadId"] = thread,
                 ["input"] = Input(prompt),
-                ["model"] = prompt.Model
+                ["model"] = prompt.Model,
+                ["summary"] = "auto"
             };
 
             if (prompt.Settings.TryGetValue("effort", out string? effort))

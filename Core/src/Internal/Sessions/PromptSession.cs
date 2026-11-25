@@ -1315,7 +1315,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             }
 
             IPromptProcess? before = live;
-            IPromptProcess process = keep ? await Open(start.Record, start.Schema, start.Endpoint) : Launch(start.Record, start.Schema, start.Endpoint);
+            IPromptProcess process = keep ? await Open(start.Record, start.Schema, start.Endpoint) : await Launch(start.Record, start.Schema, start.Endpoint, cancellation);
             bool reused = keep && before is not null && ReferenceEquals(before, process);
             (string? folder, IReadOnlyList<string> files) = engine.NeedsFiles && attachments.Count > 0 ? await WriteFiles(attachments, cancellation) : (null, []);
             lock (gate)
@@ -1446,9 +1446,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         return (folder, files);
     }
 
-    private IPromptProcess Launch(PromptSessionRecord record, string? schema, ToolEndpoint? endpoint)
+    private async Task<IPromptProcess> Launch(PromptSessionRecord record, string? schema, ToolEndpoint? endpoint, CancellationToken cancellation = default)
     {
         PromptEngineStart given = record.ToStart(apiKey, schema, endpoint);
+        await engine.Prepare(given, cancellation);
         log.ProcessStarted(Id, engine.Identifier);
         return runner.Open(engine, engine.CreatePersistentStart(given), given);
     }
@@ -1464,7 +1465,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         spawnedFrom = effective;
         spawnedSchema = schema;
         spawnedTools = endpoint;
-        live = Launch(effective, schema, endpoint);
+        live = await Launch(effective, schema, endpoint);
         return live;
     }
 

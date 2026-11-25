@@ -52,6 +52,15 @@ internal interface IPromptEngine
         => schema.GetRawText();
 
     /// <summary>
+    /// Does whatever a process that is about to be started needs to find ready, such as making a model of a server that a setting of the session asks for. It never fails: when the preparation cannot be done the process starts without it.
+    /// </summary>
+    /// <param name="start">What the process is started for.</param>
+    /// <param name="cancellation">Cancels the preparation.</param>
+    /// <returns>A task that completes when the preparation is done.</returns>
+    Task Prepare(PromptEngineStart start, CancellationToken cancellation = default)
+        => Task.CompletedTask;
+
+    /// <summary>
     /// Describes the process that runs one prompt, which is written to its standard input.
     /// </summary>
     /// <param name="start">What the process is started for.</param>

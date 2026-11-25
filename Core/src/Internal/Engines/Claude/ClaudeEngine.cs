@@ -9,6 +9,8 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
 {
     private readonly ITurnRunner turns = new TurnRunner();
 
+    private readonly PromptNotices notices = new();
+
     private readonly string[] access = ["--permission-mode", "dontAsk", "--tools", string.Empty];
 
     private readonly string projects = Path.Combine(configFolder ?? Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"), "projects");
@@ -199,6 +201,10 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
                     return [.. results.EnumerateArray().Where(block => Kind(block) == "tool_result").Select(Result)];
                 case "stream_event" when main && root.TryGetProperty("event", out JsonElement streamed) && Delta(streamed) is { } delta:
                     return [Event(new PromptDeltaEvent { Text = delta })];
+                case "stream_event" when main && root.TryGetProperty("event", out JsonElement reasoned) && Reasoning(reasoned) is { } reasoning:
+                    return [Event(reasoning)];
+                case "system" when root.TryGetProperty("subtype", out JsonElement subtype) && subtype.GetString() == "status" && root.TryGetProperty("status", out JsonElement status) && status.GetString() == "compacting":
+                    return [Event(new PromptNoticeEvent { Text = notices.Compacting })];
                 case "rate_limit_event" when root.TryGetProperty("rate_limit_info", out JsonElement info) && Windows(info) is { } windows:
                     return [Event(new PromptWindowsEvent { Windows = windows })];
                 case "result" when root.TryGetProperty("is_error", out JsonElement error) && error.ValueKind == JsonValueKind.True:
@@ -390,6 +396,21 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
 
     private string? Delta(JsonElement streamed)
         => streamed.ValueKind == JsonValueKind.Object && streamed.TryGetProperty("type", out JsonElement type) && type.GetString() == "content_block_delta" && streamed.TryGetProperty("delta", out JsonElement delta) && delta.ValueKind == JsonValueKind.Object && delta.TryGetProperty("type", out JsonElement kind) && kind.GetString() == "text_delta" && delta.TryGetProperty("text", out JsonElement text) && text.GetString() is { Length: > 0 } written ? written : null;
+
+    private PromptEvent? Reasoning(JsonElement streamed)
+    {
+        if (streamed.ValueKind != JsonValueKind.Object || !streamed.TryGetProperty("type", out JsonElement type))
+        {
+            return null;
+        }
+
+        if (type.GetString() == "content_block_start" && streamed.TryGetProperty("content_block", out JsonElement block) && block.ValueKind == JsonValueKind.Object && block.TryGetProperty("type", out JsonElement kind) && kind.GetString() == "thinking")
+        {
+            return new PromptNoticeEvent { Text = notices.Thinking };
+        }
+
+        return type.GetString() == "content_block_delta" && streamed.TryGetProperty("delta", out JsonElement delta) && delta.ValueKind == JsonValueKind.Object && delta.TryGetProperty("type", out JsonElement deltaKind) && deltaKind.GetString() == "thinking_delta" && delta.TryGetProperty("thinking", out JsonElement thought) && thought.GetString() is { Length: > 0 } text ? new PromptThinkingEvent { Text = text } : null;
+    }
 
     private async Task<string> TurnEnd(string path, long position, CancellationToken cancellation = default)
     {

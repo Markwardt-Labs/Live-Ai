@@ -19,6 +19,22 @@ public sealed class ListModelsTests
     }
 
     [Fact]
+    public async Task Ollama_LeavesOutTheModelsThatWereMadeToGiveAModelAContextSize()
+    {
+        using FakeModelServer server = new FakeModelServer().Answer("/api/tags", """
+            { "models": [
+                { "name": "gemma4:26b", "capabilities": ["completion", "tools"] },
+                { "name": "gemma4:26b-liveai-ctx8192", "capabilities": ["completion", "tools"] },
+                { "name": "llama3:liveai-ctx4096", "capabilities": ["completion", "tools"] }
+            ] }
+            """);
+
+        IReadOnlyList<string> models = await LocalSetup.ListModels(new Uri(server.Api));
+
+        Assert.Equal(["gemma4:26b"], models);
+    }
+
+    [Fact]
     public async Task Ollama_GivesNoneWhenTheServerCannotBeReached()
         => Assert.Empty(await LocalSetup.ListModels(new Uri("http://127.0.0.1:1/v1")));
 

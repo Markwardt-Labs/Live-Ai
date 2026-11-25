@@ -10,6 +10,8 @@ internal sealed class OpenCodeProcess(OpenCodeEngine engine, Process process, Pr
 {
     private readonly Task<string> errors = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
+    private readonly PromptNotices notices = new();
+
     private readonly TimeSpan grace = TimeSpan.FromSeconds(3);
 
     private readonly TimeSpan answer = TimeSpan.FromSeconds(60);
@@ -232,6 +234,15 @@ internal sealed class OpenCodeProcess(OpenCodeEngine engine, Process process, Pr
             {
                 case "session.text.delta" when data.TryGetProperty("delta", out JsonElement delta) && delta.GetString() is { Length: > 0 } piece:
                     yield return Event(new PromptDeltaEvent { Text = piece });
+                    break;
+                case "session.reasoning.delta" when data.TryGetProperty("delta", out JsonElement thought) && thought.GetString() is { Length: > 0 } reasoning:
+                    yield return Event(new PromptThinkingEvent { Text = reasoning });
+                    break;
+                case "session.compaction.started" when !compacting:
+                    yield return Event(new PromptNoticeEvent { Text = notices.Compacting });
+                    break;
+                case "session.synthetic" when data.TryGetProperty("text", out JsonElement note) && note.GetString() is { } reminder && reminder.Contains("output token limit", StringComparison.Ordinal):
+                    yield return Event(new PromptNoticeEvent { Text = notices.Continuing });
                     break;
                 case "session.text.ended" when data.TryGetProperty("text", out JsonElement text) && text.GetString()?.Trim() is { Length: > 0 } reply:
                     yield return new PromptEngineEvent { Kind = PromptEngineEventKind.Reply, Text = structured ? Unfenced(reply) : reply };

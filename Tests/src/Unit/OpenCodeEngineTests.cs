@@ -99,15 +99,76 @@ public sealed class OpenCodeEngineTests
     }
 
     [Fact]
-    public async Task ALimitThatIsGivenAloneIsCompletedBecauseOpenCodeDropsAModelWithAnIncompleteOne()
+    public async Task TheTitleOfASessionIsNotGeneratedBecauseNothingUsesItAndItsModelCallDelaysTheFirstAnswer()
+    {
+        OpenCodeEngine engine = WithProvider(new OpenCodeModel { Id = "plain" });
+
+        JsonElement config = JsonDocument.Parse((await engine.CreateTestStart(null)).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+
+        Assert.True(config.GetProperty("agent").GetProperty("title").GetProperty("disable").GetBoolean());
+    }
+
+    [Fact]
+    public async Task EveryModelGetsBothLimitsSoOpenCodeKeepsItAndTheOutputLimitIsAsHighAsItAllowsUnlessGiven()
     {
         OpenCodeEngine limited = WithProvider(new OpenCodeModel { Id = "small", ContextLimit = 4000 }, new OpenCodeModel { Id = "capped", OutputLimit = 100 }, new OpenCodeModel { Id = "plain" });
 
         JsonElement models = JsonDocument.Parse((await limited.CreateTestStart(null)).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("x").GetProperty("models");
 
-        Assert.Equal((4000, 2000), (models.GetProperty("small").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("small").GetProperty("limit").GetProperty("output").GetInt32()));
-        Assert.Equal((32768, 100), (models.GetProperty("capped").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("capped").GetProperty("limit").GetProperty("output").GetInt32()));
-        Assert.False(models.GetProperty("plain").TryGetProperty("limit", out _));
+        Assert.Equal((4000, 1_000_000), (models.GetProperty("small").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("small").GetProperty("limit").GetProperty("output").GetInt32()));
+        Assert.Equal((0, 100), (models.GetProperty("capped").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("capped").GetProperty("limit").GetProperty("output").GetInt32()));
+        Assert.Equal((0, 1_000_000), (models.GetProperty("plain").GetProperty("limit").GetProperty("context").GetInt32(), models.GetProperty("plain").GetProperty("limit").GetProperty("output").GetInt32()));
+        Assert.False(models.GetProperty("plain").TryGetProperty("id", out _));
+    }
+
+    [Fact]
+    public async Task AModelThatAnApiIdIsGivenForIsSentToTheProviderUnderThatIdentifier()
+    {
+        OpenCodeEngine aliased = WithProvider(new OpenCodeModel { Id = "gemma", ApiId = "gemma-liveai-ctx8192" });
+
+        JsonElement model = JsonDocument.Parse((await aliased.CreateTestStart(null)).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement.GetProperty("provider").GetProperty("x").GetProperty("models").GetProperty("gemma");
+
+        Assert.Equal("gemma-liveai-ctx8192", model.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task PreparingALocalModelWithAContextSizeMakesAModelOfThatSizeAndTheConfigurationUsesItInPlaceOfTheModel()
+    {
+        using FakeModelServer server = new FakeModelServer().Answer("/api/create", """{ "status": "success" }""");
+        OpenCodeEngine local = new("opencode", [server.Api]);
+        string provider = $"local-{new Uri(server.Root).Port}";
+        PromptEngineStart given = new() { Model = $"{provider}/gemma4:26b", Settings = new Dictionary<string, string> { ["context"] = "8192" }, WorkingFolder = "/", Instructions = string.Empty };
+
+        await local.Prepare(given);
+
+        (string path, string body) = Assert.Single(server.Posted);
+        Assert.Equal("/api/create", path);
+        JsonElement made = JsonDocument.Parse(body).RootElement;
+        Assert.Equal("gemma4:26b-liveai-ctx8192", made.GetProperty("model").GetString());
+        Assert.Equal("gemma4:26b", made.GetProperty("from").GetString());
+        Assert.Equal(8192, made.GetProperty("parameters").GetProperty("num_ctx").GetInt32());
+        JsonElement config = JsonDocument.Parse(local.CreatePersistentStart(given).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+        JsonElement entry = config.GetProperty("provider").GetProperty(provider).GetProperty("models").GetProperty("gemma4:26b");
+        Assert.Equal("gemma4:26b-liveai-ctx8192", entry.GetProperty("id").GetString());
+        Assert.Equal($"{provider}/gemma4:26b", config.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task APreparationThatFailsLeavesTheModelAsItIsAndOneWithoutAContextSizeAsksNothing()
+    {
+        using FakeModelServer refusing = new FakeModelServer().Answer("/api/create", "{}", 500);
+        using FakeModelServer untouched = new();
+        OpenCodeEngine failing = new("opencode", [refusing.Api]);
+        OpenCodeEngine plain = new("opencode", [untouched.Api]);
+        string failingProvider = $"local-{new Uri(refusing.Root).Port}";
+        string plainProvider = $"local-{new Uri(untouched.Root).Port}";
+
+        await failing.Prepare(new PromptEngineStart { Model = $"{failingProvider}/m", Settings = new Dictionary<string, string> { ["context"] = "4096" }, WorkingFolder = "/", Instructions = string.Empty });
+        await plain.Prepare(new PromptEngineStart { Model = $"{plainProvider}/m", WorkingFolder = "/", Instructions = string.Empty });
+
+        JsonElement config = JsonDocument.Parse(failing.CreatePersistentStart(new PromptEngineStart { Model = $"{failingProvider}/m", Settings = new Dictionary<string, string> { ["context"] = "4096" }, WorkingFolder = "/", Instructions = string.Empty }).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
+        Assert.False(config.GetProperty("provider").GetProperty(failingProvider).GetProperty("models").GetProperty("m").TryGetProperty("id", out _));
+        Assert.Empty(untouched.Posted);
     }
 
     [Fact]
@@ -122,6 +183,7 @@ public sealed class OpenCodeEngineTests
         JsonElement provider = config.GetProperty("provider").GetProperty("ollama");
         Assert.Equal("http://localhost:11434/v1", provider.GetProperty("options").GetProperty("baseURL").GetString());
         Assert.Equal(8192, provider.GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("context").GetInt32());
+        Assert.Equal(1_000_000, provider.GetProperty("models").GetProperty("gemma4:26b").GetProperty("limit").GetProperty("output").GetInt32());
         Assert.Single(config.GetProperty("provider").EnumerateObject());
     }
 
@@ -150,7 +212,7 @@ public sealed class OpenCodeEngineTests
         JsonElement config = JsonDocument.Parse(local.CreatePersistentStart(given).Environment["OPENCODE_CONFIG_CONTENT"]!).RootElement;
 
         Assert.Equal("http://127.0.0.1:1234/v1", config.GetProperty("provider").GetProperty("local-1234").GetProperty("options").GetProperty("baseURL").GetString());
-        Assert.False(config.GetProperty("provider").GetProperty("local-1234").GetProperty("models").GetProperty("qwen3-coder").TryGetProperty("limit", out _));
+        Assert.Equal(0, config.GetProperty("provider").GetProperty("local-1234").GetProperty("models").GetProperty("qwen3-coder").GetProperty("limit").GetProperty("context").GetInt32());
     }
 
     [Fact]

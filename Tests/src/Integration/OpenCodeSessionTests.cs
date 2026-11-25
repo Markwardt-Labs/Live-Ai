@@ -198,6 +198,30 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TheReasoningOfTheModelComesAsThinkingEventsBeforeTheReply()
+    {
+        server.OnPrompt = _ => Turn(FakeOpenCodeServer.Step.Event("session.reasoning.started", new { ordinal = 0 }), FakeOpenCodeServer.Step.Event("session.reasoning.delta", new { ordinal = 0, delta = "let me " }), FakeOpenCodeServer.Step.Event("session.reasoning.delta", new { ordinal = 0, delta = "" }), FakeOpenCodeServer.Step.Event("session.reasoning.delta", new { ordinal = 0, delta = "think" }), FakeOpenCodeServer.Step.Event("session.reasoning.ended", new { ordinal = 0, text = "let me think" }), Text("done"), Tokens());
+        await using IPromptSession session = await Create();
+
+        List<PromptEvent> events = await session.EventList("hi");
+
+        Assert.Equal<PromptEvent>([new PromptThinkingEvent { Text = "let me " }, new PromptThinkingEvent { Text = "think" }, new PromptMessageEvent { Text = "done" }, new PromptUsageEvent { Usage = new PromptUsage { InputTokens = 10, OutputTokens = 5 } }], events);
+    }
+
+    [Fact]
+    public async Task ACompactionTheToolStartsOnItsOwnAndAnOutputLimitContinuationComeAsNotices()
+    {
+        server.OnPrompt = _ => Turn(FakeOpenCodeServer.Step.Event("session.compaction.started", new { reason = "auto" }), FakeOpenCodeServer.Step.Event("session.compaction.ended", new { }), FakeOpenCodeServer.Step.Event("session.synthetic", new { text = "Your last response hit the output token limit (stop reason: length). Break the remaining work into smaller pieces." }), FakeOpenCodeServer.Step.Event("session.synthetic", new { text = "Something else the tool tells the model." }), Text("done"), Tokens());
+        await using IPromptSession session = await Create();
+
+        List<PromptNoticeEvent> notices = [.. (await session.EventList("hi")).OfType<PromptNoticeEvent>()];
+
+        Assert.Equal(2, notices.Count);
+        Assert.Contains("summarized", notices[0].Text);
+        Assert.Contains("ran out of output tokens", notices[1].Text);
+    }
+
+    [Fact]
     public async Task AnExecutionThatFailsFailsTheRequestWithTheMessageOfTheError()
     {
         server.OnPrompt = _ => [FakeOpenCodeServer.Step.Event("session.execution.started", new { }), FakeOpenCodeServer.Step.Event("session.execution.failed", new { error = new { type = "provider.invalid-request", message = "the model is unreachable" } })];
@@ -249,7 +273,7 @@ public sealed class OpenCodeSessionTests : IAsyncLifetime
         string providerId = new LocalServer(ollama.Api).ProviderId;
         Assert.Equal($"{providerId}/gemma4:26b", config.GetProperty("model").GetString());
         JsonElement description = config.GetProperty("provider").GetProperty(providerId).GetProperty("models").GetProperty("gemma4:26b");
-        Assert.Equal((16384, 8192), (description.GetProperty("limit").GetProperty("context").GetInt32(), description.GetProperty("limit").GetProperty("output").GetInt32()));
+        Assert.Equal((16384, 1_000_000), (description.GetProperty("limit").GetProperty("context").GetInt32(), description.GetProperty("limit").GetProperty("output").GetInt32()));
         Assert.Equal(ollama.Api, config.GetProperty("provider").GetProperty(providerId).GetProperty("options").GetProperty("baseURL").GetString());
     }
 

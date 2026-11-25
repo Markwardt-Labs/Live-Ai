@@ -21,6 +21,15 @@ internal interface ILocalServer
     /// <param name="cancellation">Cancels the listing.</param>
     /// <returns>The models, or none when the server is not running or its answer cannot be read.</returns>
     Task<IReadOnlyList<PromptModel>> List(CancellationToken cancellation = default);
+
+    /// <summary>
+    /// Makes the server run a model with a context window of a size. Ollama's OpenAI compatible API ignores the size of the window in a request (it runs every model with the window of its own configuration, silently cutting off what does not fit), so for Ollama this makes a model of its own, derived from the one asked for with only that size set, which the API then runs with it. Any other server cannot be told, and a failure to make the model leaves things as they were.
+    /// </summary>
+    /// <param name="model">The identifier of the model on the server, without the provider.</param>
+    /// <param name="context">The size of the window, in tokens.</param>
+    /// <param name="cancellation">Cancels the preparation.</param>
+    /// <returns>The identifier of the model to ask for instead, or <see langword="null" /> when the server runs the model as it is.</returns>
+    Task<string?> Prepare(string model, int context, CancellationToken cancellation = default);
 }
 
 /// <inheritdoc />
@@ -37,6 +46,8 @@ internal sealed class LocalServer(string baseUrl, HttpClient? http = null) : ILo
     private readonly int unknownMaximum = 131072;
 
     private readonly int preferredContext = 4096;
+
+    private readonly Regex derived = new(@"[:-]liveai-ctx\d+$", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Gets how long the listing waits for the server before it gives none.
@@ -80,6 +91,25 @@ internal sealed class LocalServer(string baseUrl, HttpClient? http = null) : ILo
         }
     }
 
+    /// <inheritdoc />
+    public async Task<string?> Prepare(string model, int context, CancellationToken cancellation = default)
+    {
+        string name = $"{model}{(model.Contains(':', StringComparison.Ordinal) ? "-" : ":")}liveai-ctx{context.ToString(CultureInfo.InvariantCulture)}";
+        using CancellationTokenSource limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        limit.CancelAfter(Timeout);
+
+        try
+        {
+            using HttpRequestMessage request = new(HttpMethod.Post, $"{root}/api/create") { Content = new StringContent(new JsonObject { ["model"] = name, ["from"] = model, ["parameters"] = new JsonObject { ["num_ctx"] = context }, ["stream"] = false }.ToJsonString(), Encoding.UTF8, "application/json") };
+            using HttpResponseMessage response = await client.SendAsync(request, limit.Token);
+            return response.IsSuccessStatusCode ? name : null;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException && !cancellation.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
     private async Task<IReadOnlyList<PromptModel>?> Ollama(CancellationToken cancellation)
     {
         if (await Get($"{root}/api/tags", cancellation) is not { } tags)
@@ -101,7 +131,7 @@ internal sealed class LocalServer(string baseUrl, HttpClient? http = null) : ILo
             {
                 string? name = entry.TryGetProperty("name", out JsonElement found) ? found.GetString() : null;
 
-                if (name is null || await Capabilities(name, entry, cancellation) is not { } capabilities || !capabilities.Contains("tools"))
+                if (name is null || derived.IsMatch(name) || await Capabilities(name, entry, cancellation) is not { } capabilities || !capabilities.Contains("tools"))
                 {
                     continue;
                 }
