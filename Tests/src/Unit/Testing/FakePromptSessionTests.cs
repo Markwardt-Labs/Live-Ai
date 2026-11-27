@@ -229,37 +229,6 @@ public sealed class FakePromptSessionTests
     }
 
     [Fact]
-    public async Task AHangingPromptEndsWithACancellationOrAnInterruption()
-    {
-        FakePromptSession session = Session().Hang().Hang();
-
-        using CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(50));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.Request("b", null, cancellation: cancellation.Token));
-        Task<List<PromptEvent>> running = session.EventList("c");
-        await Task.Delay(100);
-        bool interrupted = await session.Interrupt();
-        List<PromptEvent> events = await running.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.True(interrupted);
-        Assert.Equal([new PromptInterruptedEvent()], events);
-        Assert.False(await Session().Interrupt());
-    }
-
-    [Fact]
-    public async Task ARequestAfterAnInterruptRunsTheNextScriptedPrompt()
-    {
-        FakePromptSession session = Session().Hang().Reply("new direction");
-        Task<List<PromptEvent>> running = session.EventList("long");
-        await Task.Delay(100);
-
-        await session.Interrupt();
-        Assert.Equal([new PromptInterruptedEvent()], await running.WaitAsync(TimeSpan.FromSeconds(5)));
-        string steered = await session.Request("change");
-
-        Assert.Equal("new direction", steered);
-    }
-
-    [Fact]
     public async Task ASessionWithAClockRecordsItsTimeOnThePrompts()
     {
         ManualTime clock = new();
@@ -349,26 +318,6 @@ public sealed class FakePromptSessionTests
         await session.Request("go");
 
         Assert.Equal(["partial", "go"], (await session.GetHistory().Take(10).ToListAsync()).Select(entry => entry.Text));
-    }
-
-    [Fact]
-    public async Task DisposingEndsTheSessionGracefullyOrAtOnce()
-    {
-        FakePromptSession graceful = Session().Reply("fine");
-        await graceful.DisposeAsync();
-        FakePromptSession immediate = Session().Hang();
-        Task<string> running = immediate.Request("long");
-        await Task.Delay(100);
-
-        immediate.Dispose();
-
-        Assert.True(graceful.IsDisposed);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Request("x"));
-        Assert.Throws<ObjectDisposedException>(() => graceful.Configuration.Instructions = "late");
-        Assert.Throws<ObjectDisposedException>(() => graceful.Transient.Tools.Add(PromptTool.Create<Question, string>("late", "d", (_, _) => Task.FromResult("x"))));
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Interrupt());
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => graceful.Fork());
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]

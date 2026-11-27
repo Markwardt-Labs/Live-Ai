@@ -42,8 +42,9 @@ jobs:
       - name: Verify formatting
         run: dotnet format --verify-no-changes
 
+      # A test that waits forever would otherwise only end with the job's timeout, with nothing to say which one it was.
       - name: Test
-        run: dotnet test Tests/Tests.csproj --configuration Debug
+        run: dotnet test Tests/Tests.csproj --configuration Debug --blame-hang-timeout 3m --blame-hang-dump-type none
 
   publish:
     needs: build-and-test

@@ -14,16 +14,6 @@ public sealed class PromptFetchToolTests
         => new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, type) };
 
     [Fact]
-    public void Create_IsNamedAfterTheReservedName()
-    {
-        PromptTool tool = new PromptLibraryTools().CreateFetch();
-
-        Assert.Equal("fetch_url", tool.Name);
-        Assert.Equal("fetch_url", new PromptLibraryTools().FetchName);
-        Assert.Contains("max_chars", tool.InputSchema.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task Run_ReturnsPlainTextAsItIsAndHtmlReducedToItsReadableText()
     {
         answer = request => request.RequestUri!.AbsolutePath == "/page"

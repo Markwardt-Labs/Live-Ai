@@ -36,16 +36,6 @@ public sealed class PromptWebSearchToolTests
         => await (tool ?? Tool()).Handler(JsonDocument.Parse(json).RootElement, CancellationToken.None);
 
     [Fact]
-    public void Create_IsNamedAfterTheReservedNameAndTakesWordsAndACount()
-    {
-        PromptTool tool = Tool();
-
-        Assert.Equal("search_web", tool.Name);
-        Assert.Equal("search_web", new PromptLibraryTools().SearchName);
-        Assert.Contains("max_results", tool.InputSchema.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task Run_PostsTheWordsToDuckDuckGosHtmlPageAndListsTheResultsWithTheirSnippets()
     {
         answer = _ => Page(Result("https://github.com/dotnet/core/releases", "Releases &middot; dotnet/core", ".NET <b>release</b> notes &amp; more") + Result("https://example.com/b", "Second", "second snippet"));

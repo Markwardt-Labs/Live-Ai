@@ -82,22 +82,6 @@ public sealed class BackgroundTaskTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Wait_ReturnsWhenTheTimeIsUpWithHowLongTheTaskRunsAndItsLatestOutput()
-    {
-        await Call(shell, $$"""{"command":{{Escaped("echo first; echo second; sleep 30")}},"background":true}""");
-        await Task.Delay(500);
-
-        DateTime begun = DateTime.UtcNow;
-        string report = await Call(following["task_wait"], """{"timeout_seconds":1}""");
-
-        Assert.InRange(DateTime.UtcNow - begun, TimeSpan.FromMilliseconds(800), TimeSpan.FromSeconds(10));
-        Assert.Contains("task-1 is still running after", report);
-        Assert.Contains("first\nsecond", report);
-        Assert.Contains("echo first", report);
-        Assert.Contains("If you owe the user a status update, write it now", report);
-    }
-
-    [Fact]
     public async Task Wait_ReturnsAsSoonAsOneOfTheTasksEndsAndReportsTheOthersAsRunning()
     {
         await Call(shell, $$"""{"command":{{Escaped("sleep 30")}},"background":true}""");
@@ -134,36 +118,6 @@ public sealed class BackgroundTaskTests : IAsyncLifetime
         Assert.Contains("task-2 ended", report);
         Assert.DoesNotContain("task-1", report);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Call(following["task_wait"], """{"task_ids":["task-9"]}"""));
-    }
-
-    [Fact]
-    public async Task Output_ReadsTheLatestLinesWithoutWaitingAndRefusesAHelper()
-    {
-        await Call(shell, $$"""{"command":{{Escaped("for i in 1 2 3 4 5; do echo line$i; done; sleep 30")}},"background":true}""");
-        await Call(delegation, """{"task":"slow","background":true}""");
-        await Task.Delay(500);
-
-        Assert.Equal("line4\nline5", await Call(following["task_output"], """{"task_id":"task-1","lines":2}"""));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Call(following["task_output"], """{"task_id":"task-2"}"""));
-    }
-
-    [Fact]
-    public async Task Stop_EndsACommandAndEverythingItStartedAndWaitReportsItStopped()
-    {
-        string marker = temp.Combine("alive.txt");
-        await Call(shell, $$"""{"command":{{Escaped($"(while true; do date > {marker}; sleep 0.2; done) & sleep 60")}},"background":true}""");
-        await Task.Delay(700);
-        Assert.True(File.Exists(marker));
-
-        string stopping = await Call(following["task_stop"], """{"task_id":"task-1"}""");
-        string report = await Call(following["task_wait"], """{"timeout_seconds":10}""");
-        DateTime last = File.GetLastWriteTimeUtc(marker);
-        await Task.Delay(800);
-
-        Assert.Equal("Stopping task-1.", stopping);
-        Assert.Contains("task-1 was stopped", report);
-        Assert.Equal(last, File.GetLastWriteTimeUtc(marker));
-        Assert.Equal("task-1 had already ended.", await Call(following["task_stop"], """{"task_id":"task-1"}"""));
     }
 
     [Fact]

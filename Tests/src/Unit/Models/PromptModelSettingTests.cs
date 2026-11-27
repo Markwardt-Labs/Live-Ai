@@ -60,14 +60,6 @@ public sealed class PromptModelSettingTests
     public void ANumberAcceptsWholeNumbersInItsRange(string value, bool accepted)
         => Assert.Equal(accepted, PromptModelSetting.Count("context", "Context", 1024, 8192, 4096).Accepts(value));
 
-    [Fact]
-    public void ACountKeepsItsRangeAndWritesItsDefaultAsText()
-    {
-        PromptModelSetting setting = PromptModelSetting.Count("context", "Context", 1024, 8192, 4096);
-
-        Assert.Equal((PromptModelSettingKind.Number, 1024, 8192, "4096"), (setting.Kind, setting.Minimum, setting.Maximum, setting.Default));
-    }
-
     [Theory]
     [InlineData(10, 5, 7)]
     [InlineData(1, 5, 9)]

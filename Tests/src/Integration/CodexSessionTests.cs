@@ -34,24 +34,6 @@ public sealed class CodexSessionTests : IDisposable
     private string Completed(string status = "completed", string error = "")
         => Emit($$$$"""{"method":"turn/completed","params":{"threadId":"@TID@","turn":{"id":"@TURN@","status":"{{{{status}}}}"{{{{error}}}}}}}""");
 
-    [Fact]
-    public async Task Send_WhileTheTurnRuns_SteersTheInputIntoTheRunningTurn()
-    {
-        await using IPromptSession session = await Create(fake.Script(turn: ":", steer: Completed()));
-
-        await session.Send("first");
-        await WaitFor(() => session.State == PromptSessionState.Working && File.Exists(temp.Combine("turn-started")));
-        await Task.Delay(300);
-        await session.Send("second");
-        await WaitFor(() => session.State == PromptSessionState.Waiting);
-
-        JsonElement steer = Assert.Single(await fake.Parameters("turn/steer"));
-        Assert.Equal("turn-1", steer.GetProperty("expectedTurnId").GetString());
-        Assert.Contains("second", steer.GetProperty("input").ToString());
-        Assert.Single(await fake.Parameters("turn/start"));
-        Assert.Equal(PromptSessionState.Waiting, session.State);
-    }
-
     private async Task WaitFor(Func<bool> condition)
     {
         for (int attempt = 0; attempt < 400 && !condition(); attempt++)

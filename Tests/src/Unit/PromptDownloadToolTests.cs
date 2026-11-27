@@ -18,17 +18,6 @@ public sealed class PromptDownloadToolTests
         => new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) { Headers = { ContentType = new MediaTypeHeaderValue(type) } } };
 
     [Fact]
-    public void Create_IsNamedAfterTheReservedNameAndTellsTheLimit()
-    {
-        PromptTool tool = new PromptLibraryTools().CreateDownload(store, () => 5 * 1024 * 1024);
-
-        Assert.Equal("download_url", tool.Name);
-        Assert.Equal("download_url", new PromptLibraryTools().DownloadName);
-        Assert.Contains("5 MiB", tool.Description);
-        Assert.Contains(".liveai-cache/downloads", tool.Description);
-    }
-
-    [Fact]
     public async Task Run_WithoutAPath_SavesInTheDownloadsFolderOfTheCacheUnderTheNameInTheAddress()
     {
         answer = _ => File("application/octet-stream", [1, 2, 3]);

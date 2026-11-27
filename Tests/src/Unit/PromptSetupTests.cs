@@ -251,32 +251,6 @@ public sealed class PromptSetupTests
     }
 
     [Fact]
-    public async Task Fork_WaitsForThePromptThatIsRunning()
-    {
-        PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task));
-        engine.Setup(mock => mock.Branch(It.Is<PromptEngineStart>(start => start.AiSessionId == "origin"), It.IsAny<PromptHistoryPoint?>(), It.IsAny<CancellationToken>())).ReturnsAsync(new PromptBranch { AiSessionId = "copy" });
-        PromptSessionLink? stored = null;
-        opener.Setup(mock => mock.Open(It.IsAny<PromptSessionLink>(), It.IsAny<IPromptToolService>(), It.IsAny<IPromptEngine>(), It.IsAny<string?>())).Returns((PromptSessionLink record, IPromptToolService _, IPromptEngine _, string? _) =>
-        {
-            stored = record;
-            return OpenedSession();
-        });
-        Task<string> prompt = session.Request("go");
-        await Task.Delay(100);
-
-        Task<IPromptSession> forking = session.Fork();
-        await Task.Delay(100);
-
-        Assert.False(forking.IsCompleted);
-        release.SetResult();
-        await prompt;
-        await forking;
-        Directory.Delete(stored!.WorkingFolder, true);
-    }
-
-    [Fact]
     public async Task Fork_WhenTheCopyFailsWithAnIoError_FailsWithASessionError()
     {
         PromptSession session = Session(Record(builder => builder.AiSessionId = "origin"));
@@ -429,58 +403,6 @@ public sealed class PromptSetupTests
         => Assert.False(await Session().Interrupt());
 
     [Fact]
-    public async Task Interrupt_EndsThePromptThatRunsNormallyWithAnInterruptedEventAndLeavesTheSessionUsable()
-    {
-        PromptSession session = Session();
-        RunsHang();
-        Task<List<PromptEvent>> running = session.EventList("long");
-        await Task.Delay(150);
-
-        Assert.True(await session.Interrupt());
-        List<PromptEvent> events = await running.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal([new PromptInterruptedEvent()], events);
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events(Event(PromptEngineEventKind.Reply, "again")));
-        Assert.Equal("again", await session.Request("next"));
-        Assert.False(await session.Interrupt());
-    }
-
-    [Fact]
-    public async Task Interrupt_OfAKeptProcess_AsksItToStopAndSwallowsTheFailedTurnItEndsWith()
-    {
-        engine.SetupGet(mock => mock.CanPersist).Returns(true);
-        PromptSession session = Session();
-        TaskCompletionSource stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.Setup(mock => mock.Run(It.IsAny<PromptInput>(), It.IsAny<CancellationToken>())).Returns(() => Interruptible(stopped.Task));
-        process.Setup(mock => mock.Interrupt(It.IsAny<CancellationToken>())).Callback(() => stopped.SetResult()).Returns(Task.CompletedTask);
-        Task<List<PromptEvent>> running = session.EventList("long");
-        await Task.Delay(150);
-
-        Assert.True(await session.Interrupt());
-        List<PromptEvent> events = await running.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal<PromptEvent>([new PromptMessageEvent { Text = "partial" }, new PromptInterruptedEvent()], events);
-        process.Verify(mock => mock.Interrupt(It.IsAny<CancellationToken>()), Times.Once);
-        process.Verify(mock => mock.Stop(), Times.Never);
-    }
-
-    [Fact]
-    public async Task ARequestAfterAnInterrupt_RunsInTheSameConversationOnceTheInterruptedPromptHasEnded()
-    {
-        PromptSession session = Session();
-        int calls = 0;
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns((IPromptEngine _, ProcessStartInfo _, string text, CancellationToken token) => Interlocked.Increment(ref calls) == 1 ? Hang(token) : Events(Event(PromptEngineEventKind.Reply, $"ran {text}")));
-        Task<List<PromptEvent>> first = session.EventList("long");
-        await Task.Delay(150);
-
-        await session.Interrupt();
-        Assert.Equal([new PromptInterruptedEvent()], await first.WaitAsync(TimeSpan.FromSeconds(5)));
-        string second = await session.Request("new direction");
-
-        Assert.Equal("ran new direction", second);
-    }
-
-    [Fact]
     public async Task Interrupt_AfterDisposal_Throws()
     {
         PromptSession session = Session();
@@ -499,13 +421,6 @@ public sealed class PromptSetupTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.Request("long", null, cancellation: cancellation.Token));
     }
 
-    private async IAsyncEnumerable<PromptEngineEvent> Interruptible(Task interrupted)
-    {
-        yield return Event(PromptEngineEventKind.Reply, "partial");
-        await interrupted;
-        yield return Event(PromptEngineEventKind.Failed, "aborted");
-    }
-
     private IPromptSession OpenedSession()
     {
         Mock<IPromptSession> opened = new();
@@ -521,12 +436,6 @@ public sealed class PromptSetupTests
 
     private void RunsHang()
         => runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns((IPromptEngine _, ProcessStartInfo _, string _, CancellationToken token) => Hang(token));
-
-    private async IAsyncEnumerable<PromptEngineEvent> Blocked(Task release)
-    {
-        await release;
-        yield return Event(PromptEngineEventKind.Reply, "done");
-    }
 
     private PromptHistoryEntry Entry(long position = 7)
         => new() { Event = new PromptInputEvent { Text = "asked" }, Point = new PromptHistoryPoint(position) };

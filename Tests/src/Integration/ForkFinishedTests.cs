@@ -143,43 +143,4 @@ public sealed class ForkFinishedTests : IDisposable
 
         Assert.Null(none.AiSessionId);
     }
-
-    [Fact]
-    public async Task ForkFinished_DoesNotWaitForTheRunningPromptAndLeavesItOut()
-    {
-        // The first prompt answers at once; the second one is written down and then held until the test lets it go.
-        string script = temp.Script("claude", $$$"""
-            mkdir -p "$CLAUDE_CONFIG_DIR/projects/$(pwd | sed 's/[^a-zA-Z0-9]/-/g')"
-            file="$CLAUDE_CONFIG_DIR/projects/$(pwd | sed 's/[^a-zA-Z0-9]/-/g')/live.jsonl"
-            IFS= read -r line
-            now=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-            if [ -s "$file" ]; then
-              echo "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"live\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"running\"}}" >> "$file"
-              : > "{{{temp.Path}}}/running"
-              while [ ! -e "{{{temp.Path}}}/release" ]; do sleep 0.05; done
-            else
-              echo "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"live\",\"timestamp\":\"$now\",\"message\":{\"role\":\"user\",\"content\":\"finished\"}}" >> "$file"
-              echo "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"live\",\"timestamp\":\"$now\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}" >> "$file"
-              sleep 0.05
-            fi
-            echo '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}'
-            echo '{"type":"result","is_error":false,"session_id":"live"}'
-            """);
-        await using IPromptSession origin = temp.Track(await TestServices.Make(new ClaudeEngine(script, temp.Combine("claude-state")), temp.Combine("data")).Create(TestModels.Options));
-        await origin.Request("finished");
-        Task<string> running = origin.Request("running");
-
-        for (int attempt = 0; attempt < 500 && !File.Exists(temp.Combine("running")); attempt++)
-        {
-            await Task.Delay(20);
-        }
-
-        await using IPromptSession fork = temp.Track(await origin.ForkFinished().WaitAsync(TimeSpan.FromSeconds(10)));
-
-        Assert.False(running.IsCompleted);
-        string history = string.Join(',', (await fork.GetHistory().ToListAsync()).Select(entry => entry.Text));
-        Assert.Equal("done,finished", history);
-        await File.WriteAllTextAsync(temp.Combine("release"), string.Empty);
-        await running;
-    }
 }

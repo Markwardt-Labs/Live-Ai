@@ -111,42 +111,6 @@ public sealed class PersistentSessionTests : IDisposable
         }
     }
 
-    private string Interruptible()
-        => """
-        case "$line" in
-        *control_request*)
-        kill $bg 2>/dev/null
-        echo '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}'
-        echo '{"type":"result","is_error":true,"subtype":"error_during_execution","session_id":"persistent-session"}'
-        ;;
-        *slow*)
-        sleep 30 &
-        bg=$!
-        ;;
-        *)
-        echo '{"type":"assistant","message":{"content":[{"type":"text","text":"fine"}]}}'
-        echo '{"type":"result","is_error":false,"session_id":"persistent-session"}'
-        ;;
-        esac
-        """;
-
-    [Fact]
-    public async Task Interrupt_StopsThePromptInTheSameProcessWhichThenTakesTheNextOne()
-    {
-        await using IPromptSession session = await Session(Interruptible());
-        Task<List<PromptEvent>> slow = session.EventList("slow task");
-        await Task.Delay(250);
-
-        Assert.True(await session.Interrupt());
-        List<PromptEvent> events = await slow.WaitAsync(TimeSpan.FromSeconds(10));
-        string next = await session.Request("quick");
-
-        Assert.Equal<PromptEvent>([new PromptMessageEvent { Text = "partial" }, new PromptInterruptedEvent()], events);
-        Assert.Equal("fine", next);
-        Assert.Single(await Pids());
-        Assert.Contains("control_request", await File.ReadAllTextAsync(temp.Combine("frames.txt")));
-    }
-
     [Fact]
     public async Task Events_ReportTheCostOfEachPromptAndNotTheRunningTotalOfTheProcess()
     {

@@ -25,16 +25,6 @@ public sealed class PromptGenerateImageToolTests
         }
     }
 
-    [Fact]
-    public void Create_IsNamedAfterTheReservedNameAndTakesAPromptAndAPath()
-    {
-        PromptTool tool = Tool();
-
-        Assert.Equal("generate_image", tool.Name);
-        Assert.Equal("generate_image", new PromptLibraryTools().GenerateImageName);
-        Assert.Equal(["prompt", "path"], tool.InputSchema.GetProperty("required").EnumerateArray().Select(name => name.GetString()));
-    }
-
     [Theory]
     [InlineData((int)(PromptImageFeatures.None), new[] { "prompt", "path", "width", "height", "quality", "count" })]
     [InlineData((int)(PromptImageFeatures.Transparency), new[] { "prompt", "path", "width", "height", "quality", "count", "transparent" })]

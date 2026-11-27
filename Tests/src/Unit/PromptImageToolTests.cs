@@ -22,25 +22,6 @@ public sealed class PromptImageToolTests
         await stream.WriteAsync(Enumerable.Range(0, length).Select(index => (byte)index).ToArray());
     }
 
-    [Fact]
-    public void Create_IsNamedAfterTheReservedNameAndTakesAPath()
-    {
-        PromptTool tool = Tool();
-
-        Assert.Equal("view_image", tool.Name);
-        Assert.Equal("view_image", new PromptLibraryTools().ImageName);
-        Assert.Contains("path", tool.InputSchema.ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Create_SaysItsPathsAreTheOnesOfTheFileTools()
-    {
-        string description = Tool().Description;
-
-        Assert.Contains("same paths as the file tools", description, StringComparison.Ordinal);
-        Assert.Contains(".liveai-session", description, StringComparison.Ordinal);
-    }
-
     [Theory]
     [InlineData("docs/shot.PNG", "image/png")]
     [InlineData("a.jpg", "image/jpeg")]

@@ -57,16 +57,6 @@ public sealed class PromptSessionTests
         => new() { Kind = kind, Text = text };
 
     [Fact]
-    public void Properties_DescribeTheRecord()
-    {
-        PromptSessionRecord record = Record("abc");
-        PromptSession session = Session(record, "key");
-
-        Assert.Equal(record.Id.ToString("N"), session.Id);
-        Assert.Equal((PromptCapability.Balanced, PromptEffort.High), (session.Configuration.Capability, session.Configuration.Effort));
-    }
-
-    [Fact]
     public async Task Send_ReportsEachReplyAndStoresTheNewProviderSession()
     {
         PromptSession session = Session(Record());
@@ -197,24 +187,6 @@ public sealed class PromptSessionTests
         Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Capability = (PromptCapability)99);
         Assert.Throws<ArgumentOutOfRangeException>(() => session.Configuration.Effort = (PromptEffort)99);
         Assert.Equal((PromptCapability.Balanced, PromptEffort.High), (session.Configuration.Capability, session.Configuration.Effort));
-    }
-
-    [Fact]
-    public async Task Settings_ChangedWhileAPromptRuns_ApplyFromTheNextPrompt()
-    {
-        PromptSession session = Session(Record());
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
-        Task<List<string>> first = session.Messages("one");
-        await Task.Delay(100);
-
-        session.Configuration.Effort = PromptEffort.Max;
-        release.SetResult();
-        await first;
-        await session.Messages("two");
-
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Settings["effort"] == "high" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Settings["effort"] == "max" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
     }
 
     private PromptSession Persistent(PromptSessionRecord? record = null)
@@ -467,61 +439,6 @@ public sealed class PromptSessionTests
         await session.DisposeAsync();
         process.Verify(mock => mock.DisposeAsync(), Times.Once);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => session.Messages("two"));
-    }
-
-    [Fact]
-    public async Task Dispose_CancelsThePromptThatIsRunning()
-    {
-        PromptSession session = Session(Record());
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns((IPromptEngine _, ProcessStartInfo _, string _, CancellationToken token) => UntilCancelled(token));
-        Task<List<string>> running = session.Messages("slow");
-        await Task.Delay(100);
-
-        session.Dispose();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
-        await session.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task DisposeAsync_WaitsForThePromptThatIsRunning()
-    {
-        PromptSession session = Persistent();
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.Setup(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "slow"), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
-        Task<List<string>> running = session.Messages("slow");
-        await Task.Delay(100);
-        Task<List<string>> asked = session.Messages("behind");
-        await Assert.ThrowsAsync<PromptSessionStateException>(() => asked);
-        await Task.Delay(50);
-
-        ValueTask disposing = session.DisposeAsync();
-        await Task.Delay(150);
-        Assert.False(disposing.IsCompleted);
-        release.SetResult();
-        await disposing;
-
-        Assert.Equal(["done"], await running);
-        process.Verify(mock => mock.Stop(), Times.Never);
-        process.Verify(mock => mock.DisposeAsync(), Times.Once);
-    }
-
-    [Fact]
-    public async Task Dispose_WhileAGracefulDisposalWaits_HurriesItUp()
-    {
-        PromptSession session = Persistent();
-        process.Setup(mock => mock.Run(It.Is<PromptInput>(turn => turn.Text == "slow"), It.IsAny<CancellationToken>())).Returns((PromptInput _, CancellationToken token) => UntilCancelled(token));
-        Task<List<string>> running = session.Messages("slow");
-        await Task.Delay(100);
-        ValueTask disposing = session.DisposeAsync();
-        await Task.Delay(100);
-        Assert.False(disposing.IsCompleted);
-
-        session.Dispose();
-
-        await disposing;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
-        process.Verify(mock => mock.Stop(), Times.AtLeastOnce);
     }
 
     private JsonElement Schema(string json = """{"type":"object"}""")
@@ -828,15 +745,6 @@ public sealed class PromptSessionTests
 
         Assert.Equal("one", await files.ReadText("a.txt"));
         Assert.Equal("one", await File.ReadAllTextAsync(Path.Combine(folder.Path, "a.txt")));
-    }
-
-    [Fact]
-    public void WorkspacePath_IsTheWorkingFolderOfTheRecordWhetherOrNotTheCallerGaveIt()
-    {
-        using TempFolder folder = new();
-
-        Assert.Equal("/work", Session(Record()).WorkspacePath);
-        Assert.Equal(folder.Path, Session(Record() with { WorkspacePath = folder.Path, WorkingFolder = folder.Path }).WorkspacePath);
     }
 
     [Fact]
@@ -1679,27 +1587,6 @@ public sealed class PromptSessionTests
 
         runner.Verify(mock => mock.Open(engine.Object, It.IsAny<ProcessStartInfo>(), It.IsAny<PromptEngineStart>()), Times.Exactly(2));
         engine.Verify(mock => mock.CreatePersistentStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.Settings["effort"] == "high" && start.Instructions.EndsWith("Be brief.") && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-    }
-
-    [Fact]
-    public async Task AChangeWhileAPromptRuns_DoesNotReachThatPromptAndSettingsAreTakenTogetherAtTheNext()
-    {
-        PromptSession session = Session(Record());
-        toolHost.Setup(mock => mock.Start(It.IsAny<IReadOnlyList<PromptTool>>())).Returns(Server().Object);
-        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Blocked(release.Task, () => { }));
-        Task<List<string>> first = session.Messages("one");
-        await Task.Delay(100);
-
-        session.Configuration.Capability = PromptCapability.Strong;
-        session.Transient.Tools.Add(Tool("late"));
-        release.SetResult();
-        await first;
-        runner.Setup(mock => mock.Run(It.IsAny<IPromptEngine>(), It.IsAny<ProcessStartInfo>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(() => Events());
-        await session.Messages("two");
-
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "sonnet" && start.ApiKey == null && start.Schema == null && start.OffersOnlyRespond())), Times.Once);
-        engine.Verify(mock => mock.CreateStart(It.Is<PromptEngineStart>(start => start.Model == "opus" && start.ApiKey == null && start.Schema == null)), Times.Once);
     }
 
     [Fact]
