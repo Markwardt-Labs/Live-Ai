@@ -281,6 +281,20 @@ public sealed class ClaudeEngineTests
     public void CreateStart_AsksForTheTextAsItIsWritten()
         => Assert.Contains("--include-partial-messages", engine.CreateStart(Record().ToStart(null, null, null)).ArgumentList);
 
+    [Theory]
+    [InlineData("""{"type":"stream_event","session_id":"abc","event":{"type":"message_start","message":{}}}""")]
+    [InlineData("""{"type":"assistant","session_id":"abc","message":{"content":[]}}""")]
+    [InlineData("""{"type":"result","session_id":"abc","is_error":false}""")]
+    public void Parse_NamesTheConversationFromTheFirstTheAiAnswersSoAStoppedFirstTurnIsKept(string line)
+        => Assert.Equal("abc", Assert.Single(engine.Parse(line), output => output.Kind == PromptEngineEventKind.Session).Text);
+
+    [Theory]
+    [InlineData("""{"type":"system","subtype":"init","session_id":"abc"}""")]
+    [InlineData("""{"type":"stream_event","session_id":"abc","parent_tool_use_id":"toolu_1","event":{"type":"message_start","message":{}}}""")]
+    [InlineData("""{"type":"assistant","session_id":"abc","parent_tool_use_id":"toolu_1","message":{"content":[]}}""")]
+    public void Parse_NamesNoConversationBeforeItIsStoredOrForAHelper(string line)
+        => Assert.DoesNotContain(engine.Parse(line), output => output.Kind == PromptEngineEventKind.Session);
+
     [Fact]
     public void Parse_TurnsTheTextThatIsBeingWrittenIntoDeltas()
     {

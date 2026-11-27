@@ -257,7 +257,9 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
             switch (type.GetString())
             {
                 case "assistant" when main:
-                    return Blocks(root.GetProperty("message").GetProperty("content"));
+                    return [.. Conversation(root), .. Blocks(root.GetProperty("message").GetProperty("content"))];
+                case "stream_event" when main && Starts(root):
+                    return Conversation(root);
                 case "user" when main && root.GetProperty("message").TryGetProperty("content", out JsonElement results) && results.ValueKind == JsonValueKind.Array:
                     return [.. results.EnumerateArray().Where(block => Kind(block) == "tool_result").Select(Result)];
                 case "stream_event" when main && root.TryGetProperty("event", out JsonElement streamed) && Delta(streamed) is { } delta:
@@ -271,12 +273,7 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
                 case "result" when root.TryGetProperty("is_error", out JsonElement error) && error.ValueKind == JsonValueKind.True:
                     return [new PromptEngineEvent { Kind = PromptEngineEventKind.Failed, Text = Failure(root) }];
                 case "result":
-                    List<PromptEngineEvent> events = [];
-
-                    if (root.TryGetProperty("session_id", out JsonElement session) && session.GetString() is { Length: > 0 } id)
-                    {
-                        events.Add(new PromptEngineEvent { Kind = PromptEngineEventKind.Session, Text = id });
-                    }
+                    List<PromptEngineEvent> events = [.. Conversation(root)];
 
                     if (root.TryGetProperty("structured_output", out JsonElement structured) && structured.ValueKind == JsonValueKind.Object)
                     {
@@ -471,6 +468,13 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
 
     private string Reminder(string note)
         => $"<system-reminder>\nNote from the host application: {note}\n</system-reminder>";
+
+    private bool Starts(JsonElement root)
+        => root.TryGetProperty("event", out JsonElement streamed) && streamed.ValueKind == JsonValueKind.Object && streamed.TryGetProperty("type", out JsonElement type) && type.GetString() == "message_start";
+
+    // Which conversation this is, told from the first the AI answers: waiting for the end of the turn would lose a first turn that is stopped. Not from the opening "init" line, which can come before the conversation is stored, and a session that names one that is not stored cannot be loaded.
+    private IReadOnlyList<PromptEngineEvent> Conversation(JsonElement root)
+        => root.TryGetProperty("session_id", out JsonElement session) && session.GetString() is { Length: > 0 } id ? [new PromptEngineEvent { Kind = PromptEngineEventKind.Session, Text = id }] : [];
 
     private string? Delta(JsonElement streamed)
         => streamed.ValueKind == JsonValueKind.Object && streamed.TryGetProperty("type", out JsonElement type) && type.GetString() == "content_block_delta" && streamed.TryGetProperty("delta", out JsonElement delta) && delta.ValueKind == JsonValueKind.Object && delta.TryGetProperty("type", out JsonElement kind) && kind.GetString() == "text_delta" && delta.TryGetProperty("text", out JsonElement text) && text.GetString() is { Length: > 0 } written ? written : null;
