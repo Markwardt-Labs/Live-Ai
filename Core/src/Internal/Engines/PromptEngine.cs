@@ -131,6 +131,34 @@ internal interface IPromptEngine
         => (source.AiSessionId ?? source.ForkedFrom) is null ? Task.FromResult(new PromptBranch()) : throw new NotSupportedException($"{Identifier} cannot branch a session.");
 
     /// <summary>
+    /// Branches the tool's session as it was before a moment, which is how a conversation is branched while a prompt is running: what that prompt added so far is not part of the branch. What the session does afterwards is never part of it either, also with a tool that otherwise makes a branch only at its first prompt.
+    /// </summary>
+    /// <param name="source">The session to branch from.</param>
+    /// <param name="before">The moment: the start of the running prompt, or now.</param>
+    /// <param name="cancellation">Cancels the copy.</param>
+    /// <returns>Where the branch is, with no conversation when the AI had said and done nothing before the moment.</returns>
+    /// <exception cref="PromptSessionException">The tool's session could not be found or branched.</exception>
+    /// <exception cref="NotSupportedException">The tool cannot branch at a point.</exception>
+    async Task<PromptBranch> BranchFinished(PromptEngineStart source, DateTimeOffset before, CancellationToken cancellation = default)
+    {
+        if ((source.AiSessionId ?? source.ForkedFrom) is not { } origin)
+        {
+            return new PromptBranch();
+        }
+
+        await foreach (PromptHistoryEntry entry in ReadHistory(origin, cancellation))
+        {
+            // The newest thing the AI itself did before the moment; a prompt nothing answered is not an exchange.
+            if (entry.Event is not PromptInputEvent && entry.Time < before)
+            {
+                return await Branch(source, entry.Point, cancellation);
+            }
+        }
+
+        return new PromptBranch();
+    }
+
+    /// <summary>
     /// Reads the conversation the tool stored for a session.
     /// </summary>
     /// <param name="aiSessionId">The tool's session identifier.</param>

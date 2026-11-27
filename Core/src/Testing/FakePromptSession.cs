@@ -29,6 +29,8 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     private readonly List<Queued> delivered = [];
 
+    private readonly List<SharedFolder> shared = [];
+
     private Func<FakePrompt, IEnumerable<PromptEvent>>? responder;
 
     private readonly PromptSessionSettings settings;
@@ -90,6 +92,25 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
 
     /// <inheritdoc />
     public IStore Workspace { get; }
+
+    /// <summary>
+    /// Gets or sets what is told of every branch made of the session, which is how a fake prompter keeps the branches of its sessions so that they can be loaded.
+    /// </summary>
+    internal Action<FakePromptSession>? Branched { get; set; }
+
+    /// <summary>
+    /// Gets the folders the session was given read access to and that were not taken back, in the order they were given.
+    /// </summary>
+    public IReadOnlyList<string> SharedFolders
+    {
+        get
+        {
+            lock (gate)
+            {
+                return [.. shared.Select(folder => folder.Folder)];
+            }
+        }
+    }
 
     /// <inheritdoc />
     public PromptUsage Usage
@@ -321,20 +342,44 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     }
 
     /// <inheritdoc />
-    public Task<IPromptSession> Fork(PromptHistoryPoint? at = null, CancellationToken cancellation = default)
+    /// <remarks>The fake only remembers the folder, which <see cref="SharedFolders" /> tells.</remarks>
+    public IDisposable GrantReadAccess(string folder)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            FakePromptSession fork = Copy(new FakePromptSession(ApiKey, time, Provider));
+            SharedFolder given = new(this, Path.GetFullPath(folder));
+            shared.Add(given);
+            return given;
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>The fake branches like <see cref="Fork" /> from the turns it has recorded.</remarks>
+    public Task<IPromptSession> ForkFinished(CancellationToken cancellation = default)
+        => Fork(null, cancellation);
+
+    /// <inheritdoc />
+    public Task<IPromptSession> Fork(PromptHistoryPoint? at = null, CancellationToken cancellation = default)
+    {
+        FakePromptSession fork;
+
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            fork = Copy(new FakePromptSession(ApiKey, time, Provider));
 
             if (at is { } point)
             {
                 fork.Truncate(TurnsThrough(point));
             }
-
-            return Task.FromResult<IPromptSession>(fork);
         }
+
+        // Outside the lock: a prompter that keeps the branch takes its own, which it holds while it takes this one.
+        Branched?.Invoke(fork);
+        return Task.FromResult<IPromptSession>(fork);
     }
 
     /// <inheritdoc />
@@ -474,7 +519,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     {
         lock (gate)
         {
-            FakePromptSession resumed = new(ApiKey, time) { Id = Id };
+            FakePromptSession resumed = new(ApiKey, time, Provider) { Id = Id };
             return Copy(resumed);
         }
     }
@@ -506,6 +551,7 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
     {
         PromptSessionSettingsSnapshot snapshot = settings.Snapshot();
         copy.responder = responder;
+        copy.Branched = Branched;
         copy.UseWorkspace(givenWorkspace ? WorkspacePath : null);
         snapshot.CopyTo(copy.settings);
 
@@ -979,6 +1025,19 @@ public sealed class FakePromptSession : IPromptSession, IPromptCollector
             lock (gate)
             {
                 usage = usage.Plus(used.Usage);
+            }
+        }
+    }
+
+    private sealed class SharedFolder(FakePromptSession owner, string folder) : IDisposable
+    {
+        public string Folder => folder;
+
+        public void Dispose()
+        {
+            lock (owner.gate)
+            {
+                owner.shared.Remove(this);
             }
         }
     }

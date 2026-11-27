@@ -7,7 +7,7 @@
 
 Live AI drives the Claude Code (`claude`), OpenAI Codex (`codex`) and OpenCode (`opencode`, for local models) command line tools from .NET, so the agent loop and sign in stay theirs, also with an API key. A session is a resumable conversation, stored with its configuration, with a workspace folder and a temporary cache, and everything the AI does arrives as one stream of events.
 
-- **Requests:** ask directly, mixed into running work, or in a fork. Send files and images, typed input, and get typed output under a JSON schema.
+- **Requests:** ask directly, mixed into running work, or in a fork, and branch a conversation while it works. Send files and images, typed input, and get typed output under a JSON schema.
 - **Tools:** give the AI your own functions, MCP servers, a way to ask the user questions, web search and page reading, images (looking at them and making them with OpenAI or a local Stable Diffusion), helper delegation, the time and file diffs.
 - **Control:** usage and subscription status, interrupts, branching, rewinding and compaction.
 - **Files:** the AI reaches files only through the library's file tools, in the session's workspace folder (one you give it, or one the library makes and keeps for the session) and in session storage and a cache that keep their data in memory and move what does not fit to files in the background, and has no shell unless you enable one.

@@ -127,6 +127,15 @@ await session.Request("Compare Program.cs with /etc/hosts and run the tests.");
 
 With `IsSystemAccessAllowed = true` (a stored setting, false by default, that can be changed at any time) the folder is only where relative paths start, and the AI may also give absolute paths of the machine or paths that climb out of the folder, so use it only when the AI may read and write anything the program can. Without it every path, absolute or not, stays inside the folder. The workspace is also where the shell starts.
 
+To show the AI one other folder without letting it change anything there, grant it for as long as it is needed, also while the AI works, and tell it where the folder is:
+
+```csharp
+using (session.GrantReadAccess("/home/me/other-copy"))
+{
+    await session.Request("Bring the changes described in /home/me/other-copy/CHANGES.md into this project.");
+}
+```
+
 ## Giving the AI data and collecting what it makes
 
 ```csharp
@@ -326,6 +335,13 @@ await using IPromptSession alternative = await session.Fork();
 
 await session.Request("Implement it with an in-memory dictionary.");
 await alternative.Request("Implement it with a file cache.");
+```
+
+`ForkFinished` does the same while a prompt is running, without waiting for it and without what it has done so far:
+
+```csharp
+Task<string> work = session.Request("Refactor the parser.");
+await using IPromptSession side = await session.ForkFinished();   // knows everything before the refactoring was asked for
 ```
 
 The branch starts with everything the session has said and done and then goes its own way; each is resumable with its own `Id`. It has the same configuration, tools and workspace, and an empty session storage and cache of its own, so give the branch a folder of its own with `Move` if both write to it.

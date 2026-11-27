@@ -186,4 +186,20 @@ public sealed class FakePrompterTests
     }
 
     private sealed record UnknownOptions : PromptSetup;
+
+    [Fact]
+    public async Task ABranchOfASessionItMade_CanBeLoadedAndMovedLikeAnyOtherAfterItIsDisposed()
+    {
+        FakePrompter prompter = new();
+        IPromptSession origin = await prompter.Create(new ClaudeSetup());
+        IPromptSession fork = await origin.ForkFinished();
+        string id = fork.Id;
+        await fork.DisposeAsync();
+
+        await using IPromptSession loaded = await prompter.Load(id);
+
+        Assert.Equal(id, loaded.Id);
+        Assert.Contains(await prompter.List(), info => info.Id == id);
+        Assert.True(await prompter.Delete(id));
+    }
 }

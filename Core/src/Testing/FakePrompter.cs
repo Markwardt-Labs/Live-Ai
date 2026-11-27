@@ -134,6 +134,8 @@ public sealed class FakePrompter : IPrompter
         session.Configuration.Storage = Environment.Storage;
         string workspacePath = session.WorkspacePath;
 
+        session.Branched = Keep;
+
         lock (gate)
         {
             created.Add(setup);
@@ -230,6 +232,16 @@ public sealed class FakePrompter : IPrompter
         {
             tests.Add(setup);
             return Task.FromResult(testResult);
+        }
+    }
+
+    // A branch is a session of its own, which the real library stores and can load.
+    private void Keep(FakePromptSession fork)
+    {
+        lock (gate)
+        {
+            sessions.Add(fork);
+            made[fork.Id] = ((Time ?? TimeProvider.System).GetUtcNow(), fork.WorkspacePath);
         }
     }
 }

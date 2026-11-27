@@ -221,6 +221,24 @@ internal sealed class DiskStore(string root, bool sandbox = true) : IStore, ISto
     public Task<bool> TryMoveTo(string from, IStore target, string to, CancellationToken cancellation = default)
         => Task.FromResult(target is DiskStore other && Relocate(from, other, to));
 
+    /// <summary>
+    /// Tells where a path really leads: made full from the folder, with every link on the way resolved.
+    /// </summary>
+    /// <param name="relative">The path.</param>
+    /// <returns>The full path.</returns>
+    /// <exception cref="UnauthorizedAccessException">The store is a sandbox and the path leads outside it.</exception>
+    internal string Resolve(string relative)
+    {
+        string canonical = Canonical(Path.GetFullPath(Path.Combine(Root, relative)));
+
+        if (sandbox && canonical != Root && !canonical.StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException($"'{relative}' is outside the folder.");
+        }
+
+        return canonical;
+    }
+
     private bool Relocate(string from, DiskStore other, string to)
     {
         string source = Resolve(from);
@@ -332,18 +350,6 @@ internal sealed class DiskStore(string root, bool sandbox = true) : IStore, ISto
                 throw new IOException($"'{Path.GetRelativePath(Root, folder).Replace(Path.DirectorySeparatorChar, '/')}' is a file, not a folder.");
             }
         }
-    }
-
-    private string Resolve(string relative)
-    {
-        string canonical = Canonical(Path.GetFullPath(Path.Combine(Root, relative)));
-
-        if (sandbox && canonical != Root && !canonical.StartsWith(Root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new UnauthorizedAccessException($"'{relative}' is outside the folder.");
-        }
-
-        return canonical;
     }
 
     private string Canonical(string full)

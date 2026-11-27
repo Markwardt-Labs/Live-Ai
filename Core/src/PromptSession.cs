@@ -89,7 +89,16 @@ public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncD
     Task<bool> Interrupt(CancellationToken cancellation = default);
 
     /// <summary>
-    /// Branches the conversation: makes a new session, with an identifier of its own, that starts with the conversation of this one and then goes its own way, so two approaches can be tried from the same point. It waits for the prompt that is running, if any, so the branch starts after it. The branch has the configuration this session has now (including the tools and the shell approval, which are shared with it), the same API key and the same workspace (or, when the workspace was made by the library, an empty one of its own), and an empty cache of its own. A session that has had no prompt yet has nothing to branch from, and the branch is simply a new session with the same configuration. This session is not changed.
+    /// Lets the AI's file tools read a folder outside the workspace without being able to change anything in it, from this moment, also in the prompt that is running, until the result is disposed. It works whether or not the session allows access outside the workspace, in which case it also takes writing there away; links that lead out of the folder are not followed. It is not stored with the session, helpers the AI delegates to have it too, and the shell is not confined by it. The AI is not told of it: say in a prompt where the folder is.
+    /// </summary>
+    /// <param name="folder">The existing folder.</param>
+    /// <returns>Ends the access when disposed.</returns>
+    /// <exception cref="DirectoryNotFoundException">The folder does not exist.</exception>
+    /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
+    IDisposable GrantReadAccess(string folder);
+
+    /// <summary>
+    /// Branches the conversation: makes a new session, with an identifier of its own, that starts with the conversation of this one and then goes its own way, so two approaches can be tried from the same point. It waits for the prompt that is running, if any, so the branch starts after it. The branch has the configuration this session has now (including the tools and the shell approval, which are shared with it), the same API key and the same workspace (or, when the workspace was made by the library, an empty one of its own), and an empty session storage and cache of its own. A session that has had no prompt yet has nothing to branch from, and the branch is simply a new session with the same configuration. This session is not changed.
     /// </summary>
     /// <param name="at">An entry of the history, as <see cref="GetHistory" /> returned it, to branch at the end of the exchange it belongs to (a prompt and everything the AI did to answer it, the finest point both providers branch at), or <see langword="null" /> for the whole conversation so far.</param>
     /// <param name="cancellation">Cancels the branching.</param>
@@ -98,6 +107,16 @@ public interface IPromptSession : IObservable<PromptEvent>, IDisposable, IAsyncD
     /// <exception cref="NotSupportedException"><paramref name="at" /> is given and the provider cannot branch at a point.</exception>
     /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
     Task<IPromptSession> Fork(PromptHistoryPoint? at = null, CancellationToken cancellation = default);
+
+    /// <summary>
+    /// Branches the conversation as it stands after the last prompt that finished, without waiting for the one that is running, which the branch does not have, nor anything the session does afterwards. A session whose first prompt is still running, or that never had one, gives a session with no conversation. Everything else is as in <see cref="Fork" />. The tools and other settings that are not stored with a session are the branch's own lists; disposing the branch and loading it again leaves them out altogether.
+    /// </summary>
+    /// <param name="cancellation">Cancels the branching.</param>
+    /// <returns>The new session, which the caller disposes.</returns>
+    /// <exception cref="PromptSessionException">The provider's conversation could not be found or branched.</exception>
+    /// <exception cref="NotSupportedException">The provider cannot branch at a point.</exception>
+    /// <exception cref="ObjectDisposedException">The session was disposed.</exception>
+    Task<IPromptSession> ForkFinished(CancellationToken cancellation = default);
 
     /// <summary>
     /// Takes the conversation back to the end of the exchange that an entry of its history belongs to, so that what came after is no longer part of it and the next prompt continues from there. The session keeps its identifier. The provider's own record of the conversation is not changed: the session continues in a branch of it, and the later exchanges stay in the original, which the tool still lists, until the session is deleted or the tool's own storage is cleaned. It waits for the prompt that is running.

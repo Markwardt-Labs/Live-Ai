@@ -83,6 +83,10 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
 
     private string? turnText;
 
+    private ReadGrants grants = new();
+
+    private DateTimeOffset? turnStarted;
+
     private PromptSessionRecord current;
 
     private PromptSessionRecord? spawnedFrom;
@@ -233,7 +237,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             lock (gate)
             {
                 SyncWorkspace(!settings.IsSystemAccessAllowed);
-                return new MountedStore(new WorkspaceTempStore(workspaceStore, WorkspaceTempOf()), new Dictionary<string, IStore> { [libraryTools.SessionName] = sessionStore, [libraryTools.CacheName] = cacheStore });
+                return new MountedStore(new GrantedStore(new WorkspaceTempStore(workspaceStore, WorkspaceTempOf()), new DiskStore(workspaceStore.Folder, false), grants), new Dictionary<string, IStore> { [libraryTools.SessionName] = sessionStore, [libraryTools.CacheName] = cacheStore });
             }
         }
     }
@@ -401,6 +405,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             turnInterrupt = interruption;
             turnInterrupted = false;
             turnText = prompt;
+            turnStarted = Time.GetUtcNow();
         }
 
         try
@@ -482,6 +487,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             lock (gate)
             {
                 turnInterrupt = null;
+                turnStarted = null;
                 notesInFlight = 0;
             }
 
@@ -531,8 +537,31 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     }
 
     /// <inheritdoc />
+    public IDisposable GrantReadAccess(string folder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+        ObjectDisposedException.ThrowIf(Disposed, this);
+
+        string full = Path.GetFullPath(folder);
+        return Directory.Exists(full) ? grants.Add(new DiskStore(full, false).Resolve(string.Empty)) : throw new DirectoryNotFoundException($"The folder '{folder}' does not exist.");
+    }
+
+    /// <inheritdoc />
     public Task<IPromptSession> Fork(PromptHistoryPoint? at = null, CancellationToken cancellation = default)
         => Branch(at, cancellation);
+
+    /// <inheritdoc />
+    public Task<IPromptSession> ForkFinished(CancellationToken cancellation = default)
+    {
+        DateTimeOffset before;
+
+        lock (gate)
+        {
+            before = turnStarted ?? Time.GetUtcNow();
+        }
+
+        return Branch(null, cancellation, false, (source, token) => engine.BranchFinished(source, before, token));
+    }
 
     /// <inheritdoc />
     public async Task Rewind(PromptHistoryPoint to, CancellationToken cancellation = default)
@@ -1098,8 +1127,9 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
     /// <param name="sharedSession">The session storage of the session the helper works for, which the helper does not clear when it ends.</param>
     /// <param name="sharedCache">The cache of that session.</param>
     /// <param name="sharedWorkspaceTemp">The temporary folder in the workspace of that session.</param>
+    /// <param name="sharedGrants">The folders that session may read outside its workspace, which the helper may too, as they change.</param>
     /// <returns>A task that completes when the helper is set up.</returns>
-    internal async Task BecomeHelper(IStore sharedSession, IStore sharedCache, IWorkspaceTemp sharedWorkspaceTemp)
+    internal async Task BecomeHelper(IStore sharedSession, IStore sharedCache, IWorkspaceTemp sharedWorkspaceTemp, ReadGrants sharedGrants)
     {
         IStoragePool unused;
 
@@ -1109,6 +1139,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
             sessionStore = sharedSession;
             cacheStore = sharedCache;
             workspaceTemp = sharedWorkspaceTemp;
+            grants = sharedGrants;
             ownsPool = false;
             unused = pool;
         }
@@ -1162,7 +1193,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 shared = WorkspaceTempOf();
             }
 
-            await helper.BecomeHelper(sharedSession, sharedCache, shared);
+            await helper.BecomeHelper(sharedSession, sharedCache, shared, grants);
             string asked;
 
             lock (gate)
@@ -1469,7 +1500,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
         return live;
     }
 
-    private async Task<IPromptSession> Branch(PromptHistoryPoint? at, CancellationToken cancellation = default, bool exclusive = true)
+    private async Task<IPromptSession> Branch(PromptHistoryPoint? at, CancellationToken cancellation = default, bool exclusive = true, Func<PromptEngineStart, CancellationToken, Task<PromptBranch>>? branching = null)
     {
         ObjectDisposedException.ThrowIf(Disposed, this);
 
@@ -1496,7 +1527,7 @@ internal sealed class PromptSession : IPromptSession, IPromptCollector, IPromptE
                 throw new PromptSessionException("The session has no conversation to branch at a point of.");
             }
 
-            PromptBranch branch = (source.AiSessionId ?? source.ForkedFrom) is null ? new PromptBranch() : await engine.Branch(source.ToStart(apiKey, null, null), at, linked.Token);
+            PromptBranch branch = (source.AiSessionId ?? source.ForkedFrom) is null ? new PromptBranch() : branching is not null ? await branching(source.ToStart(apiKey, null, null), linked.Token) : await engine.Branch(source.ToStart(apiKey, null, null), at, linked.Token);
             Guid id = Guid.NewGuid();
             string folder = source.WorkspacePath ?? store.GetWorkspaceFolder(id);
             Directory.CreateDirectory(folder);

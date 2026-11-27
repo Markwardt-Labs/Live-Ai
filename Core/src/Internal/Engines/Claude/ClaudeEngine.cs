@@ -112,6 +112,63 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
     }
 
     /// <inheritdoc />
+    /// <remarks>Claude Code only branches by itself at the first prompt of a branch, and not at a point from before the conversation was compacted. Its stored conversation is only ever added to, so the lines from before the moment are exactly what it held then: they are copied as a conversation of the branch's own.</remarks>
+    public async Task<PromptBranch> BranchFinished(PromptEngineStart source, DateTimeOffset before, CancellationToken cancellation = default)
+    {
+        // A branch that never had a prompt still is the point it was made at.
+        if (source.AiSessionId is not { } origin)
+        {
+            return await Branch(source, null, cancellation);
+        }
+
+        // A session that was moved leaves older copies behind, so the one of the folder it works in comes first.
+        string current = Path.Combine(ProjectFolder(source.WorkingFolder), $"{origin}.jsonl");
+        string path = File.Exists(current) ? current : Find(origin) ?? throw new PromptSessionException($"The Claude Code session {origin} to branch from was not found.");
+        string id = Guid.NewGuid().ToString();
+        List<string> kept = [];
+        bool answered = false;
+
+        await using (FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            using StreamReader reader = new(stream);
+
+            while (await reader.ReadLineAsync(cancellation) is { } line)
+            {
+                (bool whole, DateTimeOffset? time) = Stamp(line);
+
+                if (time >= before)
+                {
+                    break;
+                }
+
+                // A line that is still being written is not part of the conversation yet.
+                if (whole)
+                {
+                    answered |= Message(line) is { Answer: true };
+                    kept.Add(line.Replace($"\"sessionId\":\"{origin}\"", $"\"sessionId\":\"{id}\"", StringComparison.Ordinal));
+                }
+            }
+        }
+
+        if (!answered)
+        {
+            return new PromptBranch();
+        }
+
+        string folder = Path.GetDirectoryName(path)!;
+        string unfinished = Path.Combine(folder, $"{id}.partial");
+        await File.WriteAllLinesAsync(unfinished, kept, cancellation);
+        File.Move(unfinished, Path.Combine(folder, $"{id}.jsonl"));
+
+        if (Path.Combine(folder, origin) is { } extras && Directory.Exists(extras))
+        {
+            CopyFolder(extras, Path.Combine(folder, id));
+        }
+
+        return new PromptBranch { AiSessionId = id };
+    }
+
+    /// <inheritdoc />
     public Task DeleteSession(string aiSessionId, CancellationToken cancellation = default)
     {
         foreach (string path in FindAll(aiSessionId))
@@ -135,17 +192,21 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
     /// <inheritdoc />
     public Task MoveSession(string aiSessionId, string folder, CancellationToken cancellation = default)
     {
-        string target = Path.Combine(projects, Regex.Replace(Path.GetFullPath(folder), "[^a-zA-Z0-9]", "-"));
+        string target = ProjectFolder(folder);
         string destination = Path.Combine(target, $"{aiSessionId}.jsonl");
 
-        if (File.Exists(destination))
+        string path = Find(aiSessionId) ?? throw new PromptSessionException($"The Claude Code session {aiSessionId} to move was not found.");
+
+        // A conversation that is already there is only out of date when the session was in this folder before and went on elsewhere.
+        if (path == destination || (File.Exists(destination) && File.GetLastWriteTimeUtc(destination) >= File.GetLastWriteTimeUtc(path)))
         {
             return Task.CompletedTask;
         }
 
-        string path = Find(aiSessionId) ?? throw new PromptSessionException($"The Claude Code session {aiSessionId} to move was not found.");
         Directory.CreateDirectory(target);
-        File.Copy(path, destination);
+        string unfinished = Path.Combine(target, $"{aiSessionId}.{Guid.NewGuid():N}.partial");
+        File.Copy(path, unfinished);
+        File.Move(unfinished, destination, true);
 
         if (Path.Combine(Path.GetDirectoryName(path)!, aiSessionId) is { } extras && Directory.Exists(extras))
         {
@@ -370,8 +431,25 @@ internal sealed class ClaudeEngine(string command = "claude", string? configFold
         };
     }
 
+    private string ProjectFolder(string folder)
+        => Path.Combine(projects, Regex.Replace(Path.GetFullPath(folder), "[^a-zA-Z0-9]", "-"));
+
+    private (bool Whole, DateTimeOffset? Time) Stamp(string line)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            return (true, document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("timestamp", out JsonElement stamp) && stamp.ValueKind == JsonValueKind.String && stamp.TryGetDateTimeOffset(out DateTimeOffset time) ? time : null);
+        }
+        catch (JsonException)
+        {
+            return (false, null);
+        }
+    }
+
+    // A session that moved to another folder leaves its older copy behind, and the one written last is the one in use.
     private string? Find(string aiSessionId)
-        => FindAll(aiSessionId).FirstOrDefault();
+        => FindAll(aiSessionId).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
 
     private IEnumerable<string> FindAll(string aiSessionId)
         => Directory.Exists(projects) ? Directory.EnumerateFiles(projects, $"{aiSessionId}.jsonl", SearchOption.AllDirectories).ToList() : [];
